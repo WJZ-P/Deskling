@@ -1,0 +1,56 @@
+/* Ark Pixel 12（方舟像素体，开源，同时支持中英文）。
+   用两个 @font-face 合成同一字体族：拉丁版用 unicode-range 优先匹配英文/数字，
+   简体中文版兜底其余字符。缺失时回退到下方等宽字体栈。 */
+@font-face {
+    font-family: "Ark Pixel";
+    src: url("/fonts/ark-pixel-12px-proportional-latin.woff2") format("woff2");
+    font-display: swap;
+    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
+}
+
+@font-face {
+    font-family: "Ark Pixel";
+    src: url("/fonts/ark-pixel-12px-proportional-zh_cn.woff2") format("woff2");
+    font-display: swap;
+}
+
+/* ===== 主题无关的常量 token =====
+   随主题变化的颜色 token 由 src/styles/theme.ts 在运行时写入（applyTheme）。 */
+:root {
+    /* 像素网格基准 */
+    --unit: 4px;
+    --border-w: 2px;
+
+    --font-pixel: "Ark Pixel", "Press Start 2P", ui-monospace, "Cascadia Mono",
+    Consolas, monospace;
+    --font-ui: "Ark Pixel", system-ui, "Segoe UI", "Microsoft YaHei",
+    sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    /* var 回退值用于 applyTheme 执行前的首帧，避免闪烁 */
+    background: var(--color-bg, #e6e4dd);
+    color: var(--color-text, #36332c);
+    font-family: var(--font-ui);
+    /* Fusion Pixel 12 为 12px 设计，字号须为 12 的整数倍才锐利不糊 */
+    font-size: 12px;
+    line-height: 1.5;
+    /* 像素图像保持锐利，不被缩放模糊 */
+    image-rendering: pixelated;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+img {
+    image-rendering: pixelated;
+}
