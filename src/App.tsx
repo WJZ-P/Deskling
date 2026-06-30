@@ -1,49 +1,70 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { css } from "@linaria/core";
+import { styled } from "@linaria/react";
+
+const page = css`
+  min-height: 100vh;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ffe0f0 0%, #e8d6ff 100%);
+  font-family: system-ui, sans-serif;
+`;
+
+const Card = styled.div`
+  padding: 32px 40px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(255, 138, 216, 0.35);
+  text-align: center;
+`;
+
+const Title = styled.h1`
+  margin: 0 0 8px;
+  font-size: 28px;
+  color: #ff6fb5;
+`;
+
+const Paw = styled.span`
+  font-size: 48px;
+  display: inline-block;
+  transition: transform 0.2s ease;
+
+  &:hover {
+    transform: rotate(-12deg) scale(1.15);
+  }
+`;
+
+const Button = styled.button<{ happy: boolean }>`
+  margin-top: 16px;
+  padding: 10px 24px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 16px;
+  color: #fff;
+  background: ${(props) => (props.happy ? "#ff6fb5" : "#c9a7ff")};
+  transition: background 0.2s ease, transform 0.1s ease;
+
+  &:active {
+    transform: scale(0.95);
+  }
+`;
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const [count, setCount] = useState(0);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+    <main className={page}>
+      <Card>
+        <Paw>🐾</Paw>
+        <Title>Deskling 猫娘助手</Title>
+        <p>主人～Linaria 样式已经生效啦喵！</p>
+        <Button happy={count > 0} onClick={() => setCount((c) => c + 1)}>
+          摸摸头 ×{count}
+        </Button>
+      </Card>
     </main>
   );
 }
