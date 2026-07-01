@@ -1,9 +1,11 @@
 import { styled } from "@linaria/react";
-import { t } from "../styles/theme";
+import { bevel, t } from "../styles/theme";
 
 /**
- * Deskling 专属基础 UI 组件库（像素风：方角、2px 硬边框、硬阴影）。
- * 页面统一从这里取件，保证全站视觉一致；需要新样式时在此扩展。
+ * Deskling 专属基础 UI 组件库（像素风）。
+ *
+ * 精致化要点：不再是「单一 border + 投影」，而是用立体斜角边（bevel）——
+ * 1px 深色外框 + 左上高光 + 右下暗影的分层 inset 阴影，做出凸起/凹陷层次（见 theme.ts 的 bevel）。
  * 字号一律用 t.textXx（CSS `font` 简写，含字号/行高/对应原生字体族）。
  */
 
@@ -42,8 +44,8 @@ export const PageSubtitle = styled.p`
 
 export const Panel = styled.section`
   background: ${t.colorSurface};
-  border: ${t.borderW} solid ${t.colorBorderStrong};
-  box-shadow: 4px 4px 0 ${t.colorShadow};
+  border: 1px solid ${t.colorBorderStrong};
+  box-shadow: ${bevel.raised}, 4px 4px 0 ${t.colorShadow};
   padding: calc(${t.unit} * 4);
   display: flex;
   flex-direction: column;
@@ -57,6 +59,26 @@ export const PanelTitle = styled.h2`
   color: ${t.colorText};
 `;
 
+/** 凹陷容器：内嵌显示区（如数值、说明、代码），与凸起的 Panel 形成对比 */
+export const Well = styled.div`
+  background: ${t.colorWell};
+  border: 1px solid ${t.colorBorderStrong};
+  box-shadow: ${bevel.sunken};
+  padding: calc(${t.unit} * 3);
+  font: ${t.textSm};
+  color: ${t.colorText};
+`;
+
+/** 雕刻式分隔线：上暗下亮两色调，像被“刻”进面板 */
+export const Divider = styled.hr`
+  width: 100%;
+  height: 0;
+  margin: calc(${t.unit} * 2) 0;
+  border: 0;
+  border-top: 1px solid ${t.colorBevelLo};
+  border-bottom: 1px solid ${t.colorBevelHi};
+`;
+
 /* ---------- 设置行：左标题/描述，右控件 ---------- */
 
 export const SettingRow = styled.div`
@@ -66,8 +88,10 @@ export const SettingRow = styled.div`
   gap: calc(${t.unit} * 3);
 
   & + & {
+    margin-top: calc(${t.unit} * 3);
     padding-top: calc(${t.unit} * 3);
-    border-top: ${t.borderW} solid ${t.colorBorder};
+    border-top: 1px solid ${t.colorBevelLo};
+    box-shadow: inset 0 1px 0 ${t.colorBevelHi};
   }
 `;
 
@@ -92,42 +116,81 @@ export const SettingDesc = styled.p`
 /* ---------- 按钮 ---------- */
 
 /**
- * 像素按钮：硬边框 + 硬阴影，hover 抬起、active 陷入。
- * variant：default（描边）/ accent（强调填充）。
+ * 像素按钮：静止凸起（raised），按下凹陷（sunken），有真实的“按进去”触感。
+ * variant：default（控件面）/ accent（强调填充）。
  */
 export const Button = styled.button<{ variant?: "default" | "accent" }>`
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: ${t.unit};
-  padding: ${t.unit} calc(${t.unit} * 3);
+  padding: calc(${t.unit} * 1.5) calc(${t.unit} * 3);
   cursor: pointer;
   font: ${t.textMd};
-  color: ${(p) => (p.variant === "accent" ? "#fff" : t.btnIcon)};
+  color: ${(p) => (p.variant === "accent" ? t.colorOnAccent : t.btnIcon)};
   background: ${(p) =>
-    p.variant === "accent" ? t.colorAccent : t.colorSurface2};
-  border: ${t.borderW} solid ${t.colorBorderStrong};
+    p.variant === "accent" ? t.colorAccent : t.colorControl};
+  border: 1px solid ${t.colorBorderStrong};
   border-radius: 0;
-  box-shadow: 3px 3px 0 ${t.colorShadow};
-  transition: transform 0.05s ease, box-shadow 0.05s ease, background 0.1s ease;
+  box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
+  transition: transform 0.04s ease, box-shadow 0.04s ease, background 0.1s ease;
 
   &:hover:not(:disabled) {
     background: ${t.colorAccent};
-    color: #fff;
+    color: ${t.colorOnAccent};
     transform: translate(-1px, -1px);
-    box-shadow: 4px 4px 0 ${t.colorShadow};
+    box-shadow: ${bevel.raised}, 3px 3px 0 ${t.colorShadow};
   }
 
   &:active:not(:disabled) {
-    transform: translate(3px, 3px);
-    box-shadow: 0 0 0 ${t.colorShadow};
+    transform: translate(1px, 1px);
+    box-shadow: ${bevel.sunken};
   }
 
   &:disabled {
     cursor: not-allowed;
     opacity: 0.5;
-    box-shadow: 2px 2px 0 ${t.colorShadow};
+    box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
   }
+`;
+
+/* ---------- 进度条：凹槽内嵌 + 凸起填充（照 Aseprite 立体条） ---------- */
+
+interface ProgressBarProps {
+  /** 0–100 */
+  value: number;
+}
+
+export function ProgressBar({ value }: ProgressBarProps) {
+  const v = Math.max(0, Math.min(100, value));
+  return (
+    <ProgressTrack
+      role="progressbar"
+      aria-valuenow={v}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <ProgressFill style={{ width: `${v}%` }} />
+    </ProgressTrack>
+  );
+}
+
+const ProgressTrack = styled.div`
+  height: calc(${t.unit} * 5);
+  padding: 2px;
+  background: ${t.colorWell};
+  border: 1px solid ${t.colorBorderStrong};
+  box-shadow: ${bevel.sunken};
+  overflow: hidden;
+`;
+
+const ProgressFill = styled.div`
+  height: 100%;
+  min-width: 2px;
+  background: ${t.colorAccent};
+  border: 1px solid ${t.colorBorderStrong};
+  box-shadow: ${bevel.raised};
+  transition: width 0.2s ease;
 `;
 
 /* ---------- 小标签 / 徽标 ---------- */
@@ -135,11 +198,12 @@ export const Button = styled.button<{ variant?: "default" | "accent" }>`
 export const Tag = styled.span`
   display: inline-flex;
   align-items: center;
-  padding: ${t.unit} calc(${t.unit} * 2);
+  padding: 2px calc(${t.unit} * 2);
   font: ${t.textSm};
   color: ${t.colorText};
-  background: ${t.colorSurface2};
-  border: ${t.borderW} solid ${t.colorBorder};
+  background: ${t.colorControl};
+  border: 1px solid ${t.colorBorder};
+  box-shadow: ${bevel.raised};
 `;
 
 /** “敬请期待”占位徽标 */
@@ -147,5 +211,5 @@ export const SoonTag = styled.span`
   font: ${t.textSm};
   color: ${t.colorTextMuted};
   padding: 2px calc(${t.unit} * 2);
-  border: ${t.borderW} dashed ${t.colorBorder};
+  border: 1px dashed ${t.colorBorder};
 `;

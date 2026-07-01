@@ -4,6 +4,7 @@ import Titlebar from "./components/Titlebar";
 import Sidebar, { type SectionId } from "./components/Sidebar";
 import Home from "./pages/Home";
 import Settings from "./pages/Settings";
+import Debug from "./pages/Debug";
 import About from "./pages/About";
 import { useTheme } from "./hooks/useTheme";
 import { getSetting, setSetting } from "./settings";
@@ -38,6 +39,7 @@ function App() {
           {section === "settings" && (
             <Settings theme={theme} onToggleTheme={toggleTheme} />
           )}
+          {section === "debug" && <Debug />}
           {section === "about" && <About />}
         </Main>
       </Body>

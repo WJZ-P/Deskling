@@ -1,10 +1,16 @@
 import { styled } from "@linaria/react";
 import type { ComponentType } from "react";
-import { t } from "../styles/theme";
-import { ChevronIcon, HomeIcon, InfoIcon, SettingsIcon } from "./icons";
+import { bevel, t } from "../styles/theme";
+import {
+  ChevronIcon,
+  DebugIcon,
+  HomeIcon,
+  InfoIcon,
+  SettingsIcon,
+} from "./icons";
 
 /** 主面板的可导航区域标识 */
-export type SectionId = "home" | "settings" | "about";
+export type SectionId = "home" | "settings" | "debug" | "about";
 
 interface NavItemDef {
   id: SectionId;
@@ -19,7 +25,10 @@ const PRIMARY: NavItemDef[] = [
 ];
 
 /** 次级导航（底部） */
-const SECONDARY: NavItemDef[] = [{ id: "about", label: "关于", Icon: InfoIcon }];
+const SECONDARY: NavItemDef[] = [
+  { id: "debug", label: "调试", Icon: DebugIcon },
+  { id: "about", label: "关于", Icon: InfoIcon },
+];
 
 interface SidebarProps {
   active: SectionId;
@@ -118,7 +127,7 @@ const Label = styled.span`
   overflow: hidden;
 `;
 
-/* 导航按钮：hover 高亮、active（选中）用强调色左边条 + 底色 */
+/* 导航按钮：hover 凸起（raised）、active（选中）凹陷（sunken）+ 强调色左边条 */
 const NavBtn = styled.button`
   display: flex;
   align-items: center;
@@ -130,20 +139,21 @@ const NavBtn = styled.button`
   text-align: left;
   color: ${t.colorText};
   background: transparent;
-  border: ${t.borderW} solid transparent;
+  border: 1px solid transparent;
   border-radius: 0;
   transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 
   &:hover {
-    background: ${t.colorSurface2};
-    border-color: ${t.colorBorder};
+    background: ${t.colorControl};
+    border-color: ${t.colorBorderStrong};
+    box-shadow: ${bevel.raised};
   }
 
   &[data-active="true"] {
     color: ${t.colorAccent};
-    background: ${t.colorSurface2};
+    background: ${t.colorControl};
     border-color: ${t.colorBorderStrong};
-    box-shadow: inset 3px 0 0 ${t.colorAccent};
+    box-shadow: ${bevel.sunken}, inset 3px 0 0 ${t.colorAccent};
   }
 `;
 

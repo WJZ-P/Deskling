@@ -73,3 +73,14 @@ export function ChevronIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** 调试：代码尖括号 “</>” */
+export function DebugIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 4 L2.5 8 L6 12" />
+      <path d="M10 4 L13.5 8 L10 12" />
+      <path d="M9 3 L7 13" />
+    </Svg>
+  );
+}

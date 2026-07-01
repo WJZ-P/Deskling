@@ -1,6 +1,6 @@
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { t, type ThemeMode } from "../styles/theme";
+import { bevel, t, type ThemeMode } from "../styles/theme";
 
 interface TitlebarProps {
   theme: ThemeMode;
@@ -73,6 +73,7 @@ const Bar = styled.div`
   background: ${t.colorSurface};
   border-bottom: ${t.borderW} solid ${t.colorBorderStrong};
   user-select: none;
+  font-weight: bold;
 `;
 
 const Brand = styled.div`
@@ -94,7 +95,7 @@ const Controls = styled.div`
   gap: ${t.unit};
 `;
 
-/* 像素风方形按钮：2px 硬边框 + 硬阴影，按下时位移“陷进去” */
+/* 像素风方形按钮：立体斜角边，静止凸起、悬停抬升、按下凹陷 */
 const baseBtn = styled.button`
   width: 24px;
   height: 24px;
@@ -104,20 +105,20 @@ const baseBtn = styled.button`
   padding: 0;
   cursor: pointer;
   color: ${t.btnIcon};
-  background: ${t.colorSurface2};
-  border: ${t.borderW} solid ${t.colorBorderStrong};
+  background: ${t.colorControl};
+  border: 1px solid ${t.colorBorderStrong};
   border-radius: 0;
-  box-shadow: 2px 2px 0 ${t.colorShadow};
+  box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
   transition: transform 0.05s ease, box-shadow 0.05s ease, background 0.1s ease;
 
   &:hover {
     transform: translate(-1px, -1px);
-    box-shadow: 3px 3px 0 ${t.colorShadow};
+    box-shadow: ${bevel.raised}, 3px 3px 0 ${t.colorShadow};
   }
 
   &:active {
-    transform: translate(2px, 2px);
-    box-shadow: 0 0 0 ${t.colorShadow};
+    transform: translate(1px, 1px);
+    box-shadow: ${bevel.sunken};
   }
 `;
 
@@ -128,7 +129,7 @@ const ThemeBtn = styled(baseBtn)`
 
   &:hover {
     background: ${t.colorAccent};
-    color: #fff;
+    color: ${t.colorOnAccent};
   }
 `;
 
