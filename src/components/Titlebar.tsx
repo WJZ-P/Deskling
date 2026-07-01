@@ -79,8 +79,7 @@ const Brand = styled.div`
   display: flex;
   align-items: center;
   gap: ${t.unit};
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorText};
 `;
@@ -123,7 +122,7 @@ const baseBtn = styled.button`
 `;
 
 const ThemeBtn = styled(baseBtn)`
-  font-size: 12px;
+  font-size: 16px;
   line-height: 1;
   margin-right: ${t.unit};
 

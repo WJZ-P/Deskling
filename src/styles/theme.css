@@ -1,16 +1,45 @@
-/* Ark Pixel 12（方舟像素体，开源，同时支持中英文）。
-   用两个 @font-face 合成同一字体族：拉丁版用 unicode-range 优先匹配英文/数字，
-   简体中文版兜底其余字符。缺失时回退到下方等宽字体栈。 */
+/* Ark Pixel（方舟像素体，开源，支持中英文）三种原生字号：10 / 12 / 16。
+   像素字体只有在「原生尺寸」或其整数倍下才锐利，因此拆成三个字体族，
+   由字号 token（--text-*）分别绑定到对应字号或其 2 倍处使用。
+   每个字体族用两个 @font-face 合成：拉丁版用 unicode-range 优先匹配英文/数字，
+   简体中文版兜底其余字符。缺失时回退到 --fallback-pixel 字体栈。 */
+
+/* ---- Ark Pixel 10（用于 10px 与 20px） ---- */
 @font-face {
-    font-family: "Ark Pixel";
+    font-family: "Ark Pixel 10";
+    src: url("/fonts/ark-pixel-10px-proportional-latin.ttf.woff2") format("woff2");
+    font-display: swap;
+    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
+}
+@font-face {
+    font-family: "Ark Pixel 10";
+    src: url("/fonts/ark-pixel-10px-proportional-zh_cn.ttf.woff2") format("woff2");
+    font-display: swap;
+}
+
+/* ---- Ark Pixel 12（用于 12px 与 24px） ---- */
+@font-face {
+    font-family: "Ark Pixel 12";
     src: url("/fonts/ark-pixel-12px-proportional-latin.woff2") format("woff2");
     font-display: swap;
     unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
 }
-
 @font-face {
-    font-family: "Ark Pixel";
+    font-family: "Ark Pixel 12";
     src: url("/fonts/ark-pixel-12px-proportional-zh_cn.woff2") format("woff2");
+    font-display: swap;
+}
+
+/* ---- Ark Pixel 16（用于 16px 与 32px，默认正文） ---- */
+@font-face {
+    font-family: "Ark Pixel 16";
+    src: url("/fonts/ark-pixel-16px-proportional-latin.ttf.woff2") format("woff2");
+    font-display: swap;
+    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
+}
+@font-face {
+    font-family: "Ark Pixel 16";
+    src: url("/fonts/ark-pixel-16px-proportional-zh_cn.ttf.woff2") format("woff2");
     font-display: swap;
 }
 
@@ -21,9 +50,23 @@
     --unit: 4px;
     --border-w: 2px;
 
-    --font-pixel: "Ark Pixel", "Press Start 2P", ui-monospace, "Cascadia Mono",
-    Consolas, monospace;
-    --font-ui: "Ark Pixel", system-ui, "Segoe UI", "Microsoft YaHei",
+    /* 字体失效时的回退栈 */
+    --fallback-pixel: "Press Start 2P", ui-monospace, "Cascadia Mono", Consolas,
+    monospace;
+
+    /* 字号 token：用 CSS `font` 简写把「字号/行高 + 对应原生字体族」打包。
+       组件用 `font: var(--text-md)` 一句即可，既定字号又保证锐利不糊。
+       xs=10 sm=12 md=16(默认) lg=20(=10×2) xl=24(=12×2) 2xl=32(=16×2)。 */
+    --text-xs: 10px/1.8 "Ark Pixel 10", var(--fallback-pixel);
+    --text-sm: 12px/1.6 "Ark Pixel 12", var(--fallback-pixel);
+    --text-md: 16px/1.5 "Ark Pixel 16", var(--fallback-pixel);
+    --text-lg: 20px/1.4 "Ark Pixel 10", var(--fallback-pixel);
+    --text-xl: 24px/1.3 "Ark Pixel 12", var(--fallback-pixel);
+    --text-2xl: 32px/1.25 "Ark Pixel 16", var(--fallback-pixel);
+
+    /* 仅需字体族（不定字号）时用；默认按 16 号族，其余作兜底 */
+    --font-pixel: "Ark Pixel 16", "Ark Pixel 12", var(--fallback-pixel);
+    --font-ui: "Ark Pixel 16", system-ui, "Segoe UI", "Microsoft YaHei",
     sans-serif;
 }
 
@@ -42,10 +85,8 @@ body {
     /* var 回退值用于 applyTheme 执行前的首帧，避免闪烁 */
     background: var(--color-bg, #e6e4dd);
     color: var(--color-text, #36332c);
-    font-family: var(--font-ui);
-    /* Fusion Pixel 12 为 12px 设计，字号须为 12 的整数倍才锐利不糊 */
-    font-size: 12px;
-    line-height: 1.5;
+    /* 默认正文 = 16 号（含行高与字体族） */
+    font: var(--text-md);
     /* 像素图像保持锐利，不被缩放模糊 */
     image-rendering: pixelated;
     transition: background 0.2s ease, color 0.2s ease;

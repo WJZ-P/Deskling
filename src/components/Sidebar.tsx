@@ -112,8 +112,7 @@ const IconSlot = styled.span`
 `;
 
 const Label = styled.span`
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textMd};
   letter-spacing: 1px;
   white-space: nowrap;
   overflow: hidden;

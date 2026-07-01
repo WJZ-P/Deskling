@@ -79,19 +79,17 @@ const BrandText = styled.div`
 `;
 
 const BrandName = styled.div`
-  font-family: ${t.fontPixel};
-  font-size: 18px;
+  font: ${t.textXl};
   letter-spacing: 2px;
   color: ${t.colorAccent};
 `;
 
 const BrandDesc = styled.div`
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
 `;
 
 const Mono = styled.span`
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textMd};
   color: ${t.colorText};
 `;

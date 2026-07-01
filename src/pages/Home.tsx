@@ -65,14 +65,13 @@ const PetInfo = styled.div`
 `;
 
 const PetName = styled.div`
-  font-family: ${t.fontPixel};
-  font-size: 16px;
+  font: ${t.textLg};
   letter-spacing: 1px;
   color: ${t.colorText};
 `;
 
 const PetStatus = styled.div`
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
 `;
 

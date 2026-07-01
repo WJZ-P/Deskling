@@ -4,6 +4,7 @@ import { t } from "../styles/theme";
 /**
  * Deskling 专属基础 UI 组件库（像素风：方角、2px 硬边框、硬阴影）。
  * 页面统一从这里取件，保证全站视觉一致；需要新样式时在此扩展。
+ * 字号一律用 t.textXx（CSS `font` 简写，含字号/行高/对应原生字体族）。
  */
 
 /* ---------- 页面骨架 ---------- */
@@ -26,15 +27,14 @@ export const PageHeader = styled.header`
 
 export const PageTitle = styled.h1`
   margin: 0;
-  font-family: ${t.fontPixel};
-  font-size: 20px;
+  font: ${t.textXl};
   letter-spacing: 2px;
   color: ${t.colorAccent};
 `;
 
 export const PageSubtitle = styled.p`
   margin: 0;
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
 `;
 
@@ -52,8 +52,7 @@ export const Panel = styled.section`
 
 export const PanelTitle = styled.h2`
   margin: 0;
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorText};
 `;
@@ -80,13 +79,13 @@ export const SettingInfo = styled.div`
 `;
 
 export const SettingLabel = styled.div`
-  font-size: 12px;
+  font: ${t.textMd};
   color: ${t.colorText};
 `;
 
 export const SettingDesc = styled.p`
   margin: 0;
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
 `;
 
@@ -103,8 +102,7 @@ export const Button = styled.button<{ variant?: "default" | "accent" }>`
   gap: ${t.unit};
   padding: ${t.unit} calc(${t.unit} * 3);
   cursor: pointer;
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textMd};
   color: ${(p) => (p.variant === "accent" ? "#fff" : t.btnIcon)};
   background: ${(p) =>
     p.variant === "accent" ? t.colorAccent : t.colorSurface2};
@@ -138,8 +136,7 @@ export const Tag = styled.span`
   display: inline-flex;
   align-items: center;
   padding: ${t.unit} calc(${t.unit} * 2);
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorText};
   background: ${t.colorSurface2};
   border: ${t.borderW} solid ${t.colorBorder};
@@ -147,8 +144,7 @@ export const Tag = styled.span`
 
 /** “敬请期待”占位徽标 */
 export const SoonTag = styled.span`
-  font-family: ${t.fontPixel};
-  font-size: 12px;
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
   padding: 2px calc(${t.unit} * 2);
   border: ${t.borderW} dashed ${t.colorBorder};

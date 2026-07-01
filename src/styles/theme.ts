@@ -56,6 +56,14 @@ export const t = {
   borderW: "var(--border-w)",
   fontPixel: "var(--font-pixel)",
   fontUi: "var(--font-ui)",
+  /* 字号 token：CSS `font` 简写（字号/行高 + 对应原生字体族），用法 `font: ${t.textMd}`。
+     xs=10 sm=12 md=16(默认) lg=20 xl=24 2xl=32 */
+  textXs: "var(--text-xs)",
+  textSm: "var(--text-sm)",
+  textMd: "var(--text-md)",
+  textLg: "var(--text-lg)",
+  textXl: "var(--text-xl)",
+  text2xl: "var(--text-2xl)",
 } as const;
 
 /** 应用主题：把对象里的颜色值写入根元素的 CSS 变量，并标记 data-theme */
