@@ -1,17 +1,18 @@
 import { styled } from "@linaria/react";
-import { bevel, t } from "../styles/theme";
+import { pixelCorners, t } from "../styles/theme";
 
 /**
- * Deskling 专属基础 UI 组件库（像素风）。
+ * Deskling 专属基础 UI 组件库（软萌像素风）。
  *
- * 精致化要点：不再是「单一 border + 投影」，而是用立体斜角边（bevel）——
- * 1px 深色外框 + 左上高光 + 右下暗影的分层 inset 阴影，做出凸起/凹陷层次（见 theme.ts 的 bevel）。
+ * 手法要点（去复古 bevel）：
+ *  - 矩形四角用 clip-path 切成 3px 像素切角（一点点圆角但保留像素硬边特征）。
+ *  - 描边用 padding-box/border-box 双层渐变，让 1px 边沿切角走。
+ *  - 深度用 filter: drop-shadow 的柔和投影（跟随切角形状），而非硬阴影/立体边。
  * 字号一律用 t.textXx（CSS `font` 简写，含字号/行高/对应原生字体族）。
  */
 
 /* ---------- 页面骨架 ---------- */
 
-/** 单个页面的滚动容器：内边距 + 纵向排布 */
 export const Page = styled.div`
   height: 100%;
   overflow-y: auto;
@@ -43,13 +44,16 @@ export const PageSubtitle = styled.p`
 /* ---------- 面板 / 卡片 ---------- */
 
 export const Panel = styled.section`
-  background: ${t.colorSurface};
-  border: 1px solid ${t.colorBorderStrong};
-  box-shadow: ${bevel.raised}, 4px 4px 0 ${t.colorShadow};
   padding: calc(${t.unit} * 4);
   display: flex;
   flex-direction: column;
   gap: calc(${t.unit} * 3);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(${t.colorSurface}, ${t.colorSurface}) padding-box,
+    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
+  clip-path: ${pixelCorners};
+  filter: drop-shadow(0 4px 10px ${t.colorShadowSoft});
 `;
 
 export const PanelTitle = styled.h2`
@@ -59,27 +63,29 @@ export const PanelTitle = styled.h2`
   color: ${t.colorText};
 `;
 
-/** 凹陷容器：内嵌显示区（如数值、说明、代码），与凸起的 Panel 形成对比 */
+/** 内嵌容器：凹槽底色 + 柔和内阴影，与凸起面板形成层次 */
 export const Well = styled.div`
-  background: ${t.colorWell};
-  border: 1px solid ${t.colorBorderStrong};
-  box-shadow: ${bevel.sunken};
   padding: calc(${t.unit} * 3);
   font: ${t.textSm};
   color: ${t.colorText};
+  border: 1px solid transparent;
+  background:
+    linear-gradient(${t.colorWell}, ${t.colorWell}) padding-box,
+    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
+  clip-path: ${pixelCorners};
+  box-shadow: inset 0 2px 4px ${t.colorShadowSoft};
 `;
 
-/** 雕刻式分隔线：上暗下亮两色调，像被“刻”进面板 */
+/** 分隔线：一条柔和的浅描边线 */
 export const Divider = styled.hr`
   width: 100%;
   height: 0;
   margin: calc(${t.unit} * 2) 0;
   border: 0;
-  border-top: 1px solid ${t.colorBevelLo};
-  border-bottom: 1px solid ${t.colorBevelHi};
+  border-top: 1px solid ${t.colorBorder};
 `;
 
-/* ---------- 设置行：左标题/描述，右控件 ---------- */
+/* ---------- 设置行 ---------- */
 
 export const SettingRow = styled.div`
   display: flex;
@@ -90,8 +96,7 @@ export const SettingRow = styled.div`
   & + & {
     margin-top: calc(${t.unit} * 3);
     padding-top: calc(${t.unit} * 3);
-    border-top: 1px solid ${t.colorBevelLo};
-    box-shadow: inset 0 1px 0 ${t.colorBevelHi};
+    border-top: 1px solid ${t.colorBorder};
   }
 `;
 
@@ -116,7 +121,8 @@ export const SettingDesc = styled.p`
 /* ---------- 按钮 ---------- */
 
 /**
- * 像素按钮：静止凸起（raised），按下凹陷（sunken），有真实的“按进去”触感。
+ * 软萌像素按钮：切角矩形 + 双层描边 + 柔影。
+ * 悬停轻轻抬起 + 投影变大变亮；按下轻轻下沉。
  * variant：default（控件面）/ accent（强调填充）。
  */
 export const Button = styled.button<{ variant?: "default" | "accent" }>`
@@ -128,33 +134,39 @@ export const Button = styled.button<{ variant?: "default" | "accent" }>`
   cursor: pointer;
   font: ${t.textMd};
   color: ${(p) => (p.variant === "accent" ? t.colorOnAccent : t.btnIcon)};
+  border: 1px solid transparent;
   background: ${(p) =>
-    p.variant === "accent" ? t.colorAccent : t.colorControl};
-  border: 1px solid ${t.colorBorderStrong};
-  border-radius: 0;
-  box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
-  transition: transform 0.04s ease, box-shadow 0.04s ease, background 0.1s ease;
+    p.variant === "accent"
+      ? `linear-gradient(${t.colorAccent}, ${t.colorAccent}) padding-box,
+         linear-gradient(${t.colorAccent}, ${t.colorAccent}) border-box`
+      : `linear-gradient(${t.colorControl}, ${t.colorControl}) padding-box,
+         linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box`};
+  clip-path: ${pixelCorners};
+  filter: drop-shadow(0 2px 4px ${t.colorShadowSoft});
+  transition: transform 0.08s ease, filter 0.12s ease, background 0.12s ease;
 
   &:hover:not(:disabled) {
-    background: ${t.colorAccent};
     color: ${t.colorOnAccent};
-    transform: translate(-1px, -1px);
-    box-shadow: ${bevel.raised}, 3px 3px 0 ${t.colorShadow};
+    background:
+      linear-gradient(${t.colorAccent}, ${t.colorAccent}) padding-box,
+      linear-gradient(${t.colorAccent}, ${t.colorAccent}) border-box;
+    transform: translateY(-2px);
+    filter: drop-shadow(0 5px 10px ${t.colorShadowSoft}) brightness(1.04);
   }
 
   &:active:not(:disabled) {
-    transform: translate(1px, 1px);
-    box-shadow: ${bevel.sunken};
+    transform: translateY(1px);
+    filter: drop-shadow(0 1px 2px ${t.colorShadowSoft});
   }
 
   &:disabled {
     cursor: not-allowed;
     opacity: 0.5;
-    box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
+    filter: none;
   }
 `;
 
-/* ---------- 进度条：凹槽内嵌 + 凸起填充（照 Aseprite 立体条） ---------- */
+/* ---------- 进度条：内嵌槽 + 青色填充（切角随槽） ---------- */
 
 interface ProgressBarProps {
   /** 0–100 */
@@ -178,18 +190,20 @@ export function ProgressBar({ value }: ProgressBarProps) {
 const ProgressTrack = styled.div`
   height: calc(${t.unit} * 5);
   padding: 2px;
-  background: ${t.colorWell};
-  border: 1px solid ${t.colorBorderStrong};
-  box-shadow: ${bevel.sunken};
+  border: 1px solid transparent;
+  background:
+    linear-gradient(${t.colorWell}, ${t.colorWell}) padding-box,
+    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
+  clip-path: ${pixelCorners};
+  box-shadow: inset 0 2px 4px ${t.colorShadowSoft};
   overflow: hidden;
 `;
 
 const ProgressFill = styled.div`
   height: 100%;
-  min-width: 2px;
+  min-width: 4px;
   background: ${t.colorAccent};
-  border: 1px solid ${t.colorBorderStrong};
-  box-shadow: ${bevel.raised};
+  clip-path: ${pixelCorners};
   transition: width 0.2s ease;
 `;
 
@@ -201,9 +215,11 @@ export const Tag = styled.span`
   padding: 2px calc(${t.unit} * 2);
   font: ${t.textSm};
   color: ${t.colorText};
-  background: ${t.colorControl};
-  border: 1px solid ${t.colorBorder};
-  box-shadow: ${bevel.raised};
+  border: 1px solid transparent;
+  background:
+    linear-gradient(${t.colorControl}, ${t.colorControl}) padding-box,
+    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
+  clip-path: ${pixelCorners};
 `;
 
 /** “敬请期待”占位徽标 */
@@ -212,4 +228,5 @@ export const SoonTag = styled.span`
   color: ${t.colorTextMuted};
   padding: 2px calc(${t.unit} * 2);
   border: 1px dashed ${t.colorBorder};
+  clip-path: ${pixelCorners};
 `;

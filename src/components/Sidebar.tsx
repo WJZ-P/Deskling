@@ -1,6 +1,6 @@
 import { styled } from "@linaria/react";
 import type { ComponentType } from "react";
-import { bevel, t } from "../styles/theme";
+import { pixelCorners, t } from "../styles/theme";
 import {
   ChevronIcon,
   DebugIcon,
@@ -127,33 +127,29 @@ const Label = styled.span`
   overflow: hidden;
 `;
 
-/* 导航按钮：hover 凸起（raised）、active（选中）凹陷（sunken）+ 强调色左边条 */
+/* 导航按钮（软萌像素）：hover 浅填充、active（选中）青色填充药丸 */
 const NavBtn = styled.button`
   display: flex;
   align-items: center;
   gap: calc(${t.unit} * 2);
   width: 100%;
-  height: 32px;
+  height: 34px;
   padding: 0 calc(${t.unit} * 2);
   cursor: pointer;
   text-align: left;
   color: ${t.colorText};
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 0;
-  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+  border: 0;
+  clip-path: ${pixelCorners};
+  transition: background 0.1s ease, color 0.1s ease;
 
   &:hover {
     background: ${t.colorControl};
-    border-color: ${t.colorBorderStrong};
-    box-shadow: ${bevel.raised};
   }
 
   &[data-active="true"] {
-    color: ${t.colorAccent};
-    background: ${t.colorControl};
-    border-color: ${t.colorBorderStrong};
-    box-shadow: ${bevel.sunken}, inset 3px 0 0 ${t.colorAccent};
+    color: ${t.colorOnAccent};
+    background: ${t.colorAccent};
   }
 `;
 

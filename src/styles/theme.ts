@@ -15,35 +15,39 @@ export type ThemeMode = "light" | "dark";
  *       深色 = 深蓝为主 + 明亮青色点缀。
  */
 const colorTokens = {
-  colorBg: { css: "--color-bg", light: "#e8f0f8", dark: "#0a1626" },
+  // 浅色调色板统一以基准青 #7dd1d4（125,209,212）扩展：
+  // 背景/表面走极浅青调，边框/文字/阴影走该青色的加深档，控件/凹槽走中浅青档。
+  colorBg: { css: "--color-bg", light: "#e6f4f4", dark: "#0a1626" },
   colorSurface: { css: "--color-surface", light: "#ffffff", dark: "#11233b" },
-  colorSurface2: { css: "--color-surface-2", light: "#f1f7fc", dark: "#183050" },
-  colorBorder: { css: "--color-border", light: "#c2d6e6", dark: "#284a6b" },
+  colorSurface2: { css: "--color-surface-2", light: "#f0fafa", dark: "#183050" },
+  colorBorder: { css: "--color-border", light: "#bfe6e7", dark: "#284a6b" },
   colorBorderStrong: {
     css: "--color-border-strong",
-    light: "#5b7d9c",
+    light: "#3f9599",
     dark: "#3d6690",
   },
-  colorText: { css: "--color-text", light: "#1b2c3d", dark: "#e6f0fa" },
+  colorText: { css: "--color-text", light: "#16323a", dark: "#e6f0fa" },
   colorTextMuted: {
     css: "--color-text-muted",
-    light: "#61788e",
+    light: "#5a8288",
     dark: "#8fa8c2",
   },
-  // 主强调色：青蓝色（浅色偏深便于在白底做标题文字；深色偏亮在深蓝上跳脱）
-  colorAccent: { css: "--color-accent", light: "#12a8bd", dark: "#3fd2e2" },
-  // 强调色背景上的文字色：青蓝底上用深藏蓝，比纯白对比更高、更清晰精致
-  colorOnAccent: { css: "--color-on-accent", light: "#06222b", dark: "#04202a" },
-  colorShadow: { css: "--color-shadow", light: "#b7cadb", dark: "#040e1c" },
+  // 主强调色：基准青 #7dd1d4（浅色）；深色仍用明亮青在深蓝上跳脱
+  colorAccent: { css: "--color-accent", light: "#7dd1d4", dark: "#3fd2e2" },
+  // 强调色背景上的文字色：青底上用深青墨，对比更高、更清晰精致
+  colorOnAccent: { css: "--color-on-accent", light: "#0a2e30", dark: "#04202a" },
+  colorShadow: { css: "--color-shadow", light: "#a9dcdd", dark: "#040e1c" },
+  // 柔和投影色（软萌像素风：drop-shadow 的模糊投影，带基准青的半透明调）
+  colorShadowSoft: {
+    css: "--color-shadow-soft",
+    light: "rgba(63, 149, 153, 0.26)",
+    dark: "rgba(2, 8, 20, 0.55)",
+  },
 
-  // ---- 立体斜角边（bevel）用色 ----
-  // 凸起控件（按钮/填充块）的面色：需中间调，好让高光与暗影都显形
-  colorControl: { css: "--color-control", light: "#dbe8f2", dark: "#1e3a5c" },
-  // 凹陷凹槽/输入区的底色：比控件更深，显“陷进去”
-  colorWell: { css: "--color-well", light: "#c6d8e7", dark: "#0b1c30" },
-  // 立体边高光（左上）与暗影（右下）
-  colorBevelHi: { css: "--color-bevel-hi", light: "#ffffff", dark: "#3a5c86" },
-  colorBevelLo: { css: "--color-bevel-lo", light: "#93aec6", dark: "#060e1e" },
+  // 控件面（按钮等凸起元素）的填充面色
+  colorControl: { css: "--color-control", light: "#d6f0f0", dark: "#1e3a5c" },
+  // 凹槽/进度槽/输入区的底色：比控件更深，显“内嵌”
+  colorWell: { css: "--color-well", light: "#c2e7e8", dark: "#0b1c30" },
   btnMin: { css: "--btn-min", light: "#f2c14e", dark: "#e0b04a" },
   btnMax: { css: "--btn-max", light: "#6fc27b", dark: "#5fae63" },
   btnClose: { css: "--btn-close", light: "#ec6a6a", dark: "#d65a5a" },
@@ -65,10 +69,9 @@ export const t = {
   colorAccent: "var(--color-accent)",
   colorOnAccent: "var(--color-on-accent)",
   colorShadow: "var(--color-shadow)",
+  colorShadowSoft: "var(--color-shadow-soft)",
   colorControl: "var(--color-control)",
   colorWell: "var(--color-well)",
-  colorBevelHi: "var(--color-bevel-hi)",
-  colorBevelLo: "var(--color-bevel-lo)",
   btnMin: "var(--btn-min)",
   btnMax: "var(--btn-max)",
   btnClose: "var(--btn-close)",
@@ -88,17 +91,21 @@ export const t = {
 } as const;
 
 /**
- * 立体斜角边（bevel）阴影片段：用分层 inset 硬阴影模拟凸起/凹陷。
- * 用法（可再叠加外投影）：`box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};`
- *  - raised：左上高光 + 右下暗影 → 凸起（按钮、填充块）
- *  - sunken：左上暗影 + 右下高光 → 凹陷（凹槽、输入区、按下态）
+ * 软萌像素「切角」工具（去 bevel）。
+ *
+ * pixelCorners：clip-path 多边形，把矩形四角切成一小段像素切角——
+ * 「一点点圆角」但保留像素硬边特征（非平滑弧线）。用法 `clip-path: ${pixelCorners};`
+ *
+ * 描边跟随切角的推荐配方（1px 边沿切角走）：
+ *   border: 1px solid transparent;
+ *   background:
+ *     linear-gradient(<填充色>, <填充色>) padding-box,
+ *     linear-gradient(<描边色>, <描边色>) border-box;
+ *   clip-path: ${pixelCorners};
+ * 柔和投影用 `filter: drop-shadow(0 3px 6px ${t.colorShadowSoft})`（会跟随切角形状）。
  */
-export const bevel = {
-  raised:
-    "inset 1px 1px 0 var(--color-bevel-hi), inset -1px -1px 0 var(--color-bevel-lo)",
-  sunken:
-    "inset 1px 1px 0 var(--color-bevel-lo), inset -1px -1px 0 var(--color-bevel-hi)",
-} as const;
+export const CORNER = "3px";
+export const pixelCorners = `polygon(${CORNER} 0, calc(100% - ${CORNER}) 0, 100% ${CORNER}, 100% calc(100% - ${CORNER}), calc(100% - ${CORNER}) 100%, ${CORNER} 100%, 0 calc(100% - ${CORNER}), 0 ${CORNER})`;
 
 /** 应用主题：把对象里的颜色值写入根元素的 CSS 变量，并标记 data-theme */
 export function applyTheme(mode: ThemeMode): void {

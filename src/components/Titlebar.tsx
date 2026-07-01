@@ -1,6 +1,6 @@
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { bevel, t, type ThemeMode } from "../styles/theme";
+import { pixelCorners, t, type ThemeMode } from "../styles/theme";
 
 interface TitlebarProps {
   theme: ThemeMode;
@@ -95,7 +95,7 @@ const Controls = styled.div`
   gap: ${t.unit};
 `;
 
-/* 像素风方形按钮：立体斜角边，静止凸起、悬停抬升、按下凹陷 */
+/* 软萌像素方形按钮：切角 + 双层描边 + 柔影，悬停抬起、按下下沉 */
 const baseBtn = styled.button`
   width: 24px;
   height: 24px;
@@ -105,20 +105,22 @@ const baseBtn = styled.button`
   padding: 0;
   cursor: pointer;
   color: ${t.btnIcon};
-  background: ${t.colorControl};
-  border: 1px solid ${t.colorBorderStrong};
-  border-radius: 0;
-  box-shadow: ${bevel.raised}, 2px 2px 0 ${t.colorShadow};
-  transition: transform 0.05s ease, box-shadow 0.05s ease, background 0.1s ease;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(${t.colorControl}, ${t.colorControl}) padding-box,
+    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
+  clip-path: ${pixelCorners};
+  filter: drop-shadow(0 1px 3px ${t.colorShadowSoft});
+  transition: transform 0.08s ease, filter 0.12s ease, background 0.12s ease;
 
   &:hover {
-    transform: translate(-1px, -1px);
-    box-shadow: ${bevel.raised}, 3px 3px 0 ${t.colorShadow};
+    transform: translateY(-1px);
+    filter: drop-shadow(0 3px 6px ${t.colorShadowSoft});
   }
 
   &:active {
-    transform: translate(1px, 1px);
-    box-shadow: ${bevel.sunken};
+    transform: translateY(1px);
+    filter: drop-shadow(0 1px 2px ${t.colorShadowSoft});
   }
 `;
 
