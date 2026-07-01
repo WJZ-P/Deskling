@@ -6,11 +6,14 @@ export type { ThemeMode };
 /** 所有持久化配置项集中在这里，新增配置时同步补默认值即可 */
 export interface AppSettings {
   theme: ThemeMode;
+  /** 侧边栏是否折叠为纯图标 */
+  sidebarCollapsed: boolean;
 }
 
 /** 默认值：读取失败或缺失时回退到这里 */
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "light",
+  sidebarCollapsed: false,
 };
 
 const STORE_FILE = "settings.json";
@@ -29,11 +32,11 @@ export async function initSettings(): Promise<AppSettings> {
       autoSave: true,
       defaults: DEFAULT_SETTINGS as unknown as { [key: string]: unknown },
     });
-    const loaded: Partial<AppSettings> = {};
+    const loaded: Record<string, unknown> = {};
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[]) {
       const val = await store.get(key);
       if (val !== undefined && val !== null) {
-        loaded[key] = val as AppSettings[typeof key];
+        loaded[key] = val;
       }
     }
     cache = { ...DEFAULT_SETTINGS, ...loaded };
