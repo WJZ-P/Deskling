@@ -104,7 +104,11 @@ const Btn = styled.button`
 const Label = styled.span`
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 8px 18px;
   font: ${t.textMd};
   letter-spacing: 1px;
   /* 像素字体加粗：整数 text-shadow 横向 +1px 描粗，笔画由 1px 变 2px，锐利不发虚。

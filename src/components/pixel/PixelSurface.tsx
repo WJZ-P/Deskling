@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { styled } from "@linaria/react";
@@ -28,6 +29,78 @@ import type { PixelPalette } from "./PixelFrame";
 
 export type SurfaceState = "rest" | "hover" | "press";
 
+// ---- 角色 ----
+const EDGE = 0;
+const HI = 1;
+const LO = 2;
+const FACE = 3;
+
+/**
+ * 表面动画调参 —— 全部抽成顶层，方便按用途覆盖喵～
+ * 按钮用默认值；卡片等可传 `tune` 局部覆盖（如更慢的闪烁、更大的颗粒）。
+ */
+export interface SurfaceTune {
+  /** 各角色 hover 提亮 [EDGE, HI, LO, FACE] */
+  hoverLiftRole: [number, number, number, number];
+  /** 各角色 press 提亮（HI/LO 按压表现由「高光反转」承担，通常设 0） */
+  pressLiftRole: [number, number, number, number];
+  /** 面像素正弦呼吸幅度（老式 flicker，按钮用；卡片可设 0 改用动态低噪） */
+  flickerAmp: number;
+  /** 面像素低噪/闪烁的绝对灰度增量系数（浅色深色都可见） */
+  shimmerPx: number;
+  /** 正弦呼吸速度最小值（越小越慢） */
+  flickerSpeedMin: number;
+  /** 正弦呼吸速度随机范围 */
+  flickerSpeedRange: number;
+  /** 低噪颗粒度：N×N 个美术像素合成一块噪声（1=最细，越大越粗块，独立于 pixel） */
+  noiseGranularity: number;
+  /** hover 动态低噪「变动幅度」（0=关闭动态低噪，仅静态低噪 + 正弦呼吸） */
+  noiseHoverAmp: number;
+  /** hover 动态低噪「重掷间隔/delay」秒：越大变化越慢、块与块越错落 */
+  noiseHoverDelay: number;
+  /** 每格错落起始延迟上限（秒） */
+  delayMax: number;
+  /** 弹簧刚度 */
+  springK: number;
+  /** 弹簧阻尼（略欠阻尼→轻微回弹） */
+  springD: number;
+  /** 抬升/下沉/投影 CSS 过渡时长（ms） */
+  liftMs: number;
+  /** 抬升/下沉缓动 */
+  liftEase: string;
+  /** hover 抬升 px（负=上抬） */
+  hoverTy: number;
+  /** press 下沉 px */
+  pressTy: number;
+  /** 静止/hover/press 投影高度 px */
+  elevRest: number;
+  elevHover: number;
+  elevPress: number;
+}
+
+/** 默认调参（=按钮当前手感，改这里等于改按钮默认表现） */
+export const DEFAULT_TUNE: SurfaceTune = {
+  hoverLiftRole: [0.16, 0.12, 0.12, 0.05],
+  pressLiftRole: [0.14, 0, 0, 0.2],
+  flickerAmp: 0.09,
+  shimmerPx: 150,
+  flickerSpeedMin: 2,
+  flickerSpeedRange: 4,
+  noiseGranularity: 1,
+  noiseHoverAmp: 0, // 按钮默认关闭动态低噪，保持既定手感
+  noiseHoverDelay: 0.18,
+  delayMax: 0.1,
+  springK: 800,
+  springD: 24,
+  liftMs: 200,
+  liftEase: "cubic-bezier(.2,.9,.3,1.3)",
+  hoverTy: -2,
+  pressTy: 1,
+  elevRest: 3,
+  elevHover: 3,
+  elevPress: 3,
+};
+
 interface PixelSurfaceProps {
   palette: PixelPalette;
   state: SurfaceState;
@@ -35,41 +108,38 @@ interface PixelSurfaceProps {
   radius?: number;
   /** 面像素基准随机明暗强度 0~1 */
   noise?: number;
+  /** 动画调参覆盖（请传模块级常量以保持引用稳定，避免重建 cells） */
+  tune?: Partial<SurfaceTune>;
   className?: string;
   children?: ReactNode;
   shadowColor?: string;
+  /** 根节点样式覆盖（布局用：display/width/... 位移过渡由内部管理） */
+  rootStyle?: CSSProperties;
+  /** 内容层样式覆盖（布局用：padding/对齐/方向...） */
+  contentStyle?: CSSProperties;
 }
-
-// ---- 角色 ----
-const EDGE = 0;
-const HI = 1;
-const LO = 2;
-const FACE = 3;
-
-// ---- 动画参数（可调）----
-const HOVER_LIFT_ROLE = [0.16, 0.12, 0.12, 0.05]; // 各角色 hover 提亮
-// 各角色 press 提亮；HI/LO 的按压表现改由「高光反转」承担，故其提亮设 0
-const PRESS_LIFT_ROLE = [0.14, 0, 0, 0.2];
-const FLICKER_AMP = 0.09; // 面像素亮暗交替幅度
-const SHIMMER_PX = 150; // 面像素低噪/闪烁的绝对灰度增量系数（浅色深色都可见）
-const DELAY_MAX = 0.1; // 每格错落起始延迟（秒）
-const SPRING_K = 800; // 弹簧刚度
-const SPRING_D = 24; // 弹簧阻尼（略欠阻尼→轻微回弹）
-
-// 位移/投影是「纯位置」表现，交给 CSS 过渡（在这里调速度即可）
-const LIFT_MS = 200; // 抬升/下沉/投影过渡时长（ms）
-const LIFT_EASE = "cubic-bezier(.2,.9,.3,1.3)"; // 带一点回弹的缓动
-const HOVER_TY = -2; // hover 抬升 px
-const PRESS_TY = 1; // 按下下沉 px
-const ELEV_REST = 3; // 静止投影高度 px
-const ELEV_HOVER = 3; // hover 投影高度 px
-const ELEV_PRESS = 3; // 按下投影高度 px
 
 function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return [230, 244, 244];
   const n = parseInt(m[1], 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// 伪随机 hash → [0,1)
+function hash1(n: number): number {
+  const s = Math.sin(n) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// 平滑值噪声（value-noise）：随 x 连续变化，每整数格重掷随机值并 smoothstep 插值 → [0,1)
+function vnoise(seed: number, x: number): number {
+  const i = Math.floor(x);
+  const f = x - i;
+  const u = f * f * (3 - 2 * f);
+  const a = hash1(seed + i * 131.0);
+  const b = hash1(seed + (i + 1) * 131.0);
+  return a + (b - a) * u;
 }
 
 interface Cells {
@@ -88,6 +158,8 @@ interface Cells {
   baseOff: Float32Array;
   flkS: Float32Array;
   flkP: Float32Array;
+  nseed: Float32Array; // 动态低噪：所属噪声块的随机种子
+  nph: Float32Array; // 动态低噪：所属噪声块的相位偏移（错落 delay）
   delay: Float32Array;
   kj: Float32Array;
 }
@@ -98,10 +170,15 @@ export function PixelSurface({
   pixel = 4,
   radius = 2,
   noise = 0.1,
+  tune,
   className,
   children,
   shadowColor = "rgba(31,106,111,0.38)",
+  rootStyle,
+  contentStyle,
 }: PixelSurfaceProps) {
+  // 合并调参：consumer 传模块级常量 → tune 引用稳定 → T 稳定，不会误重建 cells
+  const T = useMemo<SurfaceTune>(() => ({ ...DEFAULT_TUNE, ...tune }), [tune]);
   const rootRef = useRef<HTMLSpanElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
@@ -169,8 +246,35 @@ export function PixelSurface({
       baseOff: new Float32Array(n),
       flkS: new Float32Array(n),
       flkP: new Float32Array(n),
+      nseed: new Float32Array(n),
+      nph: new Float32Array(n),
       delay: new Float32Array(n),
       kj: new Float32Array(n),
+    };
+    // 低噪按「块」共享随机：同一块（gran×gran 像素）内像素噪声一致 → 颗粒更粗
+    const gran = Math.max(1, Math.round(T.noiseGranularity));
+    interface Blk {
+      off: number;
+      flkP: number;
+      flkS: number;
+      seed: number;
+      nph: number;
+    }
+    const blocks = new Map<number, Blk>();
+    const blockOf = (x: number, y: number): Blk => {
+      const id = Math.floor(y / gran) * 100000 + Math.floor(x / gran);
+      let b = blocks.get(id);
+      if (!b) {
+        b = {
+          off: (Math.random() * 2 - 1) * noise,
+          flkP: Math.random() * Math.PI * 2,
+          flkS: T.flickerSpeedMin + Math.random() * T.flickerSpeedRange,
+          seed: Math.random() * 1000,
+          nph: Math.random(), // 相位错落（0~1 个 delay 周期）
+        };
+        blocks.set(id, b);
+      }
+      return b;
     };
     for (let i = 0; i < n; i++) {
       const role = roles[i];
@@ -185,24 +289,29 @@ export function PixelSurface({
       c.br2[i] = alt[0];
       c.bg2[i] = alt[1];
       c.bb2[i] = alt[2];
-      c.baseOff[i] = role === FACE ? (Math.random() * 2 - 1) * noise : 0;
-      c.flkS[i] = 2 + Math.random() * 4; // 闪烁速度
-      c.flkP[i] = Math.random() * Math.PI * 2; // 闪烁相位
+      if (role === FACE) {
+        const b = blockOf(xs[i], ys[i]);
+        c.baseOff[i] = b.off; // 静态低噪（块共享）
+        c.flkS[i] = b.flkS; // 正弦呼吸速度（块共享）
+        c.flkP[i] = b.flkP; // 正弦呼吸相位（块共享）
+        c.nseed[i] = b.seed; // 动态低噪块种子
+        c.nph[i] = b.nph; // 动态低噪块相位（错落 delay）
+      }
       // 高光/暗影整圈需整体同步反转：统一 delay=0、kj=1（无错落、同速）；
       // 边框(EDGE)与面(FACE)保留随机错落与刚度抖动。
       const cohesive = role === HI || role === LO;
-      c.delay[i] = cohesive ? 0 : Math.random() * DELAY_MAX; // 错落延迟
+      c.delay[i] = cohesive ? 0 : Math.random() * T.delayMax; // 错落延迟
       c.kj[i] = cohesive ? 1 : 0.75 + Math.random() * 0.5; // 弹簧刚度抖动
     }
     return c;
-  }, [cols, rows, r, palette, noise]);
+  }, [cols, rows, r, palette, noise, T]);
 
   // 渲染 cell（引用冻结，状态变化不重建/不重置 fill）
   const rects = useMemo(() => {
     const arr: ReactNode[] = [];
     for (let i = 0; i < cells.n; i++) {
       // 首帧（rest）：面像素叠加绝对灰度低噪，其余用基准色
-      const d = cells.role[i] === FACE ? cells.baseOff[i] * SHIMMER_PX : 0;
+      const d = cells.role[i] === FACE ? cells.baseOff[i] * T.shimmerPx : 0;
       const clampCh = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
       const rr = clampCh(cells.br[i] + d);
       const gg = clampCh(cells.bg[i] + d);
@@ -219,7 +328,7 @@ export function PixelSurface({
       );
     }
     return arr;
-  }, [cells]);
+  }, [cells, T]);
 
   // 弹簧动画引擎
   const startRef = useRef<() => void>(() => {});
@@ -271,11 +380,11 @@ export function PixelSurface({
         const pTarget = tsec - pressStart >= cells.delay[i] ? pressWant : 1 - pressWant;
 
         // 弹簧积分（半隐式欧拉）
-        const k = SPRING_K * cells.kj[i];
-        let a = k * (hTarget - hp[i]) - SPRING_D * hv[i];
+        const k = T.springK * cells.kj[i];
+        let a = k * (hTarget - hp[i]) - T.springD * hv[i];
         hv[i] += a * dt;
         hp[i] += hv[i] * dt;
-        a = k * (pTarget - pp[i]) - SPRING_D * pv[i];
+        a = k * (pTarget - pp[i]) - T.springD * pv[i];
         pv[i] += a * dt;
         pp[i] += pv[i] * dt;
 
@@ -289,7 +398,7 @@ export function PixelSurface({
         const baseB = cells.bb[i] + (cells.bb2[i] - cells.bb[i]) * pc;
 
         // 提亮（朝白/黑混合）：暗色边框上才亮得起来，用于 hover/press 点亮
-        const lift = HOVER_LIFT_ROLE[role] * hp[i] + PRESS_LIFT_ROLE[role] * pp[i];
+        const lift = T.hoverLiftRole[role] * hp[i] + T.pressLiftRole[role] * pp[i];
         const la = lift < 0 ? -lift : lift;
         const lc = la > 1 ? 1 : la;
         const ltgt = lift >= 0 ? 255 : 0;
@@ -297,11 +406,21 @@ export function PixelSurface({
         let gg = baseG + (ltgt - baseG) * lc;
         let bb = baseB + (ltgt - baseB) * lc;
 
-        // 面像素低噪 + 闪烁：绝对灰度增量（对称），浅色/深色面都可见
+        // 面像素低噪：绝对灰度增量（对称），浅色/深色面都可见
         if (role === FACE) {
-          const shimmer =
-            cells.baseOff[i] + FLICKER_AMP * Math.sin(t * cells.flkS[i] + cells.flkP[i]) * hp[i];
-          const d = shimmer * SHIMMER_PX;
+          // 静态低噪（块共享，rest 也在）
+          let shimmer = cells.baseOff[i];
+          // 正弦呼吸（老式 flicker，hover 时叠加）
+          if (T.flickerAmp > 0) {
+            shimmer += T.flickerAmp * Math.sin(t * cells.flkS[i] + cells.flkP[i]) * hp[i];
+          }
+          // 动态低噪：hover 时按块持续随机变化，delay 控节奏、amp 控幅度
+          if (T.noiseHoverAmp > 0) {
+            const vx = t / (T.noiseHoverDelay > 0.01 ? T.noiseHoverDelay : 0.01) + cells.nph[i];
+            const dyn = (vnoise(cells.nseed[i], vx) - 0.5) * 2; // [-1,1)
+            shimmer += dyn * T.noiseHoverAmp * hp[i];
+          }
+          const d = shimmer * T.shimmerPx;
           rr += d;
           gg += d;
           bb += d;
@@ -338,21 +457,25 @@ export function PixelSurface({
       cancelAnimationFrame(raf);
       running = false;
     };
-  }, [cells]);
+  }, [cells, T]);
 
   useEffect(() => {
     startRef.current();
   }, [state]);
 
-  // 位移 + 投影：纯位置表现，交给 CSS 过渡（调速见顶部 LIFT_MS / LIFT_EASE）
-  const ty = state === "press" ? PRESS_TY : state === "hover" ? HOVER_TY : 0;
-  const elev = state === "press" ? ELEV_PRESS : state === "hover" ? ELEV_HOVER : ELEV_REST;
+  // 位移 + 投影：纯位置表现，交给 CSS 过渡（调速见 tune.liftMs / liftEase）
+  const ty = state === "press" ? T.pressTy : state === "hover" ? T.hoverTy : 0;
+  const elev = state === "press" ? T.elevPress : state === "hover" ? T.elevHover : T.elevRest;
 
   return (
     <Root
       ref={rootRef}
       className={className}
-      style={{ transform: `translateY(${ty}px)`, transition: `transform ${LIFT_MS}ms ${LIFT_EASE}` }}
+      style={{
+        transform: `translateY(${ty}px)`,
+        transition: `transform ${T.liftMs}ms ${T.liftEase}`,
+        ...rootStyle,
+      }}
     >
       <svg
         ref={svgRef}
@@ -368,14 +491,14 @@ export function PixelSurface({
           pointerEvents: "none",
           overflow: "visible",
           filter: `drop-shadow(0 ${elev}px 0 ${shadowColor})`,
-          transition: `filter ${LIFT_MS}ms ${LIFT_EASE}`,
+          transition: `filter ${T.liftMs}ms ${T.liftEase}`,
         }}
       >
         <g ref={gRef} data-pf={rid}>
           {rects}
         </g>
       </svg>
-      <Content>{children}</Content>
+      <Content style={contentStyle}>{children}</Content>
     </Root>
   );
 }
@@ -386,8 +509,6 @@ const Root = styled.span`
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  min-height: 34px;
-  padding: 8px 18px;
   will-change: transform;
 `;
 
@@ -397,4 +518,5 @@ const Content = styled.span`
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 `;

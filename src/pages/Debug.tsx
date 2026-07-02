@@ -23,6 +23,7 @@ import {
 import { PixelFrame } from "../components/pixel/PixelFrame";
 import { PixelButton } from "../components/pixel/PixelButton";
 import { PixelProgress } from "../components/pixel/PixelProgress";
+import { PixelCard } from "../components/pixel/PixelCard";
 import { PX } from "../components/pixel/palettes";
 
 /** 候选 UI 风格（全程像素字体，仅整体处理手法/配色不同） */
@@ -170,14 +171,14 @@ function Debug() {
 
         <SubTitle>异形边框 · 面板 &amp; 双层嵌套头像框</SubTitle>
         <Row style={{ alignItems: "stretch" }}>
-          <PixelCard>
+          <FrameCard>
             <PixelFrame palette={PX.panel} variant="raised" pixel={3} radius={3} />
-            <PixelCardBody>
+            <FrameCardBody>
               <CardName>Nova</CardName>
               <CardMeta>AI PET · Lv.24</CardMeta>
               <PixelProgress value={70} />
-            </PixelCardBody>
-          </PixelCard>
+            </FrameCardBody>
+          </FrameCard>
 
           <PixelAvatar>
             <PixelFrame palette={PX.accent} variant="raised" pixel={3} radius={3} />
@@ -187,6 +188,48 @@ function Debug() {
             </PixelAvatarInner>
           </PixelAvatar>
         </Row>
+      </Panel>
+
+      <Panel>
+        <PanelTitle>卡片 Card · 打样喵～</PanelTitle>
+        <SettingDesc>
+          基于静态 PixelFrame 的容器：多重描边 + 高光/暗影 + 像素圆角 + 硬投影。
+          三种面色（纯白 / 浅青 / 青），可选标题头、尾插槽、悬停抬升。
+        </SettingDesc>
+
+        <SubTitle>基础卡片（surface / soft / accent）</SubTitle>
+        <CardGrid>
+          <PixelCard title="纯白卡片" variant="surface">
+            这是一段卡片正文喵～ 适合放说明、状态或次要信息，和凸起面板形成层次。
+          </PixelCard>
+          <PixelCard title="浅青卡片" variant="soft">
+            soft 变体用浅青面色，低调但仍带青蓝识别色。
+          </PixelCard>
+          <PixelCard title="青色卡片" variant="accent">
+            accent 变体用青色面色，适合强调/推荐位，文字用深青墨保证对比。
+          </PixelCard>
+        </CardGrid>
+
+        <SubTitle>带尾插槽 + 操作（可交互，悬停抬升）</SubTitle>
+        <CardGrid>
+          <PixelCard title="Nova" trailing={<Tag>Lv.24</Tag>} variant="surface" interactive>
+            <div>AI PET · 在线</div>
+            <div style={{ marginTop: 8 }}>
+              <PixelProgress value={70} />
+            </div>
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <PixelButton>详情</PixelButton>
+              <PixelButton variant="accent">互动</PixelButton>
+            </div>
+          </PixelCard>
+
+          <PixelCard title="每日奖励" trailing={<Tag>New</Tag>} variant="soft" interactive>
+            <div>登录即可领取今日能量补给喵～</div>
+            <div style={{ marginTop: 12 }}>
+              <PixelButton variant="accent">领取</PixelButton>
+            </div>
+          </PixelCard>
+        </CardGrid>
       </Panel>
 
       <Panel>
@@ -300,14 +343,21 @@ const SubTitle = styled.div`
   letter-spacing: 1px;
 `;
 
-const PixelCard = styled.div`
+const CardGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: calc(${t.unit} * 4);
+  align-items: start;
+`;
+
+const FrameCard = styled.div`
   position: relative;
   flex: 1 1 220px;
   min-width: 200px;
   padding: calc(${t.unit} * 4);
 `;
 
-const PixelCardBody = styled.div`
+const FrameCardBody = styled.div`
   position: relative;
   z-index: 1;
   display: flex;
