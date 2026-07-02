@@ -6,6 +6,7 @@ import Home from "./pages/Home";
 import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";
 import About from "./pages/About";
+import { PixelBackdrop } from "./components/pixel/PixelBackdrop";
 import { useTheme } from "./hooks/useTheme";
 import { getSetting, setSetting } from "./settings";
 import { t } from "./styles/theme";
@@ -35,12 +36,15 @@ function App() {
           onToggleCollapse={toggleCollapse}
         />
         <Main>
-          {section === "home" && <Home />}
-          {section === "settings" && (
-            <Settings theme={theme} onToggleTheme={toggleTheme} />
-          )}
-          {section === "debug" && <Debug />}
-          {section === "about" && <About />}
+          <PixelBackdrop theme={theme} />
+          <Content>
+            {section === "home" && <Home />}
+            {section === "settings" && (
+              <Settings theme={theme} onToggleTheme={toggleTheme} />
+            )}
+            {section === "debug" && <Debug />}
+            {section === "about" && <About />}
+          </Content>
         </Main>
       </Body>
     </Shell>
@@ -64,7 +68,15 @@ const Body = styled.div`
 `;
 
 const Main = styled.main`
+  position: relative;
   flex: 1;
   min-width: 0;
   overflow: hidden;
+`;
+
+/* 内容层置于 backdrop 之上；撑满 Main，滚动交给内部 Page */
+const Content = styled.div`
+  position: relative;
+  z-index: 1;
+  height: 100%;
 `;
