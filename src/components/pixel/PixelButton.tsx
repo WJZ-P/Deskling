@@ -4,6 +4,10 @@ import { t } from "../../styles/theme";
 import { PixelFrame } from "./PixelFrame";
 import { PX } from "./palettes";
 
+//  控制按钮的样式
+const buttenPixel = 4;
+const buttenRadius = 2;
+
 interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "default" | "accent";
 }
@@ -28,7 +32,7 @@ export function PixelButton({
       onPointerLeave={() => setPressed(false)}
       {...rest}
     >
-      <PixelFrame palette={pal} variant={active ? "sunken" : "raised"} pixel={3} radius={2} />
+      <PixelFrame palette={pal} variant={active ? "sunken" : "raised"} pixel={buttenPixel} radius={buttenRadius} />
       <Label style={{ transform: active ? "translateY(1px)" : "none" }}>{children}</Label>
     </Btn>
   );

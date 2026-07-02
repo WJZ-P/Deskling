@@ -58,6 +58,7 @@ export function PixelFrame({
   const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
   const rid = useId().replace(/:/g, "");
   const maskId = `pf-m-${rid}`;
+  const faceMaskId = `pf-fm-${rid}`;
   const ditherId = `pf-d-${rid}`;
 
   useLayoutEffect(() => {
@@ -77,21 +78,29 @@ export function PixelFrame({
   const topLeft = variant === "sunken" ? palette.lo : palette.hi;
   const botRight = variant === "sunken" ? palette.hi : palette.lo;
 
-  // 四角切角：曼哈顿距离 < radius 的角格抠掉（对角阶梯，保留像素感）
+  // 四角切角（曼哈顿阶梯，保留像素硬边）。
+  // 用两级切角实现「圆角处描边仍连续包住转角」：
+  //  - 外轮廓抠掉 gx+gy < r 的角格（透明，得到圆角外形）；
+  //  - 面色多抠一档 gx+gy < r+1，使转角对角线上露出 1 格外描边，形成连续包边。
   const r = Math.max(1, radius);
-  const cut: ReactElement[] = [];
-  for (let gx = 0; gx < r; gx++) {
-    for (let gy = 0; gy < r; gy++) {
-      if (gx + gy < r) {
-        cut.push(
-          <rect key={`tl-${gx}-${gy}`} x={gx} y={gy} width={1} height={1} fill="#000" />,
-          <rect key={`tr-${gx}-${gy}`} x={cols - 1 - gx} y={gy} width={1} height={1} fill="#000" />,
-          <rect key={`bl-${gx}-${gy}`} x={gx} y={rows - 1 - gy} width={1} height={1} fill="#000" />,
-          <rect key={`br-${gx}-${gy}`} x={cols - 1 - gx} y={rows - 1 - gy} width={1} height={1} fill="#000" />,
-        );
+  const cornerCut = (R: number, tag: string): ReactElement[] => {
+    const out: ReactElement[] = [];
+    for (let gx = 0; gx < R; gx++) {
+      for (let gy = 0; gy < R; gy++) {
+        if (gx + gy < R) {
+          out.push(
+            <rect key={`${tag}-tl-${gx}-${gy}`} x={gx} y={gy} width={1} height={1} fill="#000" />,
+            <rect key={`${tag}-tr-${gx}-${gy}`} x={cols - 1 - gx} y={gy} width={1} height={1} fill="#000" />,
+            <rect key={`${tag}-bl-${gx}-${gy}`} x={gx} y={rows - 1 - gy} width={1} height={1} fill="#000" />,
+            <rect key={`${tag}-br-${gx}-${gy}`} x={cols - 1 - gx} y={rows - 1 - gy} width={1} height={1} fill="#000" />,
+          );
+        }
       }
     }
-  }
+    return out;
+  };
+  const outerCut = cornerCut(r, "o");
+  const faceCut = cornerCut(r + 1, "f");
 
   return (
     <svg
@@ -111,7 +120,11 @@ export function PixelFrame({
       <defs>
         <mask id={maskId}>
           <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
-          {cut}
+          {outerCut}
+        </mask>
+        <mask id={faceMaskId}>
+          <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
+          {faceCut}
         </mask>
         {dither && (
           <pattern id={ditherId} width={4} height={4} patternUnits="userSpaceOnUse">
@@ -126,31 +139,33 @@ export function PixelFrame({
       </defs>
 
       <g mask={`url(#${maskId})`}>
-        {/* 外描边（整块，随后被面色内缩露出 1 格边） */}
+        {/* 外描边（整块，圆角外形由 outerCut 决定） */}
         <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
-        {/* 面色 */}
-        <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
-        {/* 抖动纹理 */}
-        {dither && (
-          <rect
-            x={1}
-            y={1}
-            width={cols - 2}
-            height={rows - 2}
-            fill={`url(#${ditherId})`}
-            opacity={ditherOpacity}
-          />
-        )}
-        {variant !== "flat" && (
-          <>
-            {/* 顶左内线 */}
-            <rect x={1} y={1} width={cols - 2} height={1} style={asFill(topLeft)} />
-            <rect x={1} y={1} width={1} height={rows - 2} style={asFill(topLeft)} />
-            {/* 底右内线 */}
-            <rect x={1} y={rows - 2} width={cols - 2} height={1} style={asFill(botRight)} />
-            <rect x={cols - 2} y={1} width={1} height={rows - 2} style={asFill(botRight)} />
-          </>
-        )}
+        {/* 面色 + 内线：再套 faceMask 多缩一档，使转角处露出连续描边 */}
+        <g mask={`url(#${faceMaskId})`}>
+          <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
+          {/* 抖动纹理 */}
+          {dither && (
+            <rect
+              x={1}
+              y={1}
+              width={cols - 2}
+              height={rows - 2}
+              fill={`url(#${ditherId})`}
+              opacity={ditherOpacity}
+            />
+          )}
+          {variant !== "flat" && (
+            <>
+              {/* 顶左内线 */}
+              <rect x={1} y={1} width={cols - 2} height={1} style={asFill(topLeft)} />
+              <rect x={1} y={1} width={1} height={rows - 2} style={asFill(topLeft)} />
+              {/* 底右内线 */}
+              <rect x={1} y={rows - 2} width={cols - 2} height={1} style={asFill(botRight)} />
+              <rect x={cols - 2} y={1} width={1} height={rows - 2} style={asFill(botRight)} />
+            </>
+          )}
+        </g>
       </g>
     </svg>
   );
