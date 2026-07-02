@@ -48,6 +48,13 @@ const colorTokens = {
   colorControl: { css: "--color-control", light: "#d6f0f0", dark: "#1e3a5c" },
   // 凹槽/进度槽/输入区的底色：比控件更深，显“内嵌”
   colorWell: { css: "--color-well", light: "#c2e7e8", dark: "#0b1c30" },
+  // 像素按钮文字色（青色家族深青墨，非死黑）。按钮面色暂固定浅青，故 light/dark 同值。
+  colorTextOnBtn: { css: "--color-text-on-btn", light: "#1f6f75", dark: "#1f6f75" },
+  colorTextOnBtnAccent: {
+    css: "--color-text-on-btn-accent",
+    light: "#13474c",
+    dark: "#13474c",
+  },
   btnMin: { css: "--btn-min", light: "#f2c14e", dark: "#e0b04a" },
   btnMax: { css: "--btn-max", light: "#6fc27b", dark: "#5fae63" },
   btnClose: { css: "--btn-close", light: "#ec6a6a", dark: "#d65a5a" },
@@ -72,6 +79,8 @@ export const t = {
   colorShadowSoft: "var(--color-shadow-soft)",
   colorControl: "var(--color-control)",
   colorWell: "var(--color-well)",
+  colorTextOnBtn: "var(--color-text-on-btn)",
+  colorTextOnBtnAccent: "var(--color-text-on-btn-accent)",
   btnMin: "var(--btn-min)",
   btnMax: "var(--btn-max)",
   btnClose: "var(--btn-close)",

@@ -51,6 +51,7 @@ const HOVER_LIFT_ROLE = [0.16, 0.12, 0.12, 0.05]; // 各角色 hover 提亮
 // 各角色 press 提亮；HI/LO 的按压表现改由「高光反转」承担，故其提亮设 0
 const PRESS_LIFT_ROLE = [0.14, 0, 0, 0.2];
 const FLICKER_AMP = 0.09; // 面像素亮暗交替幅度
+const SHIMMER_PX = 150; // 面像素低噪/闪烁的绝对灰度增量系数（浅色深色都可见）
 const DELAY_MAX = 0.1; // 每格错落起始延迟（秒）
 const SPRING_K = 800; // 弹簧刚度
 const SPRING_D = 24; // 弹簧阻尼（略欠阻尼→轻微回弹）
@@ -187,8 +188,11 @@ export function PixelSurface({
       c.baseOff[i] = role === FACE ? (Math.random() * 2 - 1) * noise : 0;
       c.flkS[i] = 2 + Math.random() * 4; // 闪烁速度
       c.flkP[i] = Math.random() * Math.PI * 2; // 闪烁相位
-      c.delay[i] = Math.random() * DELAY_MAX; // 错落延迟
-      c.kj[i] = 0.75 + Math.random() * 0.5; // 弹簧刚度抖动
+      // 高光/暗影整圈需整体同步反转：统一 delay=0、kj=1（无错落、同速）；
+      // 边框(EDGE)与面(FACE)保留随机错落与刚度抖动。
+      const cohesive = role === HI || role === LO;
+      c.delay[i] = cohesive ? 0 : Math.random() * DELAY_MAX; // 错落延迟
+      c.kj[i] = cohesive ? 1 : 0.75 + Math.random() * 0.5; // 弹簧刚度抖动
     }
     return c;
   }, [cols, rows, r, palette, noise]);
@@ -197,11 +201,12 @@ export function PixelSurface({
   const rects = useMemo(() => {
     const arr: ReactNode[] = [];
     for (let i = 0; i < cells.n; i++) {
-      const a = Math.min(1, Math.abs(cells.baseOff[i]));
-      const tgt = cells.baseOff[i] >= 0 ? 255 : 0;
-      const rr = Math.round(cells.br[i] + (tgt - cells.br[i]) * a);
-      const gg = Math.round(cells.bg[i] + (tgt - cells.bg[i]) * a);
-      const bb = Math.round(cells.bb[i] + (tgt - cells.bb[i]) * a);
+      // 首帧（rest）：面像素叠加绝对灰度低噪，其余用基准色
+      const d = cells.role[i] === FACE ? cells.baseOff[i] * SHIMMER_PX : 0;
+      const clampCh = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
+      const rr = clampCh(cells.br[i] + d);
+      const gg = clampCh(cells.bg[i] + d);
+      const bb = clampCh(cells.bb[i] + d);
       arr.push(
         <rect
           key={i}
@@ -275,12 +280,6 @@ export function PixelSurface({
         pp[i] += pv[i] * dt;
 
         const role = cells.role[i];
-        let off = cells.baseOff[i];
-        off += HOVER_LIFT_ROLE[role] * hp[i];
-        off += PRESS_LIFT_ROLE[role] * pp[i];
-        if (role === FACE) {
-          off += FLICKER_AMP * Math.sin(t * cells.flkS[i] + cells.flkP[i]) * hp[i];
-        }
 
         // 基准色：按压进度在 raised(基准) ↔ sunken(反转) 间插值 → 平滑高光反转
         let pc = pp[i];
@@ -289,14 +288,30 @@ export function PixelSurface({
         const baseG = cells.bg[i] + (cells.bg2[i] - cells.bg[i]) * pc;
         const baseB = cells.bb[i] + (cells.bb2[i] - cells.bb[i]) * pc;
 
-        const aa = off < 0 ? -off : off;
-        const clamp = aa > 1 ? 1 : aa;
-        const tgt = off >= 0 ? 255 : 0;
-        const rr = (baseR + (tgt - baseR) * clamp) | 0;
-        const gg = (baseG + (tgt - baseG) * clamp) | 0;
-        const bb = (baseB + (tgt - baseB) * clamp) | 0;
+        // 提亮（朝白/黑混合）：暗色边框上才亮得起来，用于 hover/press 点亮
+        const lift = HOVER_LIFT_ROLE[role] * hp[i] + PRESS_LIFT_ROLE[role] * pp[i];
+        const la = lift < 0 ? -lift : lift;
+        const lc = la > 1 ? 1 : la;
+        const ltgt = lift >= 0 ? 255 : 0;
+        let rr = baseR + (ltgt - baseR) * lc;
+        let gg = baseG + (ltgt - baseG) * lc;
+        let bb = baseB + (ltgt - baseB) * lc;
+
+        // 面像素低噪 + 闪烁：绝对灰度增量（对称），浅色/深色面都可见
+        if (role === FACE) {
+          const shimmer =
+            cells.baseOff[i] + FLICKER_AMP * Math.sin(t * cells.flkS[i] + cells.flkP[i]) * hp[i];
+          const d = shimmer * SHIMMER_PX;
+          rr += d;
+          gg += d;
+          bb += d;
+        }
+
+        rr = rr < 0 ? 0 : rr > 255 ? 255 : rr;
+        gg = gg < 0 ? 0 : gg > 255 ? 255 : gg;
+        bb = bb < 0 ? 0 : bb > 255 ? 255 : bb;
         const rect = nodes[i];
-        if (rect) rect.setAttribute("fill", `rgb(${rr},${gg},${bb})`);
+        if (rect) rect.setAttribute("fill", `rgb(${rr | 0},${gg | 0},${bb | 0})`);
 
         if (Math.abs(hTarget - hp[i]) > 0.002 || Math.abs(hv[i]) > 0.002) moving = true;
         if (Math.abs(pTarget - pp[i]) > 0.002 || Math.abs(pv[i]) > 0.002) moving = true;

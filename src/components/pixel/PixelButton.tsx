@@ -88,12 +88,13 @@ const Btn = styled.button`
   background: transparent;
   border: 0;
   cursor: pointer;
-  color: ${t.colorText};
-  // transition: transform 0.15s ease; 不由这里控制，在PixelSurface里面
+  /* 文字色统一由 token 管理（青色家族深青墨，非死黑） */
+  color: ${t.colorTextOnBtn};
 
   &[data-variant="accent"] {
-    color: ${t.colorOnAccent};
+    color: ${t.colorTextOnBtnAccent};
   }
+
   &:disabled {
     opacity: 0.55;
     cursor: not-allowed;
@@ -106,4 +107,8 @@ const Label = styled.span`
   gap: 6px;
   font: ${t.textMd};
   letter-spacing: 1px;
+  /* 像素字体加粗：整数 text-shadow 横向 +1px 描粗，笔画由 1px 变 2px，锐利不发虚。
+     不用 font-weight（Ark Pixel 只有 Regular，会触发糊掉的伪粗体）。
+     想更粗可加四向：0 1px currentColor, 1px 1px currentColor；不想粗则删掉本行。 */
+  text-shadow: 1px 0 0 currentColor;
 `;
