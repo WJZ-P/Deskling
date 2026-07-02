@@ -12,5 +12,19 @@ export const PX = {
   panel: { face: "#ffffff", edge: "#3f9599", hi: "#ffffff", lo: "#cfe8e9" },
 } satisfies Record<string, PixelPalette>;
 
+/**
+ * 统一优先级色阶（所有像素组件通用喵）：
+ *  - normal（默认）= 中间色（浅青识别色）
+ *  - low（低优先级）= 白底
+ *  - primary（强调）= 深色（青）
+ */
+export type Priority = "normal" | "low" | "primary";
+
+export const PRIORITY_PAL: Record<Priority, PixelPalette> = {
+  normal: PX.default, // 中间色（浅青）
+  low: PX.panel, // 白底
+  primary: PX.accent, // 深色（青）
+};
+
 /** 抖动纹理颜色（浅青，用于进度/强调填充的斜向像素条纹） */
 export const DITHER_ACCENT = "#d8f4f5";

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { PixelSurface, type SurfaceState, type SurfaceTune } from "./PixelSurface";
-import { PX } from "./palettes";
+import { PRIORITY_PAL, type Priority } from "./palettes";
 
 /**
  * 像素卡片：复用按钮的 PixelSurface 引擎渲染。
@@ -21,7 +21,7 @@ const CARD_GAP = 8; // 标题头与正文的间距 px
 
 // ---- 低噪参数（可单独定制喵）----
 const CARD_NOISE_STATIC = 0.05; // 静态低噪强度：面像素随机明暗（rest 也在）
-const CARD_NOISE_GRANULARITY = 4; // 低噪颗粒度：N×N 像素合成一块噪声（越大越粗块，独立于像素大小）
+const CARD_NOISE_GRANULARITY = 3; // 低噪颗粒度：N×N 像素合成一块噪声（越大越粗块，独立于像素大小）
 const CARD_NOISE_HOVER_AMP = 0.1; // hover 动态低噪「变动幅度」（0=关闭动态低噪）
 const CARD_NOISE_HOVER_DELAY = 0.9; // hover 动态低噪「重掷间隔/delay」秒（越大越慢越错落）
 
@@ -42,20 +42,13 @@ const CARD_TUNE: Partial<SurfaceTune> = {
   liftMs: 240, // 抬升过渡更缓
 };
 
-type CardVariant = "surface" | "soft" | "accent";
-
-const CARD_PAL = {
-  surface: PX.panel, // 纯白面
-  soft: PX.default, // 浅青面
-  accent: PX.accent, // 青色面
-} as const;
-
 interface PixelCardProps {
   /** 标题（可选） */
   title?: ReactNode;
   /** 标题右侧尾插槽（可选，如标签/数值） */
   trailing?: ReactNode;
-  variant?: CardVariant;
+  /** 优先级色阶：normal(中间色/默认) · low(白底) · primary(深色) */
+  variant?: Priority;
   /** 可交互：hover 启用动态低噪 + 轻抬升 */
   interactive?: boolean;
   className?: string;
@@ -65,7 +58,7 @@ interface PixelCardProps {
 export function PixelCard({
   title,
   trailing,
-  variant = "surface",
+  variant = "normal",
   interactive = false,
   className,
   children,
@@ -82,7 +75,7 @@ export function PixelCard({
       onPointerLeave={interactive ? () => setHovered(false) : undefined}
     >
       <PixelSurface
-        palette={CARD_PAL[variant]}
+        palette={PRIORITY_PAL[variant]}
         state={state}
         pixel={CARD_PIXEL}
         radius={CARD_RADIUS}
@@ -133,7 +126,7 @@ const Title = styled.div`
   letter-spacing: 1px;
   color: ${t.colorText};
 
-  &[data-variant="accent"] {
+  &[data-variant="primary"] {
     color: ${t.colorTextOnBtnAccent};
   }
 `;
@@ -149,7 +142,7 @@ const Body = styled.div`
   line-height: 1.7;
   color: ${t.colorTextMuted};
 
-  &[data-variant="accent"] {
+  &[data-variant="primary"] {
     color: ${t.colorTextOnBtnAccent};
   }
 `;

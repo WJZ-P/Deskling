@@ -1,29 +1,21 @@
 import { useState, type ButtonHTMLAttributes } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import type { PixelPalette } from "./PixelFrame";
 import { PixelSurface, type SurfaceState } from "./PixelSurface";
+import { PRIORITY_PAL, type Priority } from "./palettes";
 
 //  可调旋钮
 const BTN_PIXEL = 4; // 每个美术像素占多少 CSS px
 const BTN_RADIUS = 2; // 像素切角大小
 const NOISE = 0.1; // 面像素基准随机明暗强度
 
-/**
- * 单一基准调色板（rest 态色）。hover/press 的变亮全部交给 PixelSurface 逐像素弹簧动画，
- * 不再换 palette（避免 CSS 式整体瞬变）。
- */
-const PALS: Record<"default" | "accent", PixelPalette> = {
-  default: { face: "#e6f4f4", edge: "#3f9599", hi: "#ffffff", lo: "#a9cfd1" },
-  accent: { face: "#7dd1d4", edge: "#1d6a6f", hi: "#d8f4f5", lo: "#3f9ea3" },
-};
-
 interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "accent";
+  /** 优先级色阶：normal(中间色/默认) · low(白底) · primary(深色) */
+  variant?: Priority;
 }
 
 export function PixelButton({
-  variant = "default",
+  variant = "normal",
   children,
   disabled,
   onPointerDown,
@@ -69,7 +61,7 @@ export function PixelButton({
       {...rest}
     >
       <PixelSurface
-        palette={PALS[variant]}
+        palette={PRIORITY_PAL[variant]}
         state={state}
         pixel={BTN_PIXEL}
         radius={BTN_RADIUS}
@@ -91,7 +83,7 @@ const Btn = styled.button`
   /* 文字色统一由 token 管理（青色家族深青墨，非死黑） */
   color: ${t.colorTextOnBtn};
 
-  &[data-variant="accent"] {
+  &[data-variant="primary"] {
     color: ${t.colorTextOnBtnAccent};
   }
 

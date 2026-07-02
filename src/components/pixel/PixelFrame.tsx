@@ -1,6 +1,7 @@
 import {
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -42,12 +43,30 @@ interface PixelFrameProps {
   /** 抖动纹理颜色；不传则无纹理 */
   dither?: string;
   ditherOpacity?: number;
+  /** 静态底噪强度 0~1（面像素随机明暗，无动画）；0=纯色 */
+  noise?: number;
+  /** 底噪颗粒度：N×N 个美术像素合成一块（越大越粗块，独立于 pixel） */
+  noiseGranularity?: number;
+  /** 边缘啃缺概率 0~1：沿四边随机啃掉 1~2px 缺口，形成不规则/做旧的粗犷轮廓；0=规整 */
+  edgeErosion?: number;
   /** 像素硬投影高度（CSS px），0=无 */
   elevation?: number;
   shadowColor?: string;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
+
+// 底噪灰度增量系数（与 PixelSurface 的 shimmerPx 对齐，浅/深面都可见）
+const NOISE_PX = 150;
+
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return [230, 244, 244];
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+const clampCh = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
 
 export function PixelFrame({
   palette,
@@ -56,6 +75,9 @@ export function PixelFrame({
   radius = 2,
   dither,
   ditherOpacity = 0.5,
+  noise = 0,
+  noiseGranularity = 1,
+  edgeErosion = 0,
   elevation = 0,
   shadowColor = "rgba(31,106,111,0.35)",
 }: PixelFrameProps) {
@@ -107,6 +129,57 @@ export function PixelFrame({
   const outerCut = cornerCut(r, "o");
   const faceCut = cornerCut(r + 1, "f");
 
+  // 边缘啃缺：沿四边（避开切角）随机抠掉 1~2px 缺口 → 不规则/做旧的粗犷轮廓。
+  // 抠在两个 mask 上，缺口处描边+面色一起消失、露出背景，得到真锯齿边。
+  const erodeCut = useMemo<ReactElement[]>(() => {
+    if (edgeErosion <= 0) return [];
+    const p = edgeErosion;
+    const out: ReactElement[] = [];
+    const bite = () => (Math.random() < 0.3 ? 2 : 1); // 偶尔啃深一点
+    for (let x = r; x <= cols - 1 - r; x++) {
+      if (Math.random() < p) {
+        const d = bite();
+        out.push(<rect key={`et-${x}`} x={x} y={0} width={1} height={d} fill="#000" />);
+      }
+      if (Math.random() < p) {
+        const d = bite();
+        out.push(<rect key={`eb-${x}`} x={x} y={rows - d} width={1} height={d} fill="#000" />);
+      }
+    }
+    for (let y = r; y <= rows - 1 - r; y++) {
+      if (Math.random() < p) {
+        const d = bite();
+        out.push(<rect key={`el-${y}`} x={0} y={y} width={d} height={1} fill="#000" />);
+      }
+      if (Math.random() < p) {
+        const d = bite();
+        out.push(<rect key={`er-${y}`} x={cols - d} y={y} width={d} height={1} fill="#000" />);
+      }
+    }
+    return out;
+  }, [cols, rows, r, edgeErosion]);
+
+  // 静态底噪：按块（gran×gran）随机灰度铺在面色上（无动画）。
+  // useMemo 依赖尺寸/参数 → 真随机，但仅在尺寸/参数变化时重掷，不随无关渲染乱闪。
+  const noiseRects = useMemo<ReactElement[]>(() => {
+    if (noise <= 0) return [];
+    const [fr, fg, fb] = hexToRgb(palette.face);
+    const g = Math.max(1, Math.round(noiseGranularity));
+    const out: ReactElement[] = [];
+    for (let by = 1; by < rows - 1; by += g) {
+      for (let bx = 1; bx < cols - 1; bx += g) {
+        const d = (Math.random() * 2 - 1) * noise * NOISE_PX;
+        const fill = `rgb(${clampCh(fr + d)},${clampCh(fg + d)},${clampCh(fb + d)})`;
+        const wBlk = Math.min(g, cols - 1 - bx);
+        const hBlk = Math.min(g, rows - 1 - by);
+        out.push(
+          <rect key={`n-${bx}-${by}`} x={bx} y={by} width={wBlk} height={hBlk} fill={fill} />,
+        );
+      }
+    }
+    return out;
+  }, [cols, rows, palette.face, noise, noiseGranularity]);
+
   return (
     <svg
       ref={ref}
@@ -129,10 +202,12 @@ export function PixelFrame({
         <mask id={maskId}>
           <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
           {outerCut}
+          {erodeCut}
         </mask>
         <mask id={faceMaskId}>
           <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
           {faceCut}
+          {erodeCut}
         </mask>
         {dither && (
           <pattern id={ditherId} width={4} height={4} patternUnits="userSpaceOnUse">
@@ -153,6 +228,8 @@ export function PixelFrame({
         <g mask={`url(#${faceMaskId})`}>
           {/* 面色 */}
           <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
+          {/* 静态底噪（按块随机灰度，盖在面色上） */}
+          {noiseRects}
           {/* 抖动纹理 */}
           {dither && (
             <rect

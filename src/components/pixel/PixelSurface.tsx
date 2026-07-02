@@ -297,9 +297,9 @@ export function PixelSurface({
         c.nseed[i] = b.seed; // 动态低噪块种子
         c.nph[i] = b.nph; // 动态低噪块相位（错落 delay）
       }
-      // 高光/暗影整圈需整体同步反转：统一 delay=0、kj=1（无错落、同速）；
-      // 边框(EDGE)与面(FACE)保留随机错落与刚度抖动。
-      const cohesive = role === HI || role === LO;
+      // 外描边(EDGE) + 高光/暗影(HI/LO) 都整体同步：统一 delay=0、kj=1（无错落、同速），
+      // 变色一起开始一起走；只有面像素(FACE)保留随机错落与刚度抖动。
+      const cohesive = role === EDGE || role === HI || role === LO;
       c.delay[i] = cohesive ? 0 : Math.random() * T.delayMax; // 错落延迟
       c.kj[i] = cohesive ? 1 : 0.75 + Math.random() * 0.5; // 弹簧刚度抖动
     }
