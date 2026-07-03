@@ -1,7 +1,7 @@
 import type { ThemeMode } from "../../../styles/theme";
 
 /** 背景风格 id（新增风格时在这里加一个字面量喵） */
-export type BackdropStyleId = "turbulence" | "curlFlow" | "reaction" | "cellular";
+export type BackdropStyleId = "turbulence" | "cellular";
 
 /**
  * 单个风格实例（已绑定到某个 WebGL 上下文 + 主题）。

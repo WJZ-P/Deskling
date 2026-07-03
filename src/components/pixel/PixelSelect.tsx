@@ -1,11 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { PixelFrame } from "./PixelFrame";
@@ -66,11 +68,22 @@ export function PixelSelect({
   className,
 }: PixelSelectProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
   const selectedIndex = options.findIndex((o) => o.value === value);
   const [active, setActive] = useState(() => (selectedIndex >= 0 ? selectedIndex : 0));
+
+  // 弹层通过 Portal 挂到 body，用 fixed 定位（避开卡片等祖先的层叠上下文/裁剪）
+  const [pos, setPos] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+    up: boolean;
+  } | null>(null);
 
   const selected = selectedIndex >= 0 ? options[selectedIndex] : undefined;
 
@@ -95,15 +108,47 @@ export function PixelSelect({
     [options, onChange],
   );
 
-  // 点击外部关闭
+  // 测量触发器位置 → 决定弹层 fixed 坐标（下方空间不足则向上翻）
+  const updatePos = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const openUp = spaceBelow < MENU_MAX_H + MENU_GAP && r.top > spaceBelow;
+    setPos({
+      left: r.left,
+      width: r.width,
+      top: openUp ? undefined : r.bottom + MENU_GAP,
+      bottom: openUp ? window.innerHeight - r.top + MENU_GAP : undefined,
+      up: openUp,
+    });
+  }, []);
+
+  // 打开时先同步测量一次（useLayoutEffect 避免首帧位置闪烁）
+  useLayoutEffect(() => {
+    if (open) updatePos();
+  }, [open, updatePos]);
+
+  // 打开期间：滚动/缩放实时跟随；点击「触发器与弹层之外」关闭
   useEffect(() => {
     if (!open) return;
+    const onScrollResize = () => updatePos();
+    // capture=true 以捕获任意祖先容器的滚动
+    window.addEventListener("scroll", onScrollResize, true);
+    window.addEventListener("resize", onScrollResize);
     const onDoc = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+      const target = e.target as Node;
+      const inRoot = rootRef.current?.contains(target);
+      const inMenu = menuRef.current?.contains(target);
+      if (!inRoot && !inMenu) close();
     };
     document.addEventListener("pointerdown", onDoc);
-    return () => document.removeEventListener("pointerdown", onDoc);
-  }, [open, close]);
+    return () => {
+      window.removeEventListener("scroll", onScrollResize, true);
+      window.removeEventListener("resize", onScrollResize);
+      document.removeEventListener("pointerdown", onDoc);
+    };
+  }, [open, close, updatePos]);
 
   // 展开时把高亮同步到当前选中项
   useEffect(() => {
@@ -156,6 +201,7 @@ export function PixelSelect({
   return (
     <Root ref={rootRef} className={className} data-disabled={disabled || undefined}>
       <Trigger
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         data-variant={variant}
@@ -196,36 +242,49 @@ export function PixelSelect({
         </PixelSurface>
       </Trigger>
 
-      {open && (
-        <Menu role="listbox" style={{ marginTop: MENU_GAP }}>
-          <PixelFrame
-            palette={PRIORITY_PAL.low}
-            variant="raised"
-            pixel={MENU_PIXEL}
-            radius={MENU_RADIUS}
-            noise={MENU_NOISE}
-            noiseGranularity={2}
-            elevation={MENU_ELEV}
-          />
-          <MenuScroll style={{ maxHeight: MENU_MAX_H }}>
-            {options.map((opt, i) => (
-              <OptionRow
-                key={opt.value}
-                role="option"
-                aria-selected={opt.value === value}
-                data-active={i === active || undefined}
-                data-selected={opt.value === value || undefined}
-                data-disabled={opt.disabled || undefined}
-                onPointerEnter={() => !opt.disabled && setActive(i)}
-                onClick={() => commit(i)}
-              >
-                <OptionMark aria-hidden>{opt.value === value ? "▸" : ""}</OptionMark>
-                <OptionLabel>{opt.label}</OptionLabel>
-              </OptionRow>
-            ))}
-          </MenuScroll>
-        </Menu>
-      )}
+      {open &&
+        pos != null &&
+        createPortal(
+          <Menu
+            ref={menuRef}
+            role="listbox"
+            data-up={pos.up || undefined}
+            style={{
+              left: pos.left,
+              width: pos.width,
+              top: pos.top,
+              bottom: pos.bottom,
+            }}
+          >
+            <PixelFrame
+              palette={PRIORITY_PAL.low}
+              variant="raised"
+              pixel={MENU_PIXEL}
+              radius={MENU_RADIUS}
+              noise={MENU_NOISE}
+              noiseGranularity={2}
+              elevation={MENU_ELEV}
+            />
+            <MenuScroll style={{ maxHeight: MENU_MAX_H }}>
+              {options.map((opt, i) => (
+                <OptionRow
+                  key={opt.value}
+                  role="option"
+                  aria-selected={opt.value === value}
+                  data-active={i === active || undefined}
+                  data-selected={opt.value === value || undefined}
+                  data-disabled={opt.disabled || undefined}
+                  onPointerEnter={() => !opt.disabled && setActive(i)}
+                  onClick={() => commit(i)}
+                >
+                  <OptionMark aria-hidden>{opt.value === value ? "▸" : ""}</OptionMark>
+                  <OptionLabel>{opt.label}</OptionLabel>
+                </OptionRow>
+              ))}
+            </MenuScroll>
+          </Menu>,
+          document.body,
+        )}
     </Root>
   );
 }
@@ -293,19 +352,33 @@ const Arrow = styled.span`
   }
 `;
 
+/* Portal 到 body：fixed 定位，脱离一切祖先层叠上下文/裁剪，z-index 高于内容层 */
 const Menu = styled.div`
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 50;
-  width: 100%;
+  position: fixed;
+  z-index: 1000;
   transform-origin: top center;
   animation: psel-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+
+  &[data-up] {
+    transform-origin: bottom center;
+    animation-name: psel-in-up;
+  }
 
   @keyframes psel-in {
     from {
       opacity: 0;
       transform: translateY(-6px) scaleY(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scaleY(1);
+    }
+  }
+
+  @keyframes psel-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scaleY(0.96);
     }
     to {
       opacity: 1;
