@@ -25,6 +25,8 @@ import { PixelButton } from "../components/pixel/PixelButton";
 import { PixelProgress } from "../components/pixel/PixelProgress";
 import { PixelCard } from "../components/pixel/PixelCard";
 import { PixelSection } from "../components/pixel/PixelSection";
+import { PixelInput } from "../components/pixel/PixelInput";
+import { PixelSelect } from "../components/pixel/PixelSelect";
 import { PX } from "../components/pixel/palettes";
 
 /** 候选 UI 风格（全程像素字体，仅整体处理手法/配色不同） */
@@ -131,8 +133,19 @@ const STYLES: { name: string; desc: string; vars: PvVars }[] = [
   },
 ];
 
+const MODEL_OPTIONS = [
+  { value: "gpt", label: "GPT · 通用对话" },
+  { value: "claude", label: "Claude · 长文推理" },
+  { value: "local", label: "本地模型（离线）" },
+  { value: "soon", label: "自定义模型（敬请期待）", disabled: true },
+];
+
 function Debug() {
   const [progress, setProgress] = useState(60);
+  const [petName, setPetName] = useState("");
+  const [search, setSearch] = useState("");
+  const [model, setModel] = useState("gpt");
+  const [voice, setVoice] = useState("");
 
   return (
     <Page>
@@ -277,6 +290,58 @@ function Debug() {
       </Panel>
 
       <Panel>
+        <PanelTitle>输入框 Input &amp; 下拉 Select · 打样喵～</PanelTitle>
+        <SettingDesc>
+          输入框基于 PixelFrame 的凹陷底 + 透明原生 input，聚焦时描边变青；
+          下拉是全自定义像素弹层（非原生 select），选项列表也是像素风，支持键盘 ↑↓/Enter/Esc。
+        </SettingDesc>
+
+        <SubTitle>输入框（low 白底 / normal 浅青 / primary 深色）</SubTitle>
+        <FieldGrid>
+          <PixelInput
+            variant="low"
+            placeholder="给桌宠起个名字…"
+            value={petName}
+            onChange={(e) => setPetName(e.target.value)}
+          />
+          <PixelInput
+            variant="normal"
+            leading="🔍"
+            placeholder="搜索…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <PixelInput variant="primary" placeholder="强调输入框" />
+          <PixelInput variant="low" placeholder="禁用输入框" disabled />
+        </FieldGrid>
+
+        <SubTitle>下拉选择（normal / low / primary，含禁用项）</SubTitle>
+        <FieldGrid>
+          <PixelSelect
+            options={MODEL_OPTIONS}
+            value={model}
+            onChange={setModel}
+            variant="normal"
+          />
+          <PixelSelect
+            options={MODEL_OPTIONS}
+            value={voice}
+            onChange={setVoice}
+            placeholder="选择声音…"
+            variant="low"
+          />
+          <PixelSelect
+            options={MODEL_OPTIONS}
+            value={model}
+            onChange={setModel}
+            variant="primary"
+          />
+          <PixelSelect options={MODEL_OPTIONS} placeholder="禁用下拉" disabled />
+        </FieldGrid>
+        <SettingDesc>当前选择：模型 = {model || "（未选）"}，声音 = {voice || "（未选）"}</SettingDesc>
+      </Panel>
+
+      <Panel>
         <PanelTitle>风格预览 · 选一个方向喵～</PanelTitle>
         <SettingDesc>
           同一套迷你窗口（全像素字体），下面用不同处理手法渲染，主人对比后告诉 Kitten
@@ -392,6 +457,18 @@ const CardGrid = styled.div`
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: calc(${t.unit} * 4);
   align-items: start;
+`;
+
+const FieldGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: calc(${t.unit} * 3);
+  align-items: start;
+
+  /* 让内部 PixelInput/PixelSelect 撑满栅格列 */
+  & > * {
+    width: 100%;
+  }
 `;
 
 const FrameCard = styled.div`
