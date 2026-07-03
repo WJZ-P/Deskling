@@ -1,5 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { ThemeMode } from "./styles/theme";
+import type { BackdropStyleId } from "./components/pixel/backdrops";
 
 export type { ThemeMode };
 
@@ -8,12 +9,15 @@ export interface AppSettings {
   theme: ThemeMode;
   /** 侧边栏是否折叠为纯图标 */
   sidebarCollapsed: boolean;
+  /** 主区域背景风格 */
+  backdropStyle: BackdropStyleId;
 }
 
 /** 默认值：读取失败或缺失时回退到这里 */
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "light",
   sidebarCollapsed: false,
+  backdropStyle: "turbulence",
 };
 
 const STORE_FILE = "settings.json";

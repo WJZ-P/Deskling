@@ -12,15 +12,26 @@ import {
   SettingRow,
   SoonTag,
 } from "../components/ui";
+import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSelect";
+import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
 import type { ThemeMode } from "../styles/theme";
 
 interface SettingsProps {
   theme: ThemeMode;
   onToggleTheme: () => void;
+  backdropStyle: BackdropStyleId;
+  onChangeBackdrop: (id: BackdropStyleId) => void;
 }
 
-function Settings({ theme, onToggleTheme }: SettingsProps) {
+const BACKDROP_OPTIONS: PixelSelectOption[] = BACKDROP_STYLES.map((s) => ({
+  value: s.id,
+  label: s.label,
+}));
+
+function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
   const isLight = theme === "light";
+  const currentDesc = BACKDROP_STYLES.find((s) => s.id === backdropStyle)?.desc ?? "";
+
   return (
     <Page>
       <PageHeader>
@@ -40,6 +51,19 @@ function Settings({ theme, onToggleTheme }: SettingsProps) {
           <Button type="button" onClick={onToggleTheme}>
             {isLight ? "☾ 切到深色" : "☀ 切到浅色"}
           </Button>
+        </SettingRow>
+
+        <SettingRow>
+          <SettingInfo>
+            <SettingLabel>背景风格</SettingLabel>
+            <SettingDesc>{currentDesc}</SettingDesc>
+          </SettingInfo>
+          <PixelSelect
+            options={BACKDROP_OPTIONS}
+            value={backdropStyle}
+            onChange={(v) => onChangeBackdrop(v as BackdropStyleId)}
+            variant="normal"
+          />
         </SettingRow>
       </Panel>
 

@@ -7,6 +7,7 @@ import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";
 import About from "./pages/About";
 import { FluidBackdrop } from "./components/pixel/FluidBackdrop";
+import type { BackdropStyleId } from "./components/pixel/backdrops";
 import { useTheme } from "./hooks/useTheme";
 import { getSetting, setSetting } from "./settings";
 import { t } from "./styles/theme";
@@ -17,6 +18,14 @@ function App() {
   const [collapsed, setCollapsed] = useState(() =>
     getSetting("sidebarCollapsed"),
   );
+  const [backdropStyle, setBackdropStyle] = useState<BackdropStyleId>(() =>
+    getSetting("backdropStyle"),
+  );
+
+  const changeBackdrop = (next: BackdropStyleId) => {
+    setBackdropStyle(next);
+    void setSetting("backdropStyle", next);
+  };
 
   const toggleCollapse = () =>
     setCollapsed((prev) => {
@@ -36,11 +45,16 @@ function App() {
           onToggleCollapse={toggleCollapse}
         />
         <Main>
-          <FluidBackdrop theme={theme} />
+          <FluidBackdrop theme={theme} style={backdropStyle} />
           <Content>
             {section === "home" && <Home />}
             {section === "settings" && (
-              <Settings theme={theme} onToggleTheme={toggleTheme} />
+              <Settings
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                backdropStyle={backdropStyle}
+                onChangeBackdrop={changeBackdrop}
+              />
             )}
             {section === "debug" && <Debug />}
             {section === "about" && <About />}
