@@ -6,7 +6,7 @@ import Home from "./pages/Home";
 import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";
 import About from "./pages/About";
-import { PixelBackdrop } from "./components/pixel/PixelBackdrop";
+import { FluidBackdrop } from "./components/pixel/FluidBackdrop";
 import { useTheme } from "./hooks/useTheme";
 import { getSetting, setSetting } from "./settings";
 import { t } from "./styles/theme";
@@ -36,7 +36,7 @@ function App() {
           onToggleCollapse={toggleCollapse}
         />
         <Main>
-          <PixelBackdrop theme={theme} />
+          <FluidBackdrop theme={theme} />
           <Content>
             {section === "home" && <Home />}
             {section === "settings" && (
