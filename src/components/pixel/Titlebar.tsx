@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { t, type ThemeMode } from "../styles/theme";
-import { PixelFrame, type PixelPalette } from "./pixel/PixelFrame";
-import { PixelSurface, type SurfaceState, type SurfaceTune } from "./pixel/PixelSurface";
-import { PRIORITY_PAL, TITLEBAR_PAL, CONTROL_MIN, CONTROL_MAX, CONTROL_CLOSE } from "./pixel/palettes";
+import { t, type ThemeMode } from "../../styles/theme";
+import { PixelFrame, type PixelPalette } from "./PixelFrame";
+import { PixelSurface, type SurfaceState, type SurfaceTune } from "./PixelSurface";
+import { PRIORITY_PAL, TITLEBAR_PAL, CONTROL_MIN, CONTROL_MAX, CONTROL_CLOSE } from "./palettes";
 
 interface TitlebarProps {
   theme: ThemeMode;

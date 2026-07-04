@@ -1,14 +1,13 @@
 import {
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type CSSProperties,
   type ReactElement,
 } from "react";
 import { t } from "../../styles/theme";
+import { useElementSize } from "./useElementSize";
 
 /**
  * SVG 像素帧渲染器（静态版：进度条 / 面板等非交互元素用）。
@@ -66,6 +65,12 @@ interface PixelFrameProps {
    * 此模式下 noise/dither 无意义（无面色）；radius 建议 0（方窗）。
    */
   hollow?: boolean;
+  /**
+   * 离散布局态标记（如侧栏收起/展开传 "c"/"e"）。传了则启用「按态缓存 +
+   * 提前重建」：切态时网格立即重建成该态最终尺寸，随 CSS 过渡平滑缩放。
+   * 不传则走纯防抖（见 useElementSize）。
+   */
+  sizeKey?: string | number;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
@@ -112,24 +117,15 @@ export function PixelFrame({
   elevation = 0,
   shadowColor = t.colorShadowPixel,
   hollow = false,
+  sizeKey,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
-  const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
+  const { w, h } = useElementSize(ref, { sizeKey });
   const rid = useId().replace(/:/g, "");
   const maskId = `pf-m-${rid}`;
   const faceMaskId = `pf-fm-${rid}`;
   const ditherId = `pf-d-${rid}`;
   const hollowMaskId = `pf-h-${rid}`;
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const update = () => setSize({ w: el.clientWidth, h: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const cols = Math.max(4, Math.round(w / pixel));
   const rows = Math.max(4, Math.round(h / pixel));

@@ -1,17 +1,17 @@
 import { useState, type ComponentType, type ReactNode } from "react";
 import { styled } from "@linaria/react";
-import { t, type ThemeMode } from "../styles/theme";
-import { PixelSurface, type SurfaceState, type SurfaceTune } from "./pixel/PixelSurface";
-import { PixelFrame } from "./pixel/PixelFrame";
-import { SIDEBAR_PAL, SIDEBAR_PANEL } from "./pixel/palettes";
-import type { PixelPalette } from "./pixel/PixelFrame";
+import { t, type ThemeMode } from "../../styles/theme";
+import { PixelSurface, type SurfaceState, type SurfaceTune } from "./PixelSurface";
+import { PixelFrame } from "./PixelFrame";
+import { SIDEBAR_PAL, SIDEBAR_PANEL } from "./palettes";
+import type { PixelPalette } from "./PixelFrame";
 import {
   ChevronIcon,
   DebugIcon,
   HomeIcon,
   InfoIcon,
   SettingsIcon,
-} from "./icons";
+} from "../icons";
 
 /* ============ 侧边栏可调参数喵（改这里即可调手感/尺寸/留白）============ */
 
@@ -130,6 +130,7 @@ function NavButton({
         noise={NAV_NOISE}
         ambient={active ? NAV_ACTIVE_AMBIENT : 0}
         tune={NAV_TUNE}
+        sizeKey={collapsed ? "c" : "e"}
         rootStyle={{ display: "flex", width: "100%", height: "100%" }}
         contentStyle={{
           width: "100%",
@@ -194,6 +195,7 @@ function Sidebar({
         noise={PANEL_NOISE}
         noiseGranularity={PANEL_NOISE_GRAN}
         noiseSpeed={PANEL_NOISE_SPEED}
+        sizeKey={collapsed ? "c" : "e"}
       />
       <Inner>
         <Group>{PRIMARY.map(renderItem)}</Group>

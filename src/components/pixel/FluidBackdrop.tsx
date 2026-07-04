@@ -24,6 +24,10 @@ const RENDER_SCALE = 0.5; // 呈现分辨率倍率（<1 更省更柔）
 const FPS_CAP = 60; // 帧率上限
 const MOUSE_EASE = 0.1; // 鼠标跟随平滑（越小越跟手）
 const MOUSE_OFFSCREEN = -10; // 鼠标「离场」哨兵坐标（远到无影响）
+// 尺寸变化防抖：侧栏展开/收起过渡、手动拖窗口时尺寸连续变，若每个中间尺寸都重建
+// GPU 缓冲（renderer.resize 会销毁+重建纹理并重播种）会卡顿。这里等尺寸「停下」
+// 再真正重建；过渡/拖拽期间画布保持旧分辨率由 CSS 拉伸顶着（0.5 倍柔背景几乎无感）。
+const RESIZE_DEBOUNCE_MS = 100;
 
 // 兜底 CSS 渐变配色
 const FALLBACK_COLORS: Record<ThemeMode, string> = {
@@ -80,7 +84,7 @@ export function FluidBackdrop({ theme, style = DEFAULT_BACKDROP }: FluidBackdrop
 
     let vw = 0;
     let vh = 0;
-    const resize = () => {
+    const applyResize = () => {
       const w = Math.max(1, Math.floor(canvas.clientWidth * RENDER_SCALE));
       const h = Math.max(1, Math.floor(canvas.clientHeight * RENDER_SCALE));
       if (w === vw && h === vh) return;
@@ -90,8 +94,14 @@ export function FluidBackdrop({ theme, style = DEFAULT_BACKDROP }: FluidBackdrop
       canvas.height = h;
       renderer.resize(w, h);
     };
-    resize();
-    const ro = new ResizeObserver(resize);
+    // 首次立即建（拿到正确初始分辨率）；之后每次尺寸变化都重置计时器，停稳 ~140ms 才重建
+    applyResize();
+    let resizeTimer = 0;
+    const onResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(applyResize, RESIZE_DEBOUNCE_MS);
+    };
+    const ro = new ResizeObserver(onResize);
     ro.observe(canvas);
 
     // 鼠标（aspect-centered，y 轴翻转匹配 gl_FragCoord）；未进入前置于「离场」哨兵
@@ -135,6 +145,7 @@ export function FluidBackdrop({ theme, style = DEFAULT_BACKDROP }: FluidBackdrop
 
     return () => {
       ro.disconnect();
+      if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerout", onLeave);
       if (raf) cancelAnimationFrame(raf);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { styled } from "@linaria/react";
-import Titlebar from "./components/Titlebar";
-import Sidebar, { type SectionId } from "./components/Sidebar";
+import Titlebar from "./components/pixel/Titlebar";
+import Sidebar, { type SectionId } from "./components/pixel/Sidebar";
 import Home from "./pages/Home";
 import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";

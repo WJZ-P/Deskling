@@ -1,16 +1,15 @@
 import {
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import type { PixelPalette } from "./PixelFrame";
+import { useElementSize } from "./useElementSize";
 
 /**
  * 弹簧驱动的像素表面（顶级交互按钮的底层，纯 JS 精细控制，无 CSS 换色）。
@@ -118,6 +117,12 @@ interface PixelSurfaceProps {
   ambient?: number;
   /** 动画调参覆盖（请传模块级常量以保持引用稳定，避免重建 cells） */
   tune?: Partial<SurfaceTune>;
+  /**
+   * 离散布局态标记（如侧栏收起/展开传 "c"/"e"）。传了则启用「按态缓存 +
+   * 提前重建」：切态时网格立即重建成该态最终尺寸，随 CSS 过渡平滑缩放，
+   * 消除「粗像素突变精细」的跳变。不传则走纯防抖（见 useElementSize）。
+   */
+  sizeKey?: string | number;
   className?: string;
   children?: ReactNode;
   shadowColor?: string;
@@ -180,6 +185,7 @@ export function PixelSurface({
   noise = 0.1,
   ambient = 0,
   tune,
+  sizeKey,
   className,
   children,
   shadowColor = t.colorShadowPixel,
@@ -197,17 +203,7 @@ export function PixelSurface({
   ambientRef.current = ambient;
 
   const rid = useId().replace(/:/g, "");
-  const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
-
-  useLayoutEffect(() => {
-    const el = svgRef.current;
-    if (!el) return;
-    const update = () => setSize({ w: el.clientWidth, h: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const { w, h } = useElementSize(svgRef, { sizeKey });
 
   const cols = Math.max(4, Math.round(w / pixel));
   const rows = Math.max(4, Math.round(h / pixel));
