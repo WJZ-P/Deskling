@@ -411,14 +411,14 @@ const OptionRow = styled.div`
   color: ${t.colorText};
   user-select: none;
   /* 高亮走渐变，不生硬切换喵 */
-  background: rgba(125, 209, 212, 0);
+  background: transparent;
   transition:
     background-color 0.16s ease,
     color 0.16s ease,
     text-shadow 0.16s ease;
 
   &[data-active] {
-    background-color: rgba(125, 209, 212, 0.4);
+    background-color: ${t.colorAccentSoft};
   }
 
   &[data-selected] {

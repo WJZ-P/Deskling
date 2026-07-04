@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type ReactElement,
 } from "react";
+import { t } from "../../styles/theme";
 
 /**
  * SVG 像素帧渲染器（静态版：进度条 / 面板等非交互元素用）。
@@ -79,7 +80,7 @@ export function PixelFrame({
   noiseGranularity = 1,
   edgeErosion = 0,
   elevation = 0,
-  shadowColor = "rgba(31,106,111,0.35)",
+  shadowColor = t.colorShadowPixel,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
   const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
@@ -109,7 +110,8 @@ export function PixelFrame({
   // 双级切角实现「圆角处描边仍连续包住转角」：
   //  - 外轮廓抠掉 gx+gy < r 的角格（透明，得到圆角外形）；
   //  - 面色多抠一档 gx+gy < r+1，使转角对角线上露出 1 格外描边。
-  const r = Math.max(1, radius);
+  // radius=0 → 直角（不切角），用于窗口边界这类不能有圆角/缺角的场景。
+  const r = Math.max(0, Math.round(radius));
   const cornerCut = (R: number, tag: string): ReactElement[] => {
     const out: ReactElement[] = [];
     for (let gx = 0; gx < R; gx++) {
@@ -126,8 +128,8 @@ export function PixelFrame({
     }
     return out;
   };
-  const outerCut = cornerCut(r, "o");
-  const faceCut = cornerCut(r + 1, "f");
+  const outerCut = r > 0 ? cornerCut(r, "o") : [];
+  const faceCut = r > 0 ? cornerCut(r + 1, "f") : [];
 
   // 边缘啃缺：沿四边（避开切角）随机抠掉 1~2px 缺口 → 不规则/做旧的粗犷轮廓。
   // 抠在两个 mask 上，缺口处描边+面色一起消失、露出背景，得到真锯齿边。

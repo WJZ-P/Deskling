@@ -34,9 +34,21 @@ const colorTokens = {
   },
   // 主强调色：基准青 #7dd1d4（浅色）；深色仍用明亮青在深蓝上跳脱
   colorAccent: { css: "--color-accent", light: "#7dd1d4", dark: "#3fd2e2" },
+  // 强调色的半透明软色（用于选项 hover 高亮等 CSS 场景）
+  colorAccentSoft: {
+    css: "--color-accent-soft",
+    light: "rgba(125, 209, 212, 0.40)",
+    dark: "rgba(63, 210, 226, 0.32)",
+  },
   // 强调色背景上的文字色：青底上用深青墨，对比更高、更清晰精致
   colorOnAccent: { css: "--color-on-accent", light: "#0a2e30", dark: "#04202a" },
   colorShadow: { css: "--color-shadow", light: "#a9dcdd", dark: "#040e1c" },
+  // 像素硬投影色（PixelFrame/PixelSurface 的 drop-shadow 默认色）
+  colorShadowPixel: {
+    css: "--color-shadow-pixel",
+    light: "rgba(31, 106, 111, 0.38)",
+    dark: "rgba(2, 8, 20, 0.55)",
+  },
   // 柔和投影色（软萌像素风：drop-shadow 的模糊投影，带基准青的半透明调）
   colorShadowSoft: {
     css: "--color-shadow-soft",
@@ -74,9 +86,11 @@ export const t = {
   colorText: "var(--color-text)",
   colorTextMuted: "var(--color-text-muted)",
   colorAccent: "var(--color-accent)",
+  colorAccentSoft: "var(--color-accent-soft)",
   colorOnAccent: "var(--color-on-accent)",
   colorShadow: "var(--color-shadow)",
   colorShadowSoft: "var(--color-shadow-soft)",
+  colorShadowPixel: "var(--color-shadow-pixel)",
   colorControl: "var(--color-control)",
   colorWell: "var(--color-well)",
   colorTextOnBtn: "var(--color-text-on-btn)",
@@ -115,6 +129,18 @@ export const t = {
  */
 export const CORNER = "3px";
 export const pixelCorners = `polygon(${CORNER} 0, calc(100% - ${CORNER}) 0, 100% ${CORNER}, 100% calc(100% - ${CORNER}), calc(100% - ${CORNER}) 100%, ${CORNER} 100%, 0 calc(100% - ${CORNER}), 0 ${CORNER})`;
+
+/** 颜色 token 的键名（供 JS 侧取原始色值使用）。 */
+export type ColorToken = keyof typeof colorTokens;
+
+/**
+ * 取某个颜色 token 在指定主题下的「原始色值」（字面 hex / rgba）。
+ * 像素组件需要在 JS 里做颜色运算（hexToRgb 等），无法用 CSS 变量，
+ * 因此统一从这里取字面值，保证 theme.ts 仍是唯一色值源。
+ */
+export function rawColor(token: ColorToken, mode: ThemeMode): string {
+  return colorTokens[token][mode];
+}
 
 /** 应用主题：把对象里的颜色值写入根元素的 CSS 变量，并标记 data-theme */
 export function applyTheme(mode: ThemeMode): void {

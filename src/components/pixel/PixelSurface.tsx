@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { styled } from "@linaria/react";
+import { t } from "../../styles/theme";
 import type { PixelPalette } from "./PixelFrame";
 
 /**
@@ -173,7 +174,7 @@ export function PixelSurface({
   tune,
   className,
   children,
-  shadowColor = "rgba(31,106,111,0.38)",
+  shadowColor = t.colorShadowPixel,
   rootStyle,
   contentStyle,
 }: PixelSurfaceProps) {
