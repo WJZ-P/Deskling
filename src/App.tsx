@@ -7,6 +7,8 @@ import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";
 import About from "./pages/About";
 import { FluidBackdrop } from "./components/pixel/FluidBackdrop";
+import { PixelFrame } from "./components/pixel/PixelFrame";
+import { WINDOW_FRAME } from "./components/pixel/palettes";
 import type { BackdropStyleId } from "./components/pixel/backdrops";
 import { useTheme } from "./hooks/useTheme";
 import { getSetting, setSetting } from "./settings";
@@ -39,6 +41,7 @@ function App() {
       <Titlebar theme={theme} onToggleTheme={toggleTheme} />
       <Body>
         <Sidebar
+          theme={theme}
           active={section}
           collapsed={collapsed}
           onSelect={setSection}
@@ -61,6 +64,11 @@ function App() {
           </Content>
         </Main>
       </Body>
+      {/* 窗口外包裹框：空心像素框叠在最上层，给整个无边框窗口收口一圈。
+          pointer-events:none 不拦事件；内部各模块贴窗口边的重复边被它盖住，只留模块间接缝。 */}
+      <WindowFrameLayer aria-hidden>
+        <PixelFrame palette={WINDOW_FRAME[theme]} variant="raised" pixel={3} radius={0} hollow />
+      </WindowFrameLayer>
     </Shell>
   );
 }
@@ -68,6 +76,7 @@ function App() {
 export default App;
 
 const Shell = styled.div`
+  position: relative;
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -79,6 +88,17 @@ const Body = styled.div`
   flex: 1;
   min-height: 0;
   display: flex;
+  /* 上移一档，把侧栏顶边塞进标题栏（不透明、更高 z）底下，
+     消除「标题栏底边 + 侧栏顶边」的双线接缝。8px = 外框 2 格 × pixel(4)。 */
+  margin-top: -8px;
+`;
+
+/* 窗口外框层：绝对铺满 Shell，最上层，只做视觉收口 */
+const WindowFrameLayer = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
 `;
 
 const Main = styled.main`

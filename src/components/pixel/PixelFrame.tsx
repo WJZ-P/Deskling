@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -48,11 +49,23 @@ interface PixelFrameProps {
   noise?: number;
   /** 底噪颗粒度：N×N 个美术像素合成一块（越大越粗块，独立于 pixel） */
   noiseGranularity?: number;
+  /**
+   * 底噪动态变化速度（每秒）：0=静态（默认，纯质感不动）；
+   * >0 时底噪按块随时间用 value-noise 缓慢重掷 —— 值越小变化越慢越柔。
+   * 用于「面板底色要活起来但很克制」的场景（如侧边栏）。
+   */
+  noiseSpeed?: number;
   /** 边缘啃缺概率 0~1：沿四边随机啃掉 1~2px 缺口，形成不规则/做旧的粗犷轮廓；0=规整 */
   edgeErosion?: number;
   /** 像素硬投影高度（CSS px），0=无 */
   elevation?: number;
   shadowColor?: string;
+  /**
+   * 空心框：只画一圈边（外描边 + raised/sunken 内线斜角），中心透明。
+   * 用于「窗口外包裹框」——叠在最上层，只收口一圈，不遮挡内部内容。
+   * 此模式下 noise/dither 无意义（无面色）；radius 建议 0（方窗）。
+   */
+  hollow?: boolean;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
@@ -69,6 +82,22 @@ function hexToRgb(hex: string): [number, number, number] {
 
 const clampCh = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
 
+// 伪随机 hash → [0,1)
+function hash1(n: number): number {
+  const s = Math.sin(n) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// 平滑值噪声（value-noise）：随 x 连续变化，每整数格重掷随机值并 smoothstep 插值 → [0,1)
+function vnoise(seed: number, x: number): number {
+  const i = Math.floor(x);
+  const f = x - i;
+  const u = f * f * (3 - 2 * f);
+  const a = hash1(seed + i * 131.0);
+  const b = hash1(seed + (i + 1) * 131.0);
+  return a + (b - a) * u;
+}
+
 export function PixelFrame({
   palette,
   variant = "raised",
@@ -78,9 +107,11 @@ export function PixelFrame({
   ditherOpacity = 0.5,
   noise = 0,
   noiseGranularity = 1,
+  noiseSpeed = 0,
   edgeErosion = 0,
   elevation = 0,
   shadowColor = t.colorShadowPixel,
+  hollow = false,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
   const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
@@ -88,6 +119,7 @@ export function PixelFrame({
   const maskId = `pf-m-${rid}`;
   const faceMaskId = `pf-fm-${rid}`;
   const ditherId = `pf-d-${rid}`;
+  const hollowMaskId = `pf-h-${rid}`;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -161,26 +193,74 @@ export function PixelFrame({
     return out;
   }, [cols, rows, r, edgeErosion]);
 
-  // 静态底噪：按块（gran×gran）随机灰度铺在面色上（无动画）。
-  // useMemo 依赖尺寸/参数 → 真随机，但仅在尺寸/参数变化时重掷，不随无关渲染乱闪。
-  const noiseRects = useMemo<ReactElement[]>(() => {
+  // 底噪按块（gran×gran）铺在面色上。
+  // 每块记录位置/尺寸 + 随机 seed/phase：静态时首帧即定（seed 用于初值），
+  // noiseSpeed>0 时由下面的 RAF effect 按 value-noise 随时间重掷 fill（慢速、错落）。
+  // useMemo 依赖尺寸/参数 → 仅在尺寸/参数变化时重建，不随无关渲染乱闪。
+  const noiseBlocks = useMemo(() => {
     if (noise <= 0) return [];
-    const [fr, fg, fb] = hexToRgb(palette.face);
     const g = Math.max(1, Math.round(noiseGranularity));
-    const out: ReactElement[] = [];
+    const blocks: {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      seed: number;
+      phase: number;
+    }[] = [];
     for (let by = 1; by < rows - 1; by += g) {
       for (let bx = 1; bx < cols - 1; bx += g) {
-        const d = (Math.random() * 2 - 1) * noise * NOISE_PX;
-        const fill = `rgb(${clampCh(fr + d)},${clampCh(fg + d)},${clampCh(fb + d)})`;
-        const wBlk = Math.min(g, cols - 1 - bx);
-        const hBlk = Math.min(g, rows - 1 - by);
-        out.push(
-          <rect key={`n-${bx}-${by}`} x={bx} y={by} width={wBlk} height={hBlk} fill={fill} />,
-        );
+        blocks.push({
+          x: bx,
+          y: by,
+          w: Math.min(g, cols - 1 - bx),
+          h: Math.min(g, rows - 1 - by),
+          seed: Math.random() * 1000,
+          phase: Math.random(), // 错落相位：各块起点不同，变化不齐步
+        });
       }
     }
-    return out;
-  }, [cols, rows, palette.face, noise, noiseGranularity]);
+    return blocks;
+  }, [cols, rows, noise, noiseGranularity]);
+
+  const [fr, fg, fb] = hexToRgb(palette.face);
+  const noiseGroupRef = useRef<SVGGElement>(null);
+
+  // 首帧 fill：静态用块 seed 定一次随机灰度；动态版会被 RAF 覆盖，这里给个稳定初值
+  const noiseRects = noiseBlocks.map((b, i) => {
+    const d = (hash1(b.seed) * 2 - 1) * noise * NOISE_PX;
+    const fill = `rgb(${clampCh(fr + d)},${clampCh(fg + d)},${clampCh(fb + d)})`;
+    return (
+      <rect key={`n-${i}`} x={b.x} y={b.y} width={b.w} height={b.h} fill={fill} />
+    );
+  });
+
+  // 动态底噪：noiseSpeed>0 时逐帧按块用 value-noise 缓慢重掷灰度，直接写 rect.fill（不触发 React 重渲染）。
+  useEffect(() => {
+    const g = noiseGroupRef.current;
+    if (!g || noise <= 0 || noiseSpeed <= 0) return;
+    let raf = 0;
+    const start = performance.now();
+    const step = (now: number) => {
+      const time = ((now - start) / 1000) * noiseSpeed;
+      const nodes = g.childNodes as unknown as SVGRectElement[];
+      for (let i = 0; i < noiseBlocks.length; i++) {
+        const b = noiseBlocks[i];
+        const dyn = (vnoise(b.seed, time + b.phase) - 0.5) * 2; // [-1,1)
+        const d = dyn * noise * NOISE_PX;
+        const rect = nodes[i];
+        if (rect) {
+          rect.setAttribute(
+            "fill",
+            `rgb(${clampCh(fr + d)},${clampCh(fg + d)},${clampCh(fb + d)})`,
+          );
+        }
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb]);
 
   return (
     <svg
@@ -221,40 +301,66 @@ export function PixelFrame({
             <rect x={0} y={3} width={1} height={1} style={asFill(dither)} />
           </pattern>
         )}
+        {/* 空心框专用 mask：只保留外圈 2px 环（外描边 1px + 内斜角 1px），中心挖空透明 */}
+        {hollow && (
+          <mask id={hollowMaskId}>
+            <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
+            <rect x={2} y={2} width={cols - 4} height={rows - 4} fill="#000" />
+            {outerCut}
+            {erodeCut}
+          </mask>
+        )}
       </defs>
 
-      <g mask={`url(#${maskId})`}>
-        {/* 外描边（整块，圆角外形由 outerCut 决定） */}
-        <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
-        {/* 面色 + 铺底 + 内线：再套 faceMask 多缩一档，使转角处露出连续描边 */}
-        <g mask={`url(#${faceMaskId})`}>
-          {/* 面色 */}
-          <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
-          {/* 静态底噪（按块随机灰度，盖在面色上） */}
-          {noiseRects}
-          {/* 抖动纹理 */}
-          {dither && (
-            <rect
-              x={1}
-              y={1}
-              width={cols - 2}
-              height={rows - 2}
-              fill={`url(#${ditherId})`}
-              opacity={ditherOpacity}
-            />
-          )}
+      {hollow ? (
+        /* 空心框：外描边整块 + 内斜角，套 hollowMask 只留一圈环 */
+        <g mask={`url(#${hollowMaskId})`}>
+          <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
           {variant !== "flat" && (
             <>
-              {/* 顶左内线 */}
+              {/* 顶左内斜角（在外描边内侧 1px 环上） */}
               <rect x={1} y={1} width={cols - 2} height={1} style={asFill(topLeft)} />
               <rect x={1} y={1} width={1} height={rows - 2} style={asFill(topLeft)} />
-              {/* 底右内线 */}
+              {/* 底右内斜角 */}
               <rect x={1} y={rows - 2} width={cols - 2} height={1} style={asFill(botRight)} />
               <rect x={cols - 2} y={1} width={1} height={rows - 2} style={asFill(botRight)} />
             </>
           )}
         </g>
-      </g>
+      ) : (
+        <g mask={`url(#${maskId})`}>
+          {/* 外描边（整块，圆角外形由 outerCut 决定） */}
+          <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
+          {/* 面色 + 铺底 + 内线：再套 faceMask 多缩一档，使转角处露出连续描边 */}
+          <g mask={`url(#${faceMaskId})`}>
+            {/* 面色 */}
+            <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
+            {/* 底噪（按块灰度盖在面色上）；noiseSpeed>0 时由 RAF 逐帧改 fill 做慢速动态变化 */}
+            <g ref={noiseGroupRef}>{noiseRects}</g>
+            {/* 抖动纹理 */}
+            {dither && (
+              <rect
+                x={1}
+                y={1}
+                width={cols - 2}
+                height={rows - 2}
+                fill={`url(#${ditherId})`}
+                opacity={ditherOpacity}
+              />
+            )}
+            {variant !== "flat" && (
+              <>
+                {/* 顶左内线 */}
+                <rect x={1} y={1} width={cols - 2} height={1} style={asFill(topLeft)} />
+                <rect x={1} y={1} width={1} height={rows - 2} style={asFill(topLeft)} />
+                {/* 底右内线 */}
+                <rect x={1} y={rows - 2} width={cols - 2} height={1} style={asFill(botRight)} />
+                <rect x={cols - 2} y={1} width={1} height={rows - 2} style={asFill(botRight)} />
+              </>
+            )}
+          </g>
+        </g>
+      )}
     </svg>
   );
 }

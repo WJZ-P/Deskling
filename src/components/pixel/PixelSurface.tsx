@@ -109,6 +109,13 @@ interface PixelSurfaceProps {
   radius?: number;
   /** 面像素基准随机明暗强度 0~1 */
   noise?: number;
+  /**
+   * 环境低噪强度 0~1：动态低噪（noiseHoverAmp）的「驱动下限」。
+   * 0 = 只有 hover/press 时低噪才动（默认）；
+   * >0 = 即使静止（rest）也持续动态变化 —— 用于「选中态也要一直动」的场景，
+   *      hover 时取 max(hover 进度, ambient)，两者叠加不冲突。
+   */
+  ambient?: number;
   /** 动画调参覆盖（请传模块级常量以保持引用稳定，避免重建 cells） */
   tune?: Partial<SurfaceTune>;
   className?: string;
@@ -171,6 +178,7 @@ export function PixelSurface({
   pixel = 4,
   radius = 2,
   noise = 0.1,
+  ambient = 0,
   tune,
   className,
   children,
@@ -185,6 +193,8 @@ export function PixelSurface({
   const gRef = useRef<SVGGElement>(null);
   const stateRef = useRef<SurfaceState>(state);
   stateRef.current = state;
+  const ambientRef = useRef<number>(ambient);
+  ambientRef.current = ambient;
 
   const rid = useId().replace(/:/g, "");
   const [{ w, h }, setSize] = useState({ w: 0, h: 0 });
@@ -201,7 +211,7 @@ export function PixelSurface({
 
   const cols = Math.max(4, Math.round(w / pixel));
   const rows = Math.max(4, Math.round(h / pixel));
-  const r = Math.max(1, radius);
+  const r = Math.max(0, Math.round(radius));
 
   // 分类每个可见像素 → 角色 + 基准色（弹簧目标基于此在亮度上做文章）
   const cells = useMemo<Cells>(() => {
@@ -360,6 +370,7 @@ export function PixelSurface({
       const t = (now - t0) / 1000;
 
       const st = stateRef.current;
+      const amb = ambientRef.current; // 环境低噪驱动下限（选中态即使静止也持续动）
       const wantHover = st === "hover" || st === "press" ? 1 : 0;
       const wantPress = st === "press" ? 1 : 0;
       const tsec = now / 1000;
@@ -415,11 +426,15 @@ export function PixelSurface({
           if (T.flickerAmp > 0) {
             shimmer += T.flickerAmp * Math.sin(t * cells.flkS[i] + cells.flkP[i]) * hp[i];
           }
-          // 动态低噪：hover 时按块持续随机变化，delay 控节奏、amp 控幅度
+          // 动态低噪：hover 或 选中(ambient) 时按块持续随机变化，delay 控节奏、amp 控幅度。
+          // 驱动强度取 max(hover 进度, ambient)：选中态即使静止也在动，hover 再叠加。
           if (T.noiseHoverAmp > 0) {
-            const vx = t / (T.noiseHoverDelay > 0.01 ? T.noiseHoverDelay : 0.01) + cells.nph[i];
-            const dyn = (vnoise(cells.nseed[i], vx) - 0.5) * 2; // [-1,1)
-            shimmer += dyn * T.noiseHoverAmp * hp[i];
+            const drive = hp[i] > amb ? hp[i] : amb;
+            if (drive > 0.001) {
+              const vx = t / (T.noiseHoverDelay > 0.01 ? T.noiseHoverDelay : 0.01) + cells.nph[i];
+              const dyn = (vnoise(cells.nseed[i], vx) - 0.5) * 2; // [-1,1)
+              shimmer += dyn * T.noiseHoverAmp * drive;
+            }
           }
           const d = shimmer * T.shimmerPx;
           rr += d;
@@ -435,10 +450,11 @@ export function PixelSurface({
 
         if (Math.abs(hTarget - hp[i]) > 0.002 || Math.abs(hv[i]) > 0.002) moving = true;
         if (Math.abs(pTarget - pp[i]) > 0.002 || Math.abs(pv[i]) > 0.002) moving = true;
-        if (role === FACE && hp[i] > 0.01) moving = true; // 闪烁需持续
+        // 闪烁需持续：hover 进度或环境低噪任一存在都要继续跑
+        if (role === FACE && (hp[i] > 0.01 || amb > 0.001)) moving = true;
       }
 
-      if (moving || wantHover || wantPress) {
+      if (moving || wantHover || wantPress || amb > 0.001) {
         raf = requestAnimationFrame(step);
       } else {
         running = false;
@@ -462,7 +478,7 @@ export function PixelSurface({
 
   useEffect(() => {
     startRef.current();
-  }, [state]);
+  }, [state, ambient]);
 
   // 位移 + 投影：纯位置表现，交给 CSS 过渡（调速见 tune.liftMs / liftEase）
   const ty = state === "press" ? T.pressTy : state === "hover" ? T.hoverTy : 0;

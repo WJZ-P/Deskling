@@ -102,7 +102,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
             <IconBtn
               palette={CONTROL_MIN.pal}
               iconColor={CONTROL_MIN.icon}
-              title="最小化"
+              title=""
               onClick={() => runWindow((w) => w.minimize())}
             >
               <IconMin />
@@ -110,7 +110,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
             <IconBtn
               palette={CONTROL_MAX.pal}
               iconColor={CONTROL_MAX.icon}
-              title="最大化 / 还原"
+              title=""
               onClick={() => runWindow((w) => w.toggleMaximize())}
             >
               <IconMax />
@@ -118,7 +118,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
             <IconBtn
               palette={CONTROL_CLOSE.pal}
               iconColor={CONTROL_CLOSE.icon}
-              title="关闭"
+              title=""
               onClick={() => runWindow((w) => w.close())}
             >
               <IconClose />
