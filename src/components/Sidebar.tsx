@@ -30,7 +30,7 @@ const PANEL_NOISE = 0.08;
 /** 面板底噪颗粒：N×N 像素合成一块（越大越粗块、越复古） */
 const PANEL_NOISE_GRAN = 3;
 /** 面板底噪动态变化速度（每秒）：慢速缓动，0=静态。比主壁纸克制得多 */
-const PANEL_NOISE_SPEED = 0.25;
+const PANEL_NOISE_SPEED = 1.0;
 /** 面板每个美术像素占多少 CSS px */
 const PANEL_PIXEL = 4;
 
@@ -246,6 +246,7 @@ const Group = styled.nav`
   display: flex;
   flex-direction: column;
   gap: ${NAV_ITEM_GAP}px;
+  padding: 4px 2px;
 `;
 
 const Spacer = styled.div`
@@ -253,7 +254,9 @@ const Spacer = styled.div`
 `;
 
 const Collapse = styled.div`
-  margin-top: ${t.unit};
+  margin: ${t.unit} 2px;
+
+
 `;
 
 /* 外层按钮：撑满侧栏、去掉原生外观，视觉与手感全交给内部 PixelSurface */

@@ -83,6 +83,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
           radius={0}
           noise={0.05}
           noiseGranularity={2}
+          noiseSpeed={1.0}
         />
         <Content data-tauri-drag-region>
           <Brand data-tauri-drag-region>
