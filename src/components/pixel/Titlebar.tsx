@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t, type ThemeMode } from "../../styles/theme";
@@ -28,6 +28,30 @@ async function runWindow(action: (w: ReturnType<typeof getCurrentWindow>) => Pro
     // 在非 Tauri 环境（纯浏览器调试）下静默忽略
     console.warn("window control unavailable:", err);
   }
+}
+
+/**
+ * 标题栏拖拽区的 mousedown 处理（替代 data-tauri-drag-region）。
+ * 内建 data-tauri-drag-region 在 Windows + decorations:false 下双击「还原」会失灵，
+ * 且已最大化时单击触发拖拽会让无边框窗口「捅穿任务栏往下溢出」（缺少最大化尺寸约束）。
+ * 这里自己接管：
+ *  - 双击（e.detail===2）→ toggleMaximize（最大化 ⇄ 还原）；
+ *  - 单击且「未最大化」→ startDragging（拖动窗口）；
+ *  - 单击但「已最大化」→ 忽略（不拖拽，避免溢出任务栏的溢出 bug）。
+ * 点到控制按钮则放行，交给按钮自身 onClick。
+ */
+async function onDragRegionMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return; // 只响应鼠标左键
+  if ((e.target as HTMLElement).closest("button")) return; // 点在控制按钮上：放行
+  if (e.detail === 2) {
+    void runWindow((w) => w.toggleMaximize());
+    return;
+  }
+  // 单击：仅在未最大化时才发起拖拽；已最大化时拖拽会导致无边框窗口向下溢出任务栏
+  await runWindow(async (w) => {
+    if (await w.isMaximized()) return;
+    await w.startDragging();
+  });
 }
 
 interface IconBtnProps {
@@ -85,8 +109,8 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
           noiseGranularity={2}
           noiseSpeed={1.0}
         />
-        <Content data-tauri-drag-region>
-          <Brand data-tauri-drag-region>
+        <Content onMouseDown={onDragRegionMouseDown}>
+          <Brand>
             <Paw>🐾</Paw>
             <span>Deskling</span>
           </Brand>
