@@ -51,7 +51,7 @@ function About() {
       <Panel>
         <PanelTitle>致谢</PanelTitle>
         <SettingInfo>
-          <SettingDesc>字体：Ark Pixel（方舟像素体，开源）</SettingDesc>
+          <SettingDesc>字体：Zpix 最像素（开源像素字体）</SettingDesc>
           <SettingDesc>框架：Tauri 2 · React 19 · Vite</SettingDesc>
         </SettingInfo>
       </Panel>

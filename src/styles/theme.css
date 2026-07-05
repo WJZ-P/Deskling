@@ -1,45 +1,11 @@
-/* Ark Pixel（方舟像素体，开源，支持中英文）三种原生字号：10 / 12 / 16。
-   像素字体只有在「原生尺寸」或其整数倍下才锐利，因此拆成三个字体族，
-   由字号 token（--text-*）分别绑定到对应字号或其 2 倍处使用。
-   每个字体族用两个 @font-face 合成：拉丁版用 unicode-range 优先匹配英文/数字，
-   简体中文版兜底其余字符。缺失时回退到 --fallback-pixel 字体栈。 */
-
-/* ---- Ark Pixel 10（用于 10px 与 20px） ---- */
+/* Zpix（最像素，开源像素字体）：单文件覆盖 GB2312+GBK 全部常用汉字 + 日韩 + 拉丁，
+   彻底解决之前 Ark Pixel 部分汉字缺字回退的问题。
+   Zpix 原生尺寸为 12px（锐利档 = 12 / 24 / 36…），本项目沿用现有字号体系
+   （10/12/16/20/24/32），非 12 整数倍档位会有轻微抗锯齿发虚，属可接受取舍。
+   缺失时回退到 --fallback-pixel 字体栈。 */
 @font-face {
-    font-family: "Ark Pixel 10";
-    src: url("/fonts/ark-pixel-10px-proportional-latin.ttf.woff2") format("woff2");
-    font-display: swap;
-    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
-}
-@font-face {
-    font-family: "Ark Pixel 10";
-    src: url("/fonts/ark-pixel-10px-proportional-zh_cn.ttf.woff2") format("woff2");
-    font-display: swap;
-}
-
-/* ---- Ark Pixel 12（用于 12px 与 24px） ---- */
-@font-face {
-    font-family: "Ark Pixel 12";
-    src: url("/fonts/ark-pixel-12px-proportional-latin.woff2") format("woff2");
-    font-display: swap;
-    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
-}
-@font-face {
-    font-family: "Ark Pixel 12";
-    src: url("/fonts/ark-pixel-12px-proportional-zh_cn.woff2") format("woff2");
-    font-display: swap;
-}
-
-/* ---- Ark Pixel 16（用于 16px 与 32px，默认正文） ---- */
-@font-face {
-    font-family: "Ark Pixel 16";
-    src: url("/fonts/ark-pixel-16px-proportional-latin.ttf.woff2") format("woff2");
-    font-display: swap;
-    unicode-range: U+0000-024F, U+2000-206F, U+2070-209F, U+20A0-20CF;
-}
-@font-face {
-    font-family: "Ark Pixel 16";
-    src: url("/fonts/ark-pixel-16px-proportional-zh_cn.ttf.woff2") format("woff2");
+    font-family: "Zpix";
+    src: url("/fonts/zpix.ttf") format("truetype");
     font-display: swap;
 }
 
@@ -57,17 +23,16 @@
     /* 字号 token：用 CSS `font` 简写把「字号/行高 + 对应原生字体族」打包。
        组件用 `font: var(--text-md)` 一句即可，既定字号又保证锐利不糊。
        xs=10 sm=12 md=16(默认) lg=20(=10×2) xl=24(=12×2) 2xl=32(=16×2)。 */
-    --text-xs: 10px/1.8 "Ark Pixel 10", var(--fallback-pixel);
-    --text-sm: 12px/1.6 "Ark Pixel 12", var(--fallback-pixel);
-    --text-md: 16px/1.5 "Ark Pixel 16", var(--fallback-pixel);
-    --text-lg: 20px/1.4 "Ark Pixel 10", var(--fallback-pixel);
-    --text-xl: 24px/1.3 "Ark Pixel 12", var(--fallback-pixel);
-    --text-2xl: 32px/1.25 "Ark Pixel 16", var(--fallback-pixel);
+    --text-xs: 10px/1.8 "Zpix", var(--fallback-pixel);
+    --text-sm: 12px/1.6 "Zpix", var(--fallback-pixel);
+    --text-md: 16px/1.5 "Zpix", var(--fallback-pixel);
+    --text-lg: 20px/1.4 "Zpix", var(--fallback-pixel);
+    --text-xl: 24px/1.3 "Zpix", var(--fallback-pixel);
+    --text-2xl: 32px/1.25 "Zpix", var(--fallback-pixel);
 
-    /* 仅需字体族（不定字号）时用；默认按 16 号族，其余作兜底 */
-    --font-pixel: "Ark Pixel 16", "Ark Pixel 12", var(--fallback-pixel);
-    --font-ui: "Ark Pixel 16", system-ui, "Segoe UI", "Microsoft YaHei",
-    sans-serif;
+    /* 仅需字体族（不定字号）时用 */
+    --font-pixel: "Zpix", var(--fallback-pixel);
+    --font-ui: "Zpix", system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 * {
