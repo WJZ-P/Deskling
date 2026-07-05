@@ -1,10 +1,16 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t, type ThemeMode } from "../../styles/theme";
 import { PixelFrame, type PixelPalette } from "./PixelFrame";
 import { PixelSurface, type SurfaceState, type SurfaceTune } from "./PixelSurface";
 import { PRIORITY_PAL, TITLEBAR_PAL, CONTROL_MIN, CONTROL_MAX, CONTROL_CLOSE } from "./palettes";
+import {
+  WinMinimizeIcon,
+  WinMaximizeIcon,
+  WinRestoreIcon,
+  WinCloseIcon,
+} from "./windowIcons";
 
 interface TitlebarProps {
   theme: ThemeMode;
@@ -96,7 +102,40 @@ function IconBtn({ palette, iconColor, title, onClick, children }: IconBtnProps)
   );
 }
 
+/**
+ * 跟踪窗口是否处于最大化态，供按钮切换图标/提示用。
+ * 挂载时读一次 isMaximized()，并订阅 onResized（最大化/还原都会改变尺寸）实时同步。
+ */
+function useIsMaximized(): boolean {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    const sync = async () => {
+      try {
+        const w = getCurrentWindow();
+        setMaximized(await w.isMaximized());
+        const un = await w.onResized(async () => {
+          setMaximized(await w.isMaximized());
+        });
+        if (disposed) un();
+        else unlisten = un;
+      } catch (err) {
+        // 非 Tauri 环境（纯浏览器调试）下静默忽略
+        console.warn("window state unavailable:", err);
+      }
+    };
+    void sync();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+  return maximized;
+}
+
 function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
+  const maximized = useIsMaximized();
   return (
     <Root>
       <Frame>
@@ -130,15 +169,15 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
               title=""
               onClick={() => runWindow((w) => w.minimize())}
             >
-              <IconMin />
+              <WinMinimizeIcon />
             </IconBtn>
             <IconBtn
               palette={CONTROL_MAX.pal}
               iconColor={CONTROL_MAX.icon}
-              title=""
+              title={maximized ? "还原" : "最大化"}
               onClick={() => runWindow((w) => w.toggleMaximize())}
             >
-              <IconMax />
+              {maximized ? <WinRestoreIcon /> : <WinMaximizeIcon />}
             </IconBtn>
             <IconBtn
               palette={CONTROL_CLOSE.pal}
@@ -146,7 +185,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
               title=""
               onClick={() => runWindow((w) => w.close())}
             >
-              <IconClose />
+              <WinCloseIcon />
             </IconBtn>
           </Controls>
         </Content>
@@ -218,40 +257,3 @@ const Glyph = styled.span`
   line-height: 1;
 `;
 
-/* CSS 绘制的锐利像素图标，跟随 currentColor */
-const IconMin = styled.span`
-  width: 10px;
-  height: ${t.borderW};
-  background: currentColor;
-`;
-
-const IconMax = styled.span`
-  width: 10px;
-  height: 10px;
-  border: ${t.borderW} solid currentColor;
-`;
-
-const IconClose = styled.span`
-  position: relative;
-  width: 12px;
-  height: 12px;
-
-  &::before,
-  &::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 0;
-    width: 12px;
-    height: ${t.borderW};
-    background: currentColor;
-  }
-
-  &::before {
-    transform: rotate(45deg);
-  }
-
-  &::after {
-    transform: rotate(-45deg);
-  }
-`;
