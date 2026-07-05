@@ -60,3 +60,34 @@ body {
 img {
     image-rendering: pixelated;
 }
+
+/* ===== 全局兜底滚动条（WebView2/Chromium）=====
+   主内容区用组件 PixelScrollArea（覆盖式、不占布局）；这里只给其余小滚动区
+   （如 PixelSelect 下拉弹层）一个统一的瘦身像素风：方角、无描边、仅 hover 高亮变青。
+
+   ⚠️ 不要设 scrollbar-width / scrollbar-color（标准属性）：在 Chromium/WebView2 里，
+   一旦 scrollbar-width 设为非 auto，浏览器会切到「标准滚动条」渲染，
+   ::-webkit-scrollbar 伪元素规则全部失效（只剩换色，形状回退原生）。
+   本项目仅跑在 WebView2（Chromium），无需 Firefox 兜底，故只用 webkit 伪元素。 */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    opacity: 0.5;
+    border-radius: 0; /* 方角，保持像素硬边 */
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--color-accent);
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
+}

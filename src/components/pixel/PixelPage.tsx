@@ -1,5 +1,7 @@
+import type { ReactNode } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
+import { PixelScrollArea } from "./PixelScrollArea";
 
 /**
  * 页面骨架 & 排版件（结构为主、无强像素视觉，但字体/间距统一走 token）。
@@ -10,15 +12,25 @@ import { t } from "../../styles/theme";
  *  - PixelPanelTitle：分区内的小标题（像素字体描粗）。
  */
 
-/** 页容器：撑满主区、可滚动、统一内边距与纵向间距 */
-export const PixelPage = styled.div`
-  height: 100%;
-  overflow-y: auto;
-  padding: calc(${t.unit} * 5) calc(${t.unit} * 6);
-  display: flex;
-  flex-direction: column;
-  gap: calc(${t.unit} * 4);
-`;
+/**
+ * 页容器：撑满主区、纵向排列、统一留白，滚动交给像素风覆盖式滚动条 PixelScrollArea。
+ * 用覆盖式滚动条（不占布局宽度）→ 左右留白始终一致，不会因出现滚动条而右侧多缩一条。
+ */
+export function PixelPage({ children, className }: { children?: ReactNode; className?: string }) {
+  return (
+    <PixelScrollArea
+      className={className}
+      contentStyle={{
+        display: "flex",
+        flexDirection: "column",
+        gap: `calc(${t.unit} * 4)`,
+        padding: `calc(${t.unit} * 5) calc(${t.unit} * 6)`,
+      }}
+    >
+      {children}
+    </PixelScrollArea>
+  );
+}
 
 /** 页头：标题 + 副标题的纵向容器 */
 export const PixelPageHeader = styled.header`
