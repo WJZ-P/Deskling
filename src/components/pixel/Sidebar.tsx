@@ -10,6 +10,7 @@ import {
   DebugIcon,
   HomeIcon,
   InfoIcon,
+  PetIcon,
   SettingsIcon,
 } from "../icons";
 
@@ -63,7 +64,7 @@ const NAV_TUNE: Partial<SurfaceTune> = {
 /* ============================================================ */
 
 /** 主面板的可导航区域标识 */
-export type SectionId = "home" | "settings" | "debug" | "about";
+export type SectionId = "home" | "pet" | "settings" | "debug" | "about";
 
 interface NavItemDef {
   id: SectionId;
@@ -74,6 +75,7 @@ interface NavItemDef {
 /** 主导航（顶部） */
 const PRIMARY: NavItemDef[] = [
   { id: "home", label: "主页", Icon: HomeIcon },
+  { id: "pet", label: "桌宠", Icon: PetIcon },
   { id: "settings", label: "设置", Icon: SettingsIcon },
 ];
 

@@ -74,6 +74,22 @@ export function ChevronIcon(props: IconProps) {
   );
 }
 
+/** 桌宠：猫脸（两只三角耳 + 脸廓 + 双眼） */
+export function PetIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      {/* 左右三角耳 */}
+      <path d="M4 6.5 L4 3.5 L6.5 5.5" />
+      <path d="M12 6.5 L12 3.5 L9.5 5.5" />
+      {/* 脸廓 */}
+      <path d="M4 6.5 L4 10 L6 12.5 L10 12.5 L12 10 L12 6.5" />
+      {/* 双眼 */}
+      <rect x="6" y="8" width="1.4" height="1.4" fill="currentColor" stroke="none" />
+      <rect x="8.6" y="8" width="1.4" height="1.4" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
 /** 调试：代码尖括号 “</>” */
 export function DebugIcon(props: IconProps) {
   return (
