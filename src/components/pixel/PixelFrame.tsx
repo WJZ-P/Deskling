@@ -66,6 +66,13 @@ interface PixelFrameProps {
    */
   hollow?: boolean;
   /**
+   * 右端书签缺口深度（美术像素格数）：>0 时在右边缘中部抠一个向内的三角缺口，
+   * 使矩形变成「书签/标签」外形（楼梯状硬边三角，非平滑斜边，保持像素质感）。
+   * 与切角同一套双级 mask：外轮廓抠三角、面色多抠一档，让缺口内侧露出连续描边。
+   * 0 = 规整矩形（默认）。用于 PixelTag 等需要不规则轮廓的标签。
+   */
+  notch?: number;
+  /**
    * 离散布局态标记（如侧栏收起/展开传 "c"/"e"）。传了则启用「按态缓存 +
    * 提前重建」：切态时网格立即重建成该态最终尺寸，随 CSS 过渡平滑缩放。
    * 不传则走纯防抖（见 useElementSize）。
@@ -117,6 +124,7 @@ export function PixelFrame({
   elevation = 0,
   shadowColor = t.colorShadowPixel,
   hollow = false,
+  notch = 0,
   sizeKey,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
@@ -158,6 +166,30 @@ export function PixelFrame({
   };
   const outerCut = r > 0 ? cornerCut(r, "o") : [];
   const faceCut = r > 0 ? cornerCut(r + 1, "f") : [];
+
+  // 右端书签缺口（向内的楼梯状三角）：在右边缘中部按深度 D 抠一个尖朝左的三角。
+  // 从右边缘（最深）向左逐列收窄，第 j 列（j=0 是最右列）抠掉上下各 (D-j) 行，
+  // 到 j=D-1 收成尖。面色版多抠一档（D+1）→ 缺口内侧露出连续 1px 外描边包边。
+  const nd = Math.max(0, Math.round(notch));
+  const notchCut = (D: number, tag: string): ReactElement[] => {
+    const out: ReactElement[] = [];
+    if (D <= 0) return out;
+    const midY = (rows - 1) / 2; // 垂直中心（缺口对称轴）
+    for (let j = 0; j < D; j++) {
+      const half = D - j; // 该列缺口的半高（含中心向上下各扩 half 格）
+      const x = cols - 1 - j; // 从最右列向左
+      const yTop = Math.max(1, Math.ceil(midY - half));
+      const yBot = Math.min(rows - 1, Math.floor(midY + half) + 1); // 独占上界
+      if (yBot > yTop) {
+        out.push(
+          <rect key={`${tag}-n-${j}`} x={x} y={yTop} width={1} height={yBot - yTop} fill="#000" />,
+        );
+      }
+    }
+    return out;
+  };
+  const outerNotch = nd > 0 ? notchCut(nd, "o") : [];
+  const faceNotch = nd > 0 ? notchCut(nd + 1, "f") : [];
 
   // 边缘啃缺：沿四边（避开切角）随机抠掉 1~2px 缺口 → 不规则/做旧的粗犷轮廓。
   // 抠在两个 mask 上，缺口处描边+面色一起消失、露出背景，得到真锯齿边。
@@ -280,11 +312,13 @@ export function PixelFrame({
         <mask id={maskId}>
           <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
           {outerCut}
+          {outerNotch}
           {erodeCut}
         </mask>
         <mask id={faceMaskId}>
           <rect x={0} y={0} width={cols} height={rows} fill="#fff" />
           {faceCut}
+          {faceNotch}
           {erodeCut}
         </mask>
         {dither && (

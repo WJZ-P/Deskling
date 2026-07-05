@@ -16,7 +16,7 @@ import { PRIORITY_PAL, type Priority } from "./palettes";
 const SECTION_PIXEL = 3; // 像素大小
 const SECTION_RADIUS = 2; // 像素切角（比卡片更大更圆润）
 const SECTION_PAD = 20; // 内边距 px
-const SECTION_GAP = 16; // 标题头与正文间距 px
+const SECTION_GAP = 12; // 标题头与正文间距 px
 const SECTION_ELEV = 4; // 硬投影高度 px
 const SECTION_NOISE = 0.03; // 静态底噪强度（面像素随机明暗，无动画）
 const SECTION_NOISE_GRANULARITY = 2; // 底噪颗粒度：N×N 像素合成一块
