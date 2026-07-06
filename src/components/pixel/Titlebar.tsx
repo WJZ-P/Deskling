@@ -227,13 +227,13 @@ const Brand = styled.div`
   font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorText};
-  /* 像素字体描粗，和其他标题一致 */
-  text-shadow: 1px 0 0 currentColor;
+  /* 加粗，和其他标题一致 */
+  font-weight: bold;
 `;
 
 const Paw = styled.span`
   font-size: 14px;
-  text-shadow: none;
+  font-weight: normal;
 `;
 
 const Controls = styled.div`

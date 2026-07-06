@@ -1,11 +1,19 @@
-/* Zpix（最像素，开源像素字体）：单文件覆盖 GB2312+GBK 全部常用汉字 + 日韩 + 拉丁，
-   彻底解决之前 Ark Pixel 部分汉字缺字回退的问题。
-   Zpix 原生尺寸为 12px（锐利档 = 12 / 24 / 36…），本项目沿用现有字号体系
-   （10/12/16/20/24/32），非 12 整数倍档位会有轻微抗锯齿发虚，属可接受取舍。
-   缺失时回退到 --fallback-pixel 字体栈。 */
+/* GenJyuuGothic（源柔ゴシック，基于思源黑体的免费圆体，SIL OFL 1.1）：覆盖中日韩 + 拉丁。
+   Zpix 商用需购买授权，暂时下线（字体文件保留在 /fonts 待授权后启用）。
+   非像素字体，无原生尺寸档位限制，正常抗锯齿渲染。
+   Normal / Bold 双字重均为原生文件，避免浏览器合成伪粗体。
+   缺失时回退到 --fallback-ui 字体栈。 */
 @font-face {
-    font-family: "Zpix";
-    src: url("/fonts/zpix.ttf") format("truetype");
+    font-family: "GenJyuuGothic";
+    src: url("/fonts/GenJyuuGothic-Normal-2.ttf") format("truetype");
+    font-weight: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "GenJyuuGothic";
+    src: url("/fonts/GenJyuuGothic-Bold.ttf") format("truetype");
+    font-weight: bold;
     font-display: swap;
 }
 
@@ -17,22 +25,21 @@
     --border-w: 2px;
 
     /* 字体失效时的回退栈 */
-    --fallback-pixel: "Press Start 2P", ui-monospace, "Cascadia Mono", Consolas,
-    monospace;
+    --fallback-ui: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
 
-    /* 字号 token：用 CSS `font` 简写把「字号/行高 + 对应原生字体族」打包。
-       组件用 `font: var(--text-md)` 一句即可，既定字号又保证锐利不糊。
-       xs=10 sm=12 md=16(默认) lg=20(=10×2) xl=24(=12×2) 2xl=32(=16×2)。 */
-    --text-xs: 10px/1.8 "Zpix", var(--fallback-pixel);
-    --text-sm: 12px/1.6 "Zpix", var(--fallback-pixel);
-    --text-md: 16px/1.5 "Zpix", var(--fallback-pixel);
-    --text-lg: 20px/1.4 "Zpix", var(--fallback-pixel);
-    --text-xl: 24px/1.3 "Zpix", var(--fallback-pixel);
-    --text-2xl: 32px/1.25 "Zpix", var(--fallback-pixel);
+    /* 字号 token：用 CSS `font` 简写把「字号/行高 + 对应字体族」打包。
+       组件用 `font: var(--text-md)` 一句即可。
+       xs=10 sm=12 md=16(默认) lg=20 xl=24 2xl=32。 */
+    --text-xs: 10px/1.8 "GenJyuuGothic", var(--fallback-ui);
+    --text-sm: 12px/1.6 "GenJyuuGothic", var(--fallback-ui);
+    --text-md: 16px/1.5 "GenJyuuGothic", var(--fallback-ui);
+    --text-lg: 20px/1.4 "GenJyuuGothic", var(--fallback-ui);
+    --text-xl: 24px/1.3 "GenJyuuGothic", var(--fallback-ui);
+    --text-2xl: 32px/1.25 "GenJyuuGothic", var(--fallback-ui);
 
     /* 仅需字体族（不定字号）时用 */
-    --font-pixel: "Zpix", var(--fallback-pixel);
-    --font-ui: "Zpix", system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --font-pixel: "GenJyuuGothic", var(--fallback-ui);
+    --font-ui: "GenJyuuGothic", var(--fallback-ui);
 }
 
 * {
