@@ -68,6 +68,12 @@ img {
     image-rendering: pixelated;
 }
 
+/* 托盘右键菜单窗口（label=tray-menu）：透明底，让像素弹层直接悬浮在桌面上 */
+body.tray-menu-window {
+    background: transparent;
+    transition: none;
+}
+
 /* ===== 全局兜底滚动条（WebView2/Chromium）=====
    主内容区用组件 PixelScrollArea（覆盖式、不占布局）；这里只给其余小滚动区
    （如 PixelSelect 下拉弹层）一个统一的瘦身像素风：方角、无描边、仅 hover 高亮变青。

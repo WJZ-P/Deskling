@@ -1,8 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::{
-    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
 };
 
 #[tauri::command]
@@ -19,31 +18,59 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// 创建系统托盘：左键单击唤回主窗口，右键弹出「显示主界面 / 退出」菜单。
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Deskling", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+fn hide_tray_menu(app: &AppHandle) {
+    if let Some(menu) = app.get_webview_window("tray-menu") {
+        let _ = menu.hide();
+    }
+}
 
+/// 在鼠标位置弹出自绘像素托盘菜单窗（替代系统原生菜单）。
+/// 菜单窗左下角锚在光标上：托盘在屏幕右下角，菜单向左上展开，天然不越界；
+/// clamp 到 (0,0) 兜底任务栏在顶部/左侧的布局。
+fn show_tray_menu(app: &AppHandle, cursor: PhysicalPosition<f64>) {
+    if let Some(menu) = app.get_webview_window("tray-menu") {
+        // 前端挂载后会按内容自适应窗口尺寸，这里读当前实际尺寸来定位
+        let size = menu.outer_size().unwrap_or(PhysicalSize::new(200, 110));
+        let x = cursor.x.max(0.0);
+        let y = (cursor.y - size.height as f64).max(0.0);
+        let _ = menu.set_position(PhysicalPosition::new(x, y));
+        let _ = menu.show();
+        // 聚焦后由前端「失焦即隐藏」实现点击外部关闭（与原生菜单手感一致）
+        let _ = menu.set_focus();
+    }
+}
+
+/// 托盘菜单项：显示主界面（先收起菜单窗再唤主窗）
+#[tauri::command]
+fn tray_show_main(app: AppHandle) {
+    hide_tray_menu(&app);
+    show_main_window(&app);
+}
+
+/// 托盘菜单项：真正退出应用
+#[tauri::command]
+fn tray_quit(app: AppHandle) {
+    app.exit(0);
+}
+
+/// 创建系统托盘：左键单击唤回主窗口，右键弹出自绘像素菜单（tray-menu 窗口）。
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().expect("app icon missing").clone())
         .tooltip("Deskling")
-        .menu(&menu)
-        // 左键留给「唤回窗口」，菜单只在右键弹出
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
-                button: MouseButton::Left,
+                button,
                 button_state: MouseButtonState::Up,
+                position,
                 ..
             } = event
             {
-                show_main_window(tray.app_handle());
+                match button {
+                    MouseButton::Left => show_main_window(tray.app_handle()),
+                    MouseButton::Right => show_tray_menu(tray.app_handle(), position),
+                    _ => {}
+                }
             }
         })
         .build(app)?;
@@ -66,7 +93,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, tray_show_main, tray_quit])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -12,10 +12,26 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "deskling",
         "width": 800,
         "height": 600,
-        "decorations": false 
+        "decorations": false
+      },
+      {
+        "label": "tray-menu",
+        "title": "tray-menu",
+        "url": "index.html",
+        "width": 200,
+        "height": 110,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false
       }
     ],
     "security": {
