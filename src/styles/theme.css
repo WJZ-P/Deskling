@@ -68,8 +68,8 @@ img {
     image-rendering: pixelated;
 }
 
-/* 托盘右键菜单窗口（label=tray-menu）：透明底，让像素弹层直接悬浮在桌面上 */
-body.tray-menu-window {
+/* 透明窗口（桌宠 / 托盘菜单等非主窗口）：透明底，让像素内容直接悬浮在桌面上 */
+body.transparent-window {
     background: transparent;
     transition: none;
 }

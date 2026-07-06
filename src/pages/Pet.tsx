@@ -1,4 +1,5 @@
 import { styled } from "@linaria/react";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
 import {
   Page,
@@ -73,7 +74,7 @@ function Pet() {
         </StatGrid>
 
         <Actions>
-          <PixelButton>召唤到桌面</PixelButton>
+          <PixelButton onClick={() => void invoke("pet_summon")}>召唤到桌面</PixelButton>
           <PixelButton variant="primary">开始对话</PixelButton>
         </Actions>
       </PixelSection>

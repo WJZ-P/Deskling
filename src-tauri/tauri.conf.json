@@ -19,6 +19,20 @@
         "decorations": false
       },
       {
+        "label": "pet",
+        "title": "Deskling Pet",
+        "url": "index.html",
+        "width": 240,
+        "height": 240,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
         "label": "tray-menu",
         "title": "tray-menu",
         "url": "index.html",

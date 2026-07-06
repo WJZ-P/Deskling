@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { TrayMenu } from "./windows/TrayMenu";
+import { PetWindow } from "./windows/PetWindow";
 import { initSettings } from "./settings";
 import { applyTheme } from "./styles/theme";
 import "./styles/theme.css";
@@ -21,12 +22,16 @@ async function bootstrap() {
   const settings = await initSettings();
   applyTheme(settings.theme);
 
-  // 同一份前端 bundle 服务多个窗口：按 label 分流（tray-menu = 托盘右键菜单）
-  const isTrayMenu = windowLabel() === "tray-menu";
-  if (isTrayMenu) document.body.classList.add("tray-menu-window");
+  // 同一份前端 bundle 服务多个窗口：按 label 分流
+  // main = 主界面 · pet = 桌宠 · tray-menu = 托盘右键菜单
+  const label = windowLabel();
+  const content =
+    label === "tray-menu" ? <TrayMenu /> : label === "pet" ? <PetWindow /> : <App />;
+  // 非主窗口都是透明底：像素内容直接悬浮在桌面上
+  if (label !== "main") document.body.classList.add("transparent-window");
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-    <React.StrictMode>{isTrayMenu ? <TrayMenu /> : <App />}</React.StrictMode>,
+    <React.StrictMode>{content}</React.StrictMode>,
   );
 }
 

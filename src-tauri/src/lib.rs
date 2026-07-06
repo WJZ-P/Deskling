@@ -53,6 +53,15 @@ fn tray_quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// 召唤桌宠窗口到桌面（Pet 页「召唤到桌面」按钮 / 后续托盘入口共用）
+#[tauri::command]
+fn pet_summon(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("pet") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
 /// 创建系统托盘：左键单击唤回主窗口，右键弹出自绘像素菜单（tray-menu 窗口）。
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     TrayIconBuilder::with_id("main-tray")
@@ -93,7 +102,12 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![greet, tray_show_main, tray_quit])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            tray_show_main,
+            tray_quit,
+            pet_summon
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

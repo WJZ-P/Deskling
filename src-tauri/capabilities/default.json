@@ -4,6 +4,7 @@
   "description": "Capability for the main window and the custom tray menu window",
   "windows": [
     "main",
+    "pet",
     "tray-menu"
   ],
   "permissions": [
