@@ -95,8 +95,7 @@ const Title = styled.div`
   font: ${t.textLg};
   letter-spacing: 1px;
   color: ${t.colorText};
-  /* 像素字体加粗：整数 text-shadow 横向 +1px 描粗 */
-  text-shadow: 1px 0 0 currentColor;
+  font-weight: bold;
 
   &[data-variant="primary"] {
     color: ${t.colorTextOnBtnAccent};

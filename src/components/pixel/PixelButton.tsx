@@ -103,8 +103,6 @@ const Label = styled.span`
   padding: 8px 18px;
   font: ${t.textMd};
   letter-spacing: 1px;
-  /* 像素字体加粗：整数 text-shadow 横向 +1px 描粗，笔画由 1px 变 2px，锐利不发虚。
-     不用 font-weight（Zpix 只有 Regular，会触发糊掉的伪粗体）。
-     想更粗可加四向：0 1px currentColor, 1px 1px currentColor；不想粗则删掉本行。 */
-  text-shadow: 1px 0 0 currentColor;
+  /* 原生 Bold 字重（@font-face 已注册），非合成粗体 */
+  font-weight: bold;
 `;

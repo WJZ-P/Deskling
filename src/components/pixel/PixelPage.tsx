@@ -39,14 +39,13 @@ export const PixelPageHeader = styled.header`
   gap: ${t.unit};
 `;
 
-/** 页标题：特大号 + 强调青 + 像素字体描粗 */
+/** 页标题：特大号 + 强调青 + 加粗 */
 export const PixelPageTitle = styled.h1`
   margin: 0;
   font: ${t.textXl};
   letter-spacing: 2px;
   color: ${t.colorAccent};
-  /* 像素字体加粗：整数 text-shadow 横向 +1px 描粗 */
-  text-shadow: 1px 0 0 currentColor;
+  font-weight: bold;
 `;
 
 /** 页副标题：小号弱化文字 */
@@ -56,11 +55,11 @@ export const PixelPageSubtitle = styled.p`
   color: ${t.colorTextMuted};
 `;
 
-/** 分区小标题：中号 + 像素字体描粗 */
+/** 分区小标题：中号 + 加粗 */
 export const PixelPanelTitle = styled.h2`
   margin: 0;
   font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorText};
-  text-shadow: 1px 0 0 currentColor;
+  font-weight: bold;
 `;

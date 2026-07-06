@@ -299,6 +299,6 @@ const Label = styled.span`
   letter-spacing: 1px;
   white-space: nowrap;
   overflow: hidden;
-  /* 像素字体描粗，和标题/按钮一致 */
-  text-shadow: 1px 0 0 currentColor;
+  /* 加粗，和标题/按钮一致 */
+  font-weight: bold;
 `;

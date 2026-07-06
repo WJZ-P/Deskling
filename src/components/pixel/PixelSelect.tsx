@@ -329,11 +329,11 @@ const TriggerText = styled.span`
   text-overflow: ellipsis;
   font: ${t.textMd};
   letter-spacing: 1px;
-  text-shadow: 1px 0 0 currentColor;
+  font-weight: bold;
 
   &[data-placeholder] {
     color: ${t.colorTextMuted};
-    text-shadow: none;
+    font-weight: normal;
   }
 `;
 
@@ -414,8 +414,7 @@ const OptionRow = styled.div`
   background: transparent;
   transition:
     background-color 0.16s ease,
-    color 0.16s ease,
-    text-shadow 0.16s ease;
+    color 0.16s ease;
 
   &[data-active] {
     background-color: ${t.colorAccentSoft};
@@ -423,7 +422,7 @@ const OptionRow = styled.div`
 
   &[data-selected] {
     color: ${t.colorTextOnBtn};
-    text-shadow: 1px 0 0 currentColor;
+    font-weight: bold;
   }
 
   &[data-disabled] {
