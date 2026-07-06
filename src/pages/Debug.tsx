@@ -29,6 +29,10 @@ import { PX } from "../components/pixel/palettes";
 /**
  * 组件陈列室：逐个展示 pixel 组件库，每个组件单独一个 PixelSection 方便验收。
  * 全程只用 pixel 组件（不含任何旧 ui.tsx 组件）。
+ *
+ * 性能约定：交互 demo 的 state 一律「下放」到各自的小组件里（ProgressDemo /
+ * InputDemo / SelectDemo），不要提升到页面顶层 —— 否则点一下按钮整个陈列室
+ * 重渲染，几十个 PixelFrame 重建几万个 SVG rect 虚拟 DOM，会整体卡一下喵。
  */
 
 const MODEL_OPTIONS = [
@@ -38,13 +42,82 @@ const MODEL_OPTIONS = [
   { value: "soon", label: "自定义模型（敬请期待）", disabled: true },
 ];
 
-function DebugPage() {
+/** 进度条 demo：state 只在本节内，点 ±10 不波及页面其他分区 */
+function ProgressDemo() {
   const [progress, setProgress] = useState(60);
+  return (
+    <PixelSection title="进度条 PixelProgress" trailing={<PixelTag>{progress}%</PixelTag>}>
+      <PixelSettingDesc>青色填充 + 斜向抖动条纹，凹槽底 + 凸起填充块。</PixelSettingDesc>
+      <PixelProgress value={progress} />
+      <Row>
+        <PixelButton onClick={() => setProgress((p) => Math.max(0, p - 10))}>− 10</PixelButton>
+        <PixelButton variant="primary" onClick={() => setProgress((p) => Math.min(100, p + 10))}>
+          + 10
+        </PixelButton>
+      </Row>
+      <PixelProgress value={30} />
+      <PixelProgress value={85} />
+    </PixelSection>
+  );
+}
+
+/** 输入框 demo：受控输入的 state 同样只在本节内，打字不重渲染整页 */
+function InputDemo() {
   const [petName, setPetName] = useState("");
   const [search, setSearch] = useState("");
+  return (
+    <PixelSection title="输入框 PixelInput">
+      <PixelSettingDesc>
+        复用按钮的 PixelSurface 弹簧引擎，聚焦时描边逐像素点亮、低噪动起来。上浮透明原生 input 负责输入/输入法。
+      </PixelSettingDesc>
+      <FieldGrid>
+        <PixelInput
+          variant="low"
+          placeholder="给桌宠起个名字…"
+          value={petName}
+          onChange={(e) => setPetName(e.target.value)}
+        />
+        <PixelInput
+          variant="normal"
+          leading="🔍"
+          placeholder="搜索…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <PixelInput variant="primary" placeholder="强调输入框" />
+        <PixelInput variant="low" placeholder="禁用输入框" disabled />
+      </FieldGrid>
+    </PixelSection>
+  );
+}
+
+/** 下拉选择 demo */
+function SelectDemo() {
   const [model, setModel] = useState("gpt");
   const [voice, setVoice] = useState("");
+  return (
+    <PixelSection title="下拉选择 PixelSelect">
+      <PixelSettingDesc>
+        全自定义像素弹层（非原生 select），选项列表也是像素风，支持键盘 ↑↓/Enter/Esc 与点击外部关闭。
+      </PixelSettingDesc>
+      <FieldGrid>
+        <PixelSelect options={MODEL_OPTIONS} value={model} onChange={setModel} variant="normal" />
+        <PixelSelect
+          options={MODEL_OPTIONS}
+          value={voice}
+          onChange={setVoice}
+          placeholder="选择声音…"
+          variant="low"
+        />
+        <PixelSelect options={MODEL_OPTIONS} value={model} onChange={setModel} variant="primary" />
+        <PixelSelect options={MODEL_OPTIONS} placeholder="禁用下拉" disabled />
+      </FieldGrid>
+      <PixelSettingDesc>当前选择：模型 = {model || "（未选）"}，声音 = {voice || "（未选）"}</PixelSettingDesc>
+    </PixelSection>
+  );
+}
 
+function DebugPage() {
   return (
     <PixelPage>
       <PixelPageHeader>
@@ -66,18 +139,7 @@ function DebugPage() {
       </PixelSection>
 
       {/* ---------- PixelProgress ---------- */}
-      <PixelSection title="进度条 PixelProgress" trailing={<PixelTag>{progress}%</PixelTag>}>
-        <PixelSettingDesc>青色填充 + 斜向抖动条纹，凹槽底 + 凸起填充块。</PixelSettingDesc>
-        <PixelProgress value={progress} />
-        <Row>
-          <PixelButton onClick={() => setProgress((p) => Math.max(0, p - 10))}>− 10</PixelButton>
-          <PixelButton variant="primary" onClick={() => setProgress((p) => Math.min(100, p + 10))}>
-            + 10
-          </PixelButton>
-        </Row>
-        <PixelProgress value={30} />
-        <PixelProgress value={85} />
-      </PixelSection>
+      <ProgressDemo />
 
       {/* ---------- PixelCard ---------- */}
       <PixelSection title="卡片 PixelCard">
@@ -138,48 +200,10 @@ function DebugPage() {
       </PixelSection>
 
       {/* ---------- PixelInput ---------- */}
-      <PixelSection title="输入框 PixelInput">
-        <PixelSettingDesc>
-          复用按钮的 PixelSurface 弹簧引擎，聚焦时描边逐像素点亮、低噪动起来。上浮透明原生 input 负责输入/输入法。
-        </PixelSettingDesc>
-        <FieldGrid>
-          <PixelInput
-            variant="low"
-            placeholder="给桌宠起个名字…"
-            value={petName}
-            onChange={(e) => setPetName(e.target.value)}
-          />
-          <PixelInput
-            variant="normal"
-            leading="🔍"
-            placeholder="搜索…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <PixelInput variant="primary" placeholder="强调输入框" />
-          <PixelInput variant="low" placeholder="禁用输入框" disabled />
-        </FieldGrid>
-      </PixelSection>
+      <InputDemo />
 
       {/* ---------- PixelSelect ---------- */}
-      <PixelSection title="下拉选择 PixelSelect">
-        <PixelSettingDesc>
-          全自定义像素弹层（非原生 select），选项列表也是像素风，支持键盘 ↑↓/Enter/Esc 与点击外部关闭。
-        </PixelSettingDesc>
-        <FieldGrid>
-          <PixelSelect options={MODEL_OPTIONS} value={model} onChange={setModel} variant="normal" />
-          <PixelSelect
-            options={MODEL_OPTIONS}
-            value={voice}
-            onChange={setVoice}
-            placeholder="选择声音…"
-            variant="low"
-          />
-          <PixelSelect options={MODEL_OPTIONS} value={model} onChange={setModel} variant="primary" />
-          <PixelSelect options={MODEL_OPTIONS} placeholder="禁用下拉" disabled />
-        </FieldGrid>
-        <PixelSettingDesc>当前选择：模型 = {model || "（未选）"}，声音 = {voice || "（未选）"}</PixelSettingDesc>
-      </PixelSection>
+      <SelectDemo />
 
       {/* ---------- PixelTag / PixelSoonTag ---------- */}
       <PixelSection title="标签 PixelTag / 占位 PixelSoonTag">

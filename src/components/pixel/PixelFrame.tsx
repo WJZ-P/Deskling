@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useId,
   useMemo,
@@ -110,7 +111,12 @@ function vnoise(seed: number, x: number): number {
   return a + (b - a) * u;
 }
 
-export function PixelFrame({
+/**
+ * memo：PixelFrame 无 children、props 多为模块级常量（PX.* 调色板等），
+ * 父级重渲染时 props 不变即整个跳过 —— 页面级 state 变化不再触发
+ * 全部像素帧重建几万个 <rect> 虚拟 DOM（Debug 陈列室点击卡顿的主因）。
+ */
+export const PixelFrame = memo(function PixelFrame({
   palette,
   variant = "raised",
   pixel = 3,
@@ -393,4 +399,4 @@ export function PixelFrame({
       )}
     </svg>
   );
-}
+});
