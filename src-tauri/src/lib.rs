@@ -4,6 +4,8 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
 };
 
+mod provider;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -149,7 +151,8 @@ pub fn run() {
             pet_toggle,
             chat_toggle,
             pet_visible,
-            chat_visible
+            chat_visible,
+            provider::provider_test
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import {
   PixelPage,
   PixelPageHeader,
@@ -16,7 +17,17 @@ import {
 } from "../components/pixel/PixelSettingRow";
 import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSelect";
 import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
+import { ProviderSettings } from "../components/ProviderSettings";
 import type { ThemeMode } from "../styles/theme";
+import type { ProtocolId, ProviderProfile } from "../settings";
+import {
+  getProfiles,
+  getSetting,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  setActiveProvider,
+} from "../settings";
 
 interface SettingsProps {
   theme: ThemeMode;
@@ -33,6 +44,47 @@ const BACKDROP_OPTIONS: PixelSelectOption[] = BACKDROP_STYLES.map((s) => ({
 function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
   const isLight = theme === "light";
   const currentDesc = BACKDROP_STYLES.find((s) => s.id === backdropStyle)?.desc ?? "";
+
+  // Provider 配置：本地镜像 settings 缓存，改动即落盘 + 刷新 UI
+  const [profiles, setProfiles] = useState<ProviderProfile[]>(() => getProfiles());
+  const [activeId, setActiveId] = useState<string | null>(() => getSetting("activeProviderId"));
+
+  const refresh = useCallback(() => {
+    setProfiles([...getProfiles()]);
+    setActiveId(getSetting("activeProviderId"));
+  }, []);
+
+  const handleCreate = useCallback(
+    async (protocol: ProtocolId) => {
+      await createProfile(protocol);
+      refresh();
+    },
+    [refresh],
+  );
+
+  const handleUpdate = useCallback(
+    async (id: string, patch: Partial<Omit<ProviderProfile, "id">>) => {
+      await updateProfile(id, patch);
+      refresh();
+    },
+    [refresh],
+  );
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await deleteProfile(id);
+      refresh();
+    },
+    [refresh],
+  );
+
+  const handleSelect = useCallback(
+    async (id: string) => {
+      await setActiveProvider(id);
+      refresh();
+    },
+    [refresh],
+  );
 
   return (
     <PixelPage>
@@ -70,15 +122,19 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
         </PixelSettingList>
       </PixelSection>
 
-      <PixelSection title="模型与声音">
+      <PixelSection title="AI 模型">
+        <ProviderSettings
+          profiles={profiles}
+          activeId={activeId}
+          onCreate={handleCreate}
+          onUpdate={handleUpdate}
+          onDelete={handleDelete}
+          onSelect={handleSelect}
+        />
+      </PixelSection>
+
+      <PixelSection title="声音">
         <PixelSettingList>
-          <PixelSettingRow>
-            <PixelSettingInfo>
-              <PixelSettingLabel>AI 模型</PixelSettingLabel>
-              <PixelSettingDesc>接入自定义对话模型</PixelSettingDesc>
-            </PixelSettingInfo>
-            <PixelSoonTag />
-          </PixelSettingRow>
           <PixelSettingRow>
             <PixelSettingInfo>
               <PixelSettingLabel>语音</PixelSettingLabel>
