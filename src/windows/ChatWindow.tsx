@@ -7,6 +7,7 @@ import Titlebar from "../components/pixel/Titlebar";
 import { PixelFrame } from "../components/pixel/PixelFrame";
 import { WINDOW_FRAME } from "../components/pixel/palettes";
 import { HistorySidebar } from "../chat/components/HistorySidebar";
+import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { MOCK_CONVERSATIONS } from "../chat/mockData";
@@ -130,25 +131,29 @@ export function ChatWindow() {
           theme={theme}
         />
         <Main>
-          {active ? (
-            <>
-              <ConvHeader>
-                <ConvTitle>{active.title}</ConvTitle>
-                <ConvMeta>
-                  {active.messages.length} 条消息 · 可操作整台电脑
-                </ConvMeta>
-              </ConvHeader>
-              <ListArea>
-                <MessageList messages={active.messages} typing={typing} />
-              </ListArea>
-              <ChatComposer onSend={handleSend} disabled={typing} />
-            </>
-          ) : (
-            <NoConv>
-              <NoConvFace>(=^･ω･^=)</NoConvFace>
-              <NoConvText>选一段历史对话，或者新建一个开始聊天喵～</NoConvText>
-            </NoConv>
-          )}
+          {/* 对话区专属像素背景：白底噪+蓝色游动 + 点阵 + 蓝图十字 + 柔光 */}
+          <ChatBackdrop theme={theme} />
+          <MainInner>
+            {active ? (
+              <>
+                <ConvHeader>
+                  <ConvTitle>{active.title}</ConvTitle>
+                  <ConvMeta>
+                    {active.messages.length} 条消息 · 可操作整台电脑
+                  </ConvMeta>
+                </ConvHeader>
+                <ListArea>
+                  <MessageList messages={active.messages} typing={typing} />
+                </ListArea>
+                <ChatComposer onSend={handleSend} disabled={typing} />
+              </>
+            ) : (
+              <NoConv>
+                <NoConvFace>(=^･ω･^=)</NoConvFace>
+                <NoConvText>选一段历史对话，或者新建一个开始聊天喵～</NoConvText>
+              </NoConv>
+            )}
+          </MainInner>
         </Main>
       </Body>
 
@@ -190,7 +195,18 @@ const Main = styled.main`
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: ${t.colorBg};
+  overflow: hidden;
+  /* 背景交给 ChatBackdrop（绝对铺底），Main 自身透明 */
+`;
+
+/* 内容层：浮在 ChatBackdrop 之上，撑满 Main 并沿用其 flex 纵向布局 */
+const MainInner = styled.div`
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 `;
 
 const ConvHeader = styled.header`
