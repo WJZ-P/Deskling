@@ -1,0 +1,171 @@
+import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { styled } from "@linaria/react";
+import { t } from "../../styles/theme";
+import { PixelFrame } from "./PixelFrame";
+import { PixelButton } from "./PixelButton";
+import { PRIORITY_PAL } from "./palettes";
+
+/**
+ * 像素风浮窗（模态对话框）。全 pixel：
+ *  - 遮罩：半透明黑，点击关闭；淡入动画；
+ *  - 面板：PixelFrame（raised + 低噪 + 硬投影）铺底，内容浮在其上；
+ *    起手带「上浮 + 微缩放」入场动画（同 PixelSelect 弹层手感）；
+ *  - 头部：标题 + 右上像素关闭按钮（✕）；底部可选操作区（footer 插槽）；
+ *  - Esc 关闭、body 滚动锁定、Portal 挂到 body（避开祖先层叠/裁剪）。
+ *
+ * 纯壳组件：开合由父级 open 控制，内容/操作按钮由 children/footer 传入。
+ */
+
+// ---- 顶层可调常量 ----
+const PANEL_PIXEL = 4; // 面板像素大小
+const PANEL_RADIUS = 3; // 像素切角
+const PANEL_NOISE = 0.05; // 面板静态低噪
+const PANEL_ELEV = 6; // 硬投影高度（浮起感）
+const PANEL_MAX_W = 460; // 面板最大宽度 px
+
+interface PixelModalProps {
+  open: boolean;
+  title?: ReactNode;
+  onClose: () => void;
+  children?: ReactNode;
+  /** 底部操作区（如取消/确定按钮组） */
+  footer?: ReactNode;
+  /** 面板宽度（px），默认 PANEL_MAX_W */
+  width?: number;
+}
+
+export function PixelModal({ open, title, onClose, children, footer, width }: PixelModalProps) {
+  // Esc 关闭 + 锁定 body 滚动（仅 open 时挂）
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <Overlay
+      onPointerDown={(e) => {
+        // 只在点到遮罩本身（非面板内部）时关闭
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <Panel role="dialog" aria-modal="true" style={{ width: width ?? PANEL_MAX_W }}>
+        <PixelFrame
+          palette={PRIORITY_PAL.low}
+          variant="raised"
+          pixel={PANEL_PIXEL}
+          radius={PANEL_RADIUS}
+          noise={PANEL_NOISE}
+          noiseGranularity={2}
+          elevation={PANEL_ELEV}
+        />
+        <Inner>
+          <Head>
+            <Title>{title}</Title>
+            <PixelButton compact variant="low" onClick={onClose} aria-label="关闭">
+              ✕
+            </PixelButton>
+          </Head>
+          <Content>{children}</Content>
+          {footer != null && <Footer>{footer}</Footer>}
+        </Inner>
+      </Panel>
+    </Overlay>,
+    document.body,
+  );
+}
+
+const Overlay = styled.div`
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6, 18, 24, 0.42);
+  animation: pmodal-fade 0.16s ease;
+
+  @keyframes pmodal-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+`;
+
+const Panel = styled.div`
+  position: relative;
+  max-width: 100%;
+  transform-origin: center;
+  animation: pmodal-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+
+  @keyframes pmodal-pop {
+    from {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+`;
+
+/* 内容层：浮在 PixelFrame 面板之上 */
+const Inner = styled.div`
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+`;
+
+const Head = styled.header`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+`;
+
+const Title = styled.h2`
+  margin: 0;
+  font: ${t.textMd};
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: ${t.colorText};
+`;
+
+const Content = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+`;
+
+const Footer = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+`;

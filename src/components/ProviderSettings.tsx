@@ -1,211 +1,106 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { styled } from "@linaria/react";
-import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
 import { PixelButton } from "./pixel/PixelButton";
-import { PixelInput } from "./pixel/PixelInput";
-import { PixelSelect, type PixelSelectOption } from "./pixel/PixelSelect";
-import {
-  PROTOCOLS,
-  protocolMeta,
-  type ProtocolId,
-  type ProviderProfile,
-} from "../settings";
+import { ProviderCard } from "./ProviderCard";
+import { ProviderModal } from "./ProviderModal";
+import { blankProfile, type ProviderProfile } from "../settings";
 
 /**
- * AI 模型服务设置：多档位可切换。
- *  - 顶部：档位选择 + 新建；
- *  - 表单：名称 / 协议 / Base URL / API Key / 模型（协议决定默认端点与模型候选）；
- *  - 底部：删除 · 测试连接。
+ * AI 模型服务设置（编排层）：
+ *  - 卡片网格：每个已配置服务一张卡，左键点切换激活，卡上「编辑」开配置浮窗；
+ *  - ＋新建：开一个空白草稿浮窗；
+ *  - 完整配置表单（名称/协议/baseUrl/key/模型 + 测试/删除）都在 ProviderModal 里，
+ *    设置页只留卡片，省面积、更清爽。
  *
- * 纯受控组件：所有档位数据由父级（Settings）持有，增删改通过回调交给
- * settings.ts 的 provider 操作落盘；本组件只管表单交互与「测试连接」的即时反馈。
+ * 纯编排：档位数据由父级（Settings）持有，保存/删除/切换通过回调落盘。
  */
 
 interface ProviderSettingsProps {
   profiles: ProviderProfile[];
   activeId: string | null;
-  onCreate: (protocol: ProtocolId) => void;
-  onUpdate: (id: string, patch: Partial<Omit<ProviderProfile, "id">>) => void;
+  onSave: (profile: ProviderProfile) => void;
   onDelete: (id: string) => void;
   onSelect: (id: string) => void;
 }
 
-const PROTOCOL_OPTIONS: PixelSelectOption[] = PROTOCOLS.map((p) => ({
-  value: p.id,
-  label: p.label,
-}));
-
-type TestState = { status: "idle" | "testing" | "ok" | "fail"; msg?: string };
-
 export function ProviderSettings({
   profiles,
   activeId,
-  onCreate,
-  onUpdate,
+  onSave,
   onDelete,
   onSelect,
 }: ProviderSettingsProps) {
-  const active = profiles.find((p) => p.id === activeId) ?? null;
-  const [test, setTest] = useState<TestState>({ status: "idle" });
+  // 浮窗：editing 存当前编辑的草稿（新建=空白档，编辑=已有档的副本）
+  const [editing, setEditing] = useState<ProviderProfile | null>(null);
+  // 是否是「新建」（决定保存时激活它 + 浮窗标题）
+  const [isNew, setIsNew] = useState(false);
 
-  // 档位下拉候选
-  const profileOptions = useMemo<PixelSelectOption[]>(
-    () => profiles.map((p) => ({ value: p.id, label: p.name || "未命名" })),
-    [profiles],
-  );
+  const openCreate = useCallback(() => {
+    setEditing(blankProfile("anthropic"));
+    setIsNew(true);
+  }, []);
 
-  // 当前协议的模型候选（有预设给下拉，无预设留给手填）
-  const modelOptions = useMemo<PixelSelectOption[]>(() => {
-    if (!active) return [];
-    const meta = protocolMeta(active.protocol);
-    const preset = meta.presetModels.map((m) => ({ value: m, label: m }));
-    // 当前 model 不在预设里时，补一个当前值，避免下拉显示空
-    if (active.model && !meta.presetModels.includes(active.model)) {
-      preset.unshift({ value: active.model, label: active.model });
-    }
-    return preset;
-  }, [active]);
+  const openEdit = useCallback((p: ProviderProfile) => {
+    setEditing({ ...p });
+    setIsNew(false);
+  }, []);
 
-  // 切协议：同步把 baseUrl / model 重置为该协议默认（仅当当前是旧协议默认时才覆盖，避免踩掉用户自定义）
-  const handleProtocolChange = useCallback(
-    (nextProto: string) => {
-      if (!active) return;
-      const oldMeta = protocolMeta(active.protocol);
-      const newMeta = protocolMeta(nextProto as ProtocolId);
-      const patch: Partial<ProviderProfile> = { protocol: nextProto as ProtocolId };
-      // baseUrl 仍是旧协议默认（用户没改过）→ 跟随切到新协议默认
-      if (active.baseUrl === oldMeta.defaultBaseUrl) patch.baseUrl = newMeta.defaultBaseUrl;
-      // 模型不在新协议预设里 → 切到新协议首个预设
-      if (!newMeta.presetModels.includes(active.model)) {
-        patch.model = newMeta.presetModels[0] ?? "";
-      }
-      onUpdate(active.id, patch);
-      setTest({ status: "idle" });
+  const close = useCallback(() => setEditing(null), []);
+
+  const handleSave = useCallback(
+    (profile: ProviderProfile) => {
+      onSave(profile);
+      // 新建的档保存后自动激活
+      if (isNew) onSelect(profile.id);
+      setEditing(null);
     },
-    [active, onUpdate],
+    [onSave, onSelect, isNew],
   );
 
-  const handleTest = useCallback(async () => {
-    if (!active) return;
-    setTest({ status: "testing" });
-    try {
-      // Rust 侧命令：按 profile 发一个最小探测请求，返回 { ok, message }
-      const res = await invoke<{ ok: boolean; message: string }>("provider_test", {
-        profile: active,
-      });
-      setTest({ status: res.ok ? "ok" : "fail", msg: res.message });
-    } catch (err) {
-      setTest({ status: "fail", msg: String(err) });
-    }
-  }, [active]);
+  const handleDelete = useCallback(
+    (id: string) => {
+      onDelete(id);
+      setEditing(null);
+    },
+    [onDelete],
+  );
 
   return (
     <Wrap>
-      {/* 档位选择行 */}
-      <ProfileBar>
-        <BarLabel>当前服务</BarLabel>
-        {profiles.length > 0 ? (
-          <PixelSelect
-            options={profileOptions}
-            value={activeId ?? undefined}
-            onChange={onSelect}
-            variant="normal"
-          />
-        ) : (
-          <Empty>还没有配置任何服务喵</Empty>
-        )}
+      <Bar>
+        <BarLabel>已配置服务</BarLabel>
         <Spacer />
-        <PixelSelect
-          options={PROTOCOL_OPTIONS}
-          value={undefined}
-          placeholder="＋ 新建"
-          onChange={(proto) => onCreate(proto as ProtocolId)}
-          variant="primary"
-        />
-      </ProfileBar>
+        <PixelButton variant="primary" onClick={openCreate}>
+          ＋ 新建
+        </PixelButton>
+      </Bar>
 
-      {active && (
-        <Form>
-          <FieldRow>
-            <FieldLabel>名称</FieldLabel>
-            <PixelInput
-              value={active.name}
-              placeholder="给这个服务起个名字"
-              onChange={(e) => onUpdate(active.id, { name: e.target.value })}
+      {profiles.length > 0 ? (
+        <Grid>
+          {profiles.map((p) => (
+            <ProviderCard
+              key={p.id}
+              profile={p}
+              active={p.id === activeId}
+              onSelect={() => onSelect(p.id)}
+              onEdit={() => openEdit(p)}
+              onDelete={() => onDelete(p.id)}
             />
-          </FieldRow>
-
-          <FieldRow>
-            <FieldLabel>协议</FieldLabel>
-            <PixelSelect
-              options={PROTOCOL_OPTIONS}
-              value={active.protocol}
-              onChange={handleProtocolChange}
-              variant="normal"
-            />
-          </FieldRow>
-
-          <FieldRow>
-            <FieldLabel>Base URL</FieldLabel>
-            <PixelInput
-              value={active.baseUrl}
-              placeholder="https://api.example.com"
-              onChange={(e) => onUpdate(active.id, { baseUrl: e.target.value })}
-            />
-          </FieldRow>
-
-          <FieldRow>
-            <FieldLabel>API Key</FieldLabel>
-            <PixelInput
-              type="password"
-              value={active.apiKey}
-              placeholder="sk-..."
-              autoComplete="off"
-              onChange={(e) => onUpdate(active.id, { apiKey: e.target.value })}
-            />
-          </FieldRow>
-
-          <FieldRow>
-            <FieldLabel>模型</FieldLabel>
-            {modelOptions.length > 0 ? (
-              <PixelSelect
-                options={modelOptions}
-                value={active.model || undefined}
-                onChange={(m) => onUpdate(active.id, { model: m })}
-                variant="normal"
-              />
-            ) : (
-              <PixelInput
-                value={active.model}
-                placeholder="填入模型名，如 gpt-4o"
-                onChange={(e) => onUpdate(active.id, { model: e.target.value })}
-              />
-            )}
-          </FieldRow>
-
-          <Actions>
-            {test.status !== "idle" && (
-              <TestMsg data-status={test.status}>
-                {test.status === "testing" && "测试中…"}
-                {test.status === "ok" && `✓ ${test.msg ?? "连接成功"}`}
-                {test.status === "fail" && `✗ ${test.msg ?? "连接失败"}`}
-              </TestMsg>
-            )}
-            <Spacer />
-            <PixelButton variant="low" onClick={() => onDelete(active.id)}>
-              删除
-            </PixelButton>
-            <PixelButton
-              variant="primary"
-              onClick={handleTest}
-              disabled={test.status === "testing" || !active.apiKey}
-            >
-              测试连接
-            </PixelButton>
-          </Actions>
-        </Form>
+          ))}
+        </Grid>
+      ) : (
+        <Empty>还没有配置任何服务喵，点「＋新建」加一个吧～</Empty>
       )}
+
+      <ProviderModal
+        open={editing != null}
+        isNew={isNew}
+        profile={editing}
+        onClose={close}
+        onSave={handleSave}
+        onDelete={handleDelete}
+      />
     </Wrap>
   );
 }
@@ -213,14 +108,13 @@ export function ProviderSettings({
 const Wrap = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 `;
 
-const ProfileBar = styled.div`
+const Bar = styled.div`
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
 `;
 
 const BarLabel = styled.span`
@@ -230,59 +124,19 @@ const BarLabel = styled.span`
   color: ${t.colorText};
 `;
 
-const Empty = styled.span`
-  font: ${t.textSm};
-  color: ${t.colorTextMuted};
-`;
-
 const Spacer = styled.span`
   flex: 1 1 auto;
 `;
 
-const Form = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-`;
-
-const FieldRow = styled.label`
-  display: flex;
-  align-items: center;
-  gap: 12px;
-
-  /* 让输入控件（PixelInput / PixelSelect）占满标签右侧剩余宽度 */
-  & > *:last-child {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-`;
-
-const FieldLabel = styled.span`
-  flex: 0 0 auto;
-  width: 72px;
+const Empty = styled.div`
+  padding: 16px 12px;
   font: ${t.textSm};
-  letter-spacing: 1px;
   color: ${t.colorTextMuted};
 `;
 
-const Actions = styled.div`
-  display: flex;
-  align-items: center;
+/* 卡片网格：自适应列宽，最少 180px 一列 */
+const Grid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
-  margin-top: 4px;
-`;
-
-const TestMsg = styled.span`
-  font: ${t.textSm};
-  letter-spacing: 0.5px;
-
-  &[data-status="testing"] {
-    color: ${t.colorTextMuted};
-  }
-  &[data-status="ok"] {
-    color: ${t.btnMax};
-  }
-  &[data-status="fail"] {
-    color: ${t.btnClose};
-  }
 `;

@@ -19,12 +19,11 @@ import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSe
 import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { ThemeMode } from "../styles/theme";
-import type { ProtocolId, ProviderProfile } from "../settings";
+import type { ProviderProfile } from "../settings";
 import {
   getProfiles,
   getSetting,
-  createProfile,
-  updateProfile,
+  saveProfile,
   deleteProfile,
   setActiveProvider,
 } from "../settings";
@@ -54,17 +53,9 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     setActiveId(getSetting("activeProviderId"));
   }, []);
 
-  const handleCreate = useCallback(
-    async (protocol: ProtocolId) => {
-      await createProfile(protocol);
-      refresh();
-    },
-    [refresh],
-  );
-
-  const handleUpdate = useCallback(
-    async (id: string, patch: Partial<Omit<ProviderProfile, "id">>) => {
-      await updateProfile(id, patch);
+  const handleSave = useCallback(
+    async (profile: ProviderProfile) => {
+      await saveProfile(profile);
       refresh();
     },
     [refresh],
@@ -126,8 +117,7 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
         <ProviderSettings
           profiles={profiles}
           activeId={activeId}
-          onCreate={handleCreate}
-          onUpdate={handleUpdate}
+          onSave={handleSave}
           onDelete={handleDelete}
           onSelect={handleSelect}
         />

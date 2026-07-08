@@ -50,19 +50,33 @@ function App() {
         />
         <Main>
           <FluidBackdrop theme={theme} style={backdropStyle} />
+          {/* 所有页面开机即全部挂载，切换只切 visibility（不卸载重挂）：
+              各 PixelFrame/PixelSurface 的 SVG 网格、弹簧 cells 只在启动时建一次，
+              之后来回切页零重建 → 不再卡；隐藏页用 visibility:hidden（非 display:none）
+              保留布局尺寸，故 ResizeObserver 开机就测得准、网格不塌成最小值。
+              代价是启动时一次性建完所有网格（稍慢一瞬），换来切换全程丝滑，
+              并附带保留各页滚动位置。 */}
           <Content>
-            {section === "home" && <Home />}
-            {section === "pet" && <Pet />}
-            {section === "settings" && (
+            <PageLayer data-active={section === "home" || undefined}>
+              <Home />
+            </PageLayer>
+            <PageLayer data-active={section === "pet" || undefined}>
+              <Pet />
+            </PageLayer>
+            <PageLayer data-active={section === "settings" || undefined}>
               <Settings
                 theme={theme}
                 onToggleTheme={toggleTheme}
                 backdropStyle={backdropStyle}
                 onChangeBackdrop={changeBackdrop}
               />
-            )}
-            {section === "debug" && <Debug />}
-            {section === "about" && <About />}
+            </PageLayer>
+            <PageLayer data-active={section === "debug" || undefined}>
+              <Debug />
+            </PageLayer>
+            <PageLayer data-active={section === "about" || undefined}>
+              <About />
+            </PageLayer>
           </Content>
         </Main>
       </Body>
@@ -115,4 +129,18 @@ const Content = styled.div`
   position: relative;
   z-index: 1;
   height: 100%;
+`;
+
+/* 页层：所有页面绝对堆叠铺满，靠 visibility 切显隐（非 display，保留尺寸让网格开机测准）。
+   隐藏页 pointer-events:none 不拦事件、visibility:hidden 不可交互也不进 tab 序。 */
+const PageLayer = styled.div`
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+
+  &[data-active] {
+    visibility: visible;
+    pointer-events: auto;
+  }
 `;

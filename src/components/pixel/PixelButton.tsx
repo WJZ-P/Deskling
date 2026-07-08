@@ -12,10 +12,13 @@ const NOISE = 0.1; // 面像素基准随机明暗强度
 interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** 优先级色阶：normal(中间色/默认) · low(白底) · primary(深色) */
   variant?: Priority;
+  /** 紧凑尺寸：更小的内边距/高度，用于图标按钮（如浮窗关闭 ✕） */
+  compact?: boolean;
 }
 
 export function PixelButton({
   variant = "normal",
+  compact = false,
   children,
   disabled,
   onPointerDown,
@@ -67,7 +70,7 @@ export function PixelButton({
         radius={BTN_RADIUS}
         noise={NOISE}
       >
-        <Label>{children}</Label>
+        <Label data-compact={compact || undefined}>{children}</Label>
       </PixelSurface>
     </Btn>
   );
@@ -105,4 +108,11 @@ const Label = styled.span`
   letter-spacing: 1px;
   /* 原生 Bold 字重（@font-face 已注册），非合成粗体 */
   font-weight: bold;
+
+  /* 紧凑：贴合图标的小内边距/高度，用于 ✕ 这类方形图标按钮 */
+  &[data-compact] {
+    min-height: 0;
+    padding: 4px 7px;
+    letter-spacing: 0;
+  }
 `;

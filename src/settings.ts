@@ -175,11 +175,14 @@ export function getActiveProfile(): ProviderProfile | null {
  * 新建一个 provider 档：按协议填入默认 baseUrl / 首个预设模型。
  * 落盘后自动设为当前激活档并返回它。
  */
-export async function createProfile(protocol: ProtocolId): Promise<ProviderProfile> {
+export async function createProfile(
+  protocol: ProtocolId,
+  name?: string,
+): Promise<ProviderProfile> {
   const meta = protocolMeta(protocol);
   const profile: ProviderProfile = {
     id: nextProfileId(),
-    name: meta.label,
+    name: name?.trim() || meta.label,
     protocol,
     baseUrl: meta.defaultBaseUrl,
     apiKey: "",
@@ -189,6 +192,35 @@ export async function createProfile(protocol: ProtocolId): Promise<ProviderProfi
   await setSetting("providerProfiles", next);
   await setSetting("activeProviderId", profile.id);
   return profile;
+}
+
+/**
+ * 生成一个「未保存草稿」profile（不落盘、不入列表）：按协议填默认 baseUrl / 首个预设模型。
+ * 用于浮窗「新建」——在草稿上编辑，点保存才 saveProfile 落盘。
+ */
+export function blankProfile(protocol: ProtocolId): ProviderProfile {
+  const meta = protocolMeta(protocol);
+  return {
+    id: nextProfileId(),
+    name: meta.label,
+    protocol,
+    baseUrl: meta.defaultBaseUrl,
+    apiKey: "",
+    model: meta.presetModels[0] ?? "",
+  };
+}
+
+/**
+ * 保存一个完整 profile（按 id upsert）：已存在则整体替换，不存在则追加。
+ * 落盘后设为当前激活档。用于浮窗保存（新建/编辑统一走这条）。
+ */
+export async function saveProfile(profile: ProviderProfile): Promise<void> {
+  const exists = cache.providerProfiles.some((p) => p.id === profile.id);
+  const next = exists
+    ? cache.providerProfiles.map((p) => (p.id === profile.id ? profile : p))
+    : [...cache.providerProfiles, profile];
+  await setSetting("providerProfiles", next);
+  await setSetting("activeProviderId", profile.id);
 }
 
 /** 局部更新某个 profile（合并 patch），落盘 */

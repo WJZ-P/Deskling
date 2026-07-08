@@ -298,7 +298,28 @@ export const PixelFrame = memo(function PixelFrame({
   // sweepPalette 存在时跳过——此时由下面的「扫描状态机」统一接管着色（含噪声），避免两条循环抢写同一批节点。
   useEffect(() => {
     const g = noiseGroupRef.current;
-    if (!g || noise <= 0 || noiseSpeed <= 0 || sweepPalette) return;
+    if (!g || noise <= 0 || sweepPalette) return;
+    const nodes = g.childNodes as unknown as SVGRectElement[];
+
+    // 停机态（noiseSpeed<=0）：主动把每块刷回 seed 决定的静态灰度。
+    // 必须做——否则上一轮动态 RAF 用 setAttribute 写死的残留色（如卡片 active 时的蓝）
+    // 会永久留在 DOM 上：React 的 fill prop 在它自己看来没变（仍是静态初值），不会再 diff 覆盖，
+    // 导致「点一下挪开后低噪冻结成蓝色」。这里重写一遍静态值即清除残留。
+    if (noiseSpeed <= 0) {
+      for (let i = 0; i < noiseBlocks.length; i++) {
+        const b = noiseBlocks[i];
+        const rect = nodes[i];
+        if (rect) {
+          const d = (hash1(b.seed) * 2 - 1) * noise * NOISE_PX;
+          rect.setAttribute(
+            "fill",
+            `rgb(${clampCh(fr + d)},${clampCh(fg + d)},${clampCh(fb + d)})`,
+          );
+        }
+      }
+      return;
+    }
+
     let raf = 0;
     const start = performance.now();
     const step = (now: number) => {

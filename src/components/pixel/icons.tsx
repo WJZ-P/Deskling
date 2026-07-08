@@ -1,0 +1,46 @@
+import type { SVGProps } from "react";
+
+/**
+ * 统一图标库：内联 SVG 组件（不依赖 public 下的独立文件）。
+ *
+ * 全部用 `fill="currentColor"` → 颜色由 CSS `color` 决定，天然跟随主题/态换色。
+ * viewBox 统一 Material 的 `0 -960 960 960`，默认 1em 尺寸（随字号缩放），
+ * 可通过 props（width/height/style）覆盖。新增图标往这里加即可，别再散落成文件。
+ */
+
+type IconProps = SVGProps<SVGSVGElement>;
+
+/** 通用外壳：统一 viewBox / fill / 默认尺寸，收敛重复属性 */
+function Icon({ children, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 -960 960 960"
+      width="1em"
+      height="1em"
+      fill="currentColor"
+      aria-hidden
+      {...rest}
+    >
+      {children}
+    </svg>
+  );
+}
+
+/** 编辑（铅笔） */
+export function EditIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M202.63-202.87h57.24l374.74-374.74-56.76-57-375.22 375.22v56.52Zm-90.76 91v-185.3l527.52-526.76q12.48-11.72 27.7-17.96 15.21-6.24 31.93-6.24 16.48 0 32.2 6.24 15.71 6.24 27.67 18.72l65.28 65.56q12.48 11.72 18.34 27.56 5.86 15.83 5.86 31.79 0 16.72-5.86 32.05-5.86 15.34-18.34 27.82L297.65-111.87H111.87Zm642.87-586.39-56.24-56.48 56.24 56.48Zm-148.89 92.41-28-28.76 56.76 57-28.76-28.24Z" />
+    </Icon>
+  );
+}
+
+/** 删除（垃圾桶 · forever） */
+export function DeleteIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M376.72-296.65 480-399.93l103.28 103.28 60.07-60.07L540.07-460l103.28-103.28-60.07-60.07L480-520.07 376.72-623.35l-60.07 60.07L419.93-460 316.65-356.72l60.07 60.07Zm-99.35 184.78q-37.78 0-64.39-26.61t-26.61-64.39v-514.5h-45.5v-91H354.5v-45.5h250.52v45.5h214.11v91h-45.5v514.5q0 37.78-26.61 64.39t-64.39 26.61H277.37Zm405.26-605.5H277.37v514.5h405.26v-514.5Zm-405.26 0v514.5-514.5Z" />
+    </Icon>
+  );
+}
