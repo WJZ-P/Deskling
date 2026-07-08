@@ -87,13 +87,20 @@ interface PixelFrameProps {
    */
   liveResize?: boolean;
   /**
-   * 启用从两边往中间汇聚的扫描动画：true = 从边缘向中心扫入，false = 从中心向边缘扫出。
-   * 配合 palette 切换使用——palette 变化时，底噪块按「距离边缘远近」交错浮现/消退，
-   * 形成从两边汇聚到中间的视觉效果。用于 ToolCallBlock hover 时的动态激活。
+   * 扫描态的「目标面色」调色（只取 face 用作底噪块的插值终点）。
+   * 传了则启用「颜色状态机」：底噪块的面色在 基准 palette.face ↔ sweepPalette.face
+   * 之间平滑插值，由 sweepActive 驱动方向。结构色（描边/高光/内斜线）不变——
+   * 故不会出现「底色变了但边框还是白线」的违和，也不会整片突变。
    */
-  sweepIn?: boolean;
-  /** 扫描动画总时长（ms），默认 500 */
-  sweepMs?: number;
+  sweepPalette?: PixelPalette;
+  /**
+   * 扫描状态机开关（配合 sweepPalette）：
+   *   true  → 进度朝 1 缓动：底噪块按「距边缘远近」从两端往中间依次染上 sweep 色，
+   *           并就地活起来（value-noise 流动，强度随染色深度渐显）；
+   *   false → 进度朝 0 缓动：从中心往两端依次褪回基准色、噪声停息。
+   * 全程连续插值 + 单一 RAF 状态机：任意时刻切换都从当前进度平滑反向，不跳变。
+   */
+  sweepActive?: boolean;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
@@ -148,8 +155,8 @@ export const PixelFrame = memo(function PixelFrame({
   notch = 0,
   sizeKey,
   liveResize = false,
-  sweepIn,
-  sweepMs = 500,
+  sweepPalette,
+  sweepActive = false,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
   const { w, h } = useElementSize(ref, { sizeKey, liveResize });
@@ -288,9 +295,10 @@ export const PixelFrame = memo(function PixelFrame({
   });
 
   // 动态底噪：noiseSpeed>0 时逐帧按块用 value-noise 缓慢重掷灰度，直接写 rect.fill（不触发 React 重渲染）。
+  // sweepPalette 存在时跳过——此时由下面的「扫描状态机」统一接管着色（含噪声），避免两条循环抢写同一批节点。
   useEffect(() => {
     const g = noiseGroupRef.current;
-    if (!g || noise <= 0 || noiseSpeed <= 0) return;
+    if (!g || noise <= 0 || noiseSpeed <= 0 || sweepPalette) return;
     let raf = 0;
     const start = performance.now();
     const step = (now: number) => {
@@ -312,43 +320,74 @@ export const PixelFrame = memo(function PixelFrame({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb]);
+  }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb, sweepPalette]);
 
-  // 扫描动画：sweepIn 变化时，底噪块按「距边缘远近」交错浮现/消退——
-  //   sweepIn=true  → 边缘先显、中心最后（从两边往中间汇聚）；
-  //   sweepIn=false → 中心先隐、边缘最后（从中心向外扩散退出）。
-  // 用 WAAPI opacity 0↔1 + 按位置错落 delay 实现，不触发 React 重渲染。
-  // 依赖只含 sweepIn：仅在激活/停用时触发一次，不随 noiseBlocks 尺寸变化重复触发。
-  const noiseBlocksRef = useRef(noiseBlocks);
-  noiseBlocksRef.current = noiseBlocks;
-  const colsRef = useRef(cols);
-  colsRef.current = cols;
+  // 扫描状态机：sweepPalette + sweepActive 组合出「从两边往中间汇聚」的颜色过渡。
+  //  - 一个连续进度 prog（0=全rest，1=全sweep色），每帧朝目标(active?1:0)缓动 →
+  //    随时离开都从当前进度平滑回退，不突变、不跳变（真·状态机）。
+  //  - 每块有个按「距边缘远近」定的激活阈值 threshold（边缘≈0，中心≈1）：
+  //    prog 升到超过该阈值时此块才渐入 sweep 色 → 边缘先变、中心最后（汇聚）；
+  //    prog 回落时中心先退、边缘最后（散开）。软阶跃(smoothstep)让每块过渡柔和。
+  //  - 面色在 rest→sweep 之间插值，已激活区叠加动态低噪 → 颜色渐变 + 噪声一体，无突变。
+  //  - palette 本身始终保持 rest（外部不切 palette），故 edge/hi/lo 描边斜线不变色，
+  //    不会冒出违和的白边——颜色变化只发生在铺满面区的噪声块上。
+  const sweepProgRef = useRef(0);
   useEffect(() => {
-    if (sweepIn === undefined) return;
+    if (!sweepPalette || noise <= 0) return;
     const g = noiseGroupRef.current;
-    if (!g || noise <= 0) return;
-    const blocks = noiseBlocksRef.current;
-    const c = colsRef.current;
-    const nodes = g.childNodes as unknown as SVGRectElement[];
-    const halfCols = Math.max(1, (c - 2) / 2);
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i];
-      const node = nodes[i];
-      if (!node) continue;
-      // 0 = 边缘（bx 贴近 1 或 cols-2），1 = 中心
-      const distFromEdge = Math.min(b.x - 1, c - 2 - b.x);
-      const tPos = Math.max(0, Math.min(1, distFromEdge / halfCols));
-      // sweepIn=true：边缘先(delay≈0)、中心后(delay≈sweepMs)；反之亦然
-      const delay = sweepIn ? tPos * sweepMs * 0.75 : (1 - tPos) * sweepMs * 0.75;
-      node.animate(
-        sweepIn ? [{ opacity: "0" }, { opacity: "1" }] : [{ opacity: "1" }, { opacity: "0" }],
-        // fill:"backwards"：延迟期间维持首帧值（sweepIn时不可见，sweepOut时可见），
-        // 动画结束后还原元素自身值（opacity:1）——不让扫出后噪声永久消失。
-        { duration: sweepMs * 0.35, delay, easing: "ease-out", fill: "backwards" },
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sweepIn]);
+    if (!g) return;
+    const [sr, sg, sb] = hexToRgb(sweepPalette.face);
+    const halfCols = Math.max(1, (cols - 2) / 2);
+    const EASE = 4.5; // 进度缓动速度系数（越大越快趋近目标）
+    const BAND = 0.5; // 每块激活过渡带宽度（占 prog 的比例，越大越柔越重叠）
+    const target = sweepActive ? 1 : 0;
+    const nStart = performance.now();
+    let raf = 0;
+    const frame = (now: number) => {
+      const prog =
+        sweepProgRef.current + (target - sweepProgRef.current) * Math.min(1, EASE / 60);
+      sweepProgRef.current = prog;
+      const time = noiseSpeed > 0 ? ((now - nStart) / 1000) * noiseSpeed : 0;
+      const nodes = g.childNodes as unknown as SVGRectElement[];
+      for (let i = 0; i < noiseBlocks.length; i++) {
+        const b = noiseBlocks[i];
+        const node = nodes[i];
+        if (!node) continue;
+        // 距边缘归一：0=边缘（bx 贴 1 或 cols-2），1=中心
+        const distFromEdge = Math.min(b.x - 1, cols - 2 - b.x);
+        const u = Math.max(0, Math.min(1, distFromEdge / halfCols));
+        // 每块激活窗口 [start, start+BAND]，start=u*(1-BAND)：
+        //  边缘(u=0) 窗口 [0,BAND] 最先启动；中心(u=1) 窗口 [1-BAND,1] 最后收尾。
+        //  关键：prog=1 时连中心块也落在窗口末端 → blockP=1 完全覆盖（修中心盖不满）。
+        const start = u * (1 - BAND);
+        const raw = (prog - start) / BAND;
+        const tt = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+        const blockP = tt * tt * (3 - 2 * tt); // smoothstep
+        // 面色 rest→sweep 插值
+        const baseR = fr + (sr - fr) * blockP;
+        const baseG = fg + (sg - fg) * blockP;
+        const baseB = fb + (sb - fb) * blockP;
+        // 噪声：noiseSpeed>0 时用动态 value-noise（激活越深越明显），否则静态
+        let d: number;
+        if (noiseSpeed > 0) {
+          const dyn = (vnoise(b.seed, time + b.phase) - 0.5) * 2;
+          d = dyn * noise * NOISE_PX * (0.4 + 0.6 * blockP);
+        } else {
+          d = (hash1(b.seed) * 2 - 1) * noise * NOISE_PX;
+        }
+        node.setAttribute(
+          "fill",
+          `rgb(${clampCh(baseR + d)},${clampCh(baseG + d)},${clampCh(baseB + d)})`,
+        );
+      }
+      const settled = Math.abs(prog - target) < 0.004;
+      // 停机：进度收敛 且（目标为静止态 或 无动态噪声）——active+噪声时持续跑
+      if (settled && (target === 0 || noiseSpeed <= 0)) return;
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [noiseBlocks, sweepPalette, sweepActive, noiseSpeed, noise, fr, fg, fb, cols]);
 
   return (
     <svg

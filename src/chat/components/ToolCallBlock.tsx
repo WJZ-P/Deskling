@@ -14,9 +14,11 @@ import type { ToolCallSegment } from "../types";
  * hover 或展开时：底色变青蓝、低噪动起来，传达「这一步活了」。
  */
 
-// hover/展开态专用青蓝调色：比按钮 primary 更柔和的青蓝，适合大面积凹槽底
-const ACTIVE_PAL: PixelPalette = {
-  face: "#d4f0f1",
+// hover/展开态的扫描目标面色：柔和青蓝（比按钮 primary 更浅，适合大面积凹槽底）。
+// 只用 face —— palette 本身始终保持 rest（PRIORITY_PAL.low），描边/斜线不变色，
+// 故不会冒出违和白边；颜色变化只发生在铺满面区的噪声块上，由状态机从两边扫向中心。
+const SWEEP_PAL: PixelPalette = {
+  face: "#cdeced",
   edge: "#7dbfc1",
   hi: "#ffffff",
   lo: "#a8dadc",
@@ -45,17 +47,17 @@ export function ToolCallBlock({ seg }: ToolCallBlockProps) {
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
     >
-      {/* 凹槽底：active 时切换到青蓝调色 + 低噪流动 + 边缘→中心扫描激活 */}
+      {/* 凹槽底：palette 始终 rest，sweepPalette+sweepActive 驱动状态机从两边扫向中心 */}
       <PixelFrame
-        palette={active ? ACTIVE_PAL : PRIORITY_PAL.low}
+        palette={PRIORITY_PAL.low}
         variant="sunken"
         pixel={3}
         radius={2}
         noise={0.05}
         noiseGranularity={2}
         noiseSpeed={active ? 0.9 : 0}
-        sweepIn={active}
-        sweepMs={480}
+        sweepPalette={SWEEP_PAL}
+        sweepActive={active}
         liveResize
       />
       <Inner>
