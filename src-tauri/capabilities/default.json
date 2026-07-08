@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and the custom tray menu window",
+  "description": "Capability for the main window, chat window, desktop pet and the custom tray menu window",
   "windows": [
     "main",
+    "chat",
     "pet",
     "tray-menu"
   ],

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
@@ -38,6 +39,32 @@ const STATS = [
 ];
 
 function Pet() {
+  // 桌宠 / 对话窗的可见状态：挂载时向后端查一次，之后每次 toggle 用返回值更新，
+  // 让按钮文案（召唤/收起 · 打开/关闭）跟真实窗口状态一致。
+  const [petShown, setPetShown] = useState(false);
+  const [chatShown, setChatShown] = useState(false);
+
+  useEffect(() => {
+    void invoke<boolean>("pet_visible").then(setPetShown).catch(() => {});
+    void invoke<boolean>("chat_visible").then(setChatShown).catch(() => {});
+  }, []);
+
+  const togglePet = async () => {
+    try {
+      setPetShown(await invoke<boolean>("pet_toggle"));
+    } catch (err) {
+      console.warn("pet_toggle failed:", err);
+    }
+  };
+
+  const toggleChat = async () => {
+    try {
+      setChatShown(await invoke<boolean>("chat_toggle"));
+    } catch (err) {
+      console.warn("chat_toggle failed:", err);
+    }
+  };
+
   return (
     <Page>
       <PageHeader>
@@ -74,8 +101,12 @@ function Pet() {
         </StatGrid>
 
         <Actions>
-          <PixelButton onClick={() => void invoke("pet_summon")}>召唤到桌面</PixelButton>
-          <PixelButton variant="primary">开始对话</PixelButton>
+          <PixelButton onClick={() => void togglePet()}>
+            {petShown ? "从桌面收起" : "召唤到桌面"}
+          </PixelButton>
+          <PixelButton variant="primary" onClick={() => void toggleChat()}>
+            {chatShown ? "关闭对话" : "打开对话"}
+          </PixelButton>
         </Actions>
       </PixelSection>
     </Page>

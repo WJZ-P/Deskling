@@ -15,6 +15,15 @@ import {
 interface TitlebarProps {
   theme: ThemeMode;
   onToggleTheme: () => void;
+  /** 品牌标题右侧的副标题（如「· 对话」）。不传则只显示 Deskling。 */
+  subtitle?: string;
+  /** 是否显示最大化/还原按钮（对话窗等可关掉）。默认 true。 */
+  showMaximize?: boolean;
+  /**
+   * 关闭按钮行为覆盖。不传 = 默认关闭窗口（w.close()）；
+   * 传入则改为执行该回调（如对话窗「关闭=隐藏」，配合外部 toggle 再唤出）。
+   */
+  onClose?: () => void;
 }
 
 // 小图标按钮手感：沿用按钮弹簧，只是更小、投影更浅
@@ -134,7 +143,13 @@ function useIsMaximized(): boolean {
   return maximized;
 }
 
-function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
+function Titlebar({
+  theme,
+  onToggleTheme,
+  subtitle,
+  showMaximize = true,
+  onClose,
+}: TitlebarProps) {
   const maximized = useIsMaximized();
   return (
     <Root>
@@ -152,6 +167,7 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
           <Brand>
             <Paw>🐾</Paw>
             <span>Deskling</span>
+            {subtitle && <Sub>{subtitle}</Sub>}
           </Brand>
 
           <Controls>
@@ -171,19 +187,21 @@ function Titlebar({ theme, onToggleTheme }: TitlebarProps) {
             >
               <WinMinimizeIcon />
             </IconBtn>
-            <IconBtn
-              palette={CONTROL_MAX.pal}
-              iconColor={CONTROL_MAX.icon}
-              title={maximized ? "还原" : "最大化"}
-              onClick={() => runWindow((w) => w.toggleMaximize())}
-            >
-              {maximized ? <WinRestoreIcon /> : <WinMaximizeIcon />}
-            </IconBtn>
+            {showMaximize && (
+              <IconBtn
+                palette={CONTROL_MAX.pal}
+                iconColor={CONTROL_MAX.icon}
+                title={maximized ? "还原" : "最大化"}
+                onClick={() => runWindow((w) => w.toggleMaximize())}
+              >
+                {maximized ? <WinRestoreIcon /> : <WinMaximizeIcon />}
+              </IconBtn>
+            )}
             <IconBtn
               palette={CONTROL_CLOSE.pal}
               iconColor={CONTROL_CLOSE.icon}
               title=""
-              onClick={() => runWindow((w) => w.close())}
+              onClick={onClose ?? (() => runWindow((w) => w.close()))}
             >
               <WinCloseIcon />
             </IconBtn>
@@ -234,6 +252,12 @@ const Brand = styled.div`
 const Paw = styled.span`
   font-size: 14px;
   font-weight: normal;
+`;
+
+const Sub = styled.span`
+  font-weight: normal;
+  color: ${t.colorTextMuted};
+  letter-spacing: 1px;
 `;
 
 const Controls = styled.div`

@@ -46,6 +46,17 @@
         "skipTaskbar": true,
         "resizable": false,
         "focus": false
+      },
+      {
+        "label": "chat",
+        "title": "Deskling · 对话",
+        "url": "index.html",
+        "width": 880,
+        "height": 620,
+        "minWidth": 620,
+        "minHeight": 440,
+        "visible": false,
+        "decorations": false
       }
     ],
     "security": {

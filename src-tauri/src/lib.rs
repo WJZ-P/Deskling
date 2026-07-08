@@ -53,13 +53,53 @@ fn tray_quit(app: AppHandle) {
     app.exit(0);
 }
 
-/// 召唤桌宠窗口到桌面（Pet 页「召唤到桌面」按钮 / 后续托盘入口共用）
-#[tauri::command]
-fn pet_summon(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("pet") {
-        let _ = win.show();
-        let _ = win.set_focus();
+/// 切换某个窗口的显示/隐藏，返回切换后的可见状态（true=现在可见）。
+/// 供桌宠 / 对话窗的 toggle 复用：可见则隐藏，隐藏则显示并聚焦。
+fn toggle_window(app: &AppHandle, label: &str) -> bool {
+    if let Some(win) = app.get_webview_window(label) {
+        // is_visible 失败时保守当作不可见，走「显示」分支
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+            false
+        } else {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+            true
+        }
+    } else {
+        false
     }
+}
+
+/// 查询某窗口当前是否可见（供前端按钮初始化文案 / 状态）。
+fn window_visible(app: &AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// 切换桌宠窗口显示/隐藏（Pet 页按钮 / 后续托盘入口共用）。返回切换后是否可见。
+#[tauri::command]
+fn pet_toggle(app: AppHandle) -> bool {
+    toggle_window(&app, "pet")
+}
+
+/// 切换 AI 对话窗口显示/隐藏。返回切换后是否可见。
+#[tauri::command]
+fn chat_toggle(app: AppHandle) -> bool {
+    toggle_window(&app, "chat")
+}
+
+/// 查询桌宠 / 对话窗口当前可见状态（前端挂载时同步按钮文案用）。
+#[tauri::command]
+fn pet_visible(app: AppHandle) -> bool {
+    window_visible(&app, "pet")
+}
+
+#[tauri::command]
+fn chat_visible(app: AppHandle) -> bool {
+    window_visible(&app, "chat")
 }
 
 /// 创建系统托盘：左键单击唤回主窗口，右键弹出自绘像素菜单（tray-menu 窗口）。
@@ -106,7 +146,10 @@ pub fn run() {
             greet,
             tray_show_main,
             tray_quit,
-            pet_summon
+            pet_toggle,
+            chat_toggle,
+            pet_visible,
+            chat_visible
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
