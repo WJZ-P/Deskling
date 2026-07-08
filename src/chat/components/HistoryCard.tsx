@@ -1,0 +1,182 @@
+import { useState } from "react";
+import { styled } from "@linaria/react";
+import { t } from "../../styles/theme";
+import { PixelFrame, type PixelPalette } from "../../components/pixel/PixelFrame";
+import { PRIORITY_PAL } from "../../components/pixel/palettes";
+
+/**
+ * 历史会话卡片（对话窗侧栏专用，独立于 PixelCard 的一套新表现）。
+ *
+ * 和现有像素组件刻意做出区别：
+ *  - PixelCard 用弹簧引擎 + 厚像素（pixel 5）+ hover 抬升，偏「陈列卡」；
+ *    这里要的是一列能安静排布、又有明确「选中态」的会话项 —— 走静态 PixelFrame，
+ *    用「态驱动」换脸，轻量（rest/hover 不跑 rAF）。
+ *  - 三态换装：
+ *      rest   —— 柔青灰 plate（REST_PAL），不抢戏，让列表安静；
+ *      hover  —— 白 plate + 硬投影抬升，浮起来；
+ *      active —— 青 plate + 硬投影 + **低噪流动起来（noiseSpeed）**：全场只有
+ *               「当前会话」的底噪在动，呼应 agent「这条会话是活的/在跑」。
+ *  - 左侧「像素信号脊」：三格硬边小方块，按态逐亮（暗/青/白）——一个新 motif，
+ *    区别于 ToolCallBlock 的圆点与旧版 CSS 竖条。
+ *
+ * 纯 UI：选择通过 onSelect 交给父级。配色走固定浅色（同气泡的 PRIORITY_PAL），
+ * 不随主题切换，保证卡片在深浅面板上都是同一套识别色。
+ */
+
+// ---- 顶层可调常量（主人改这里即可喵）----
+const CARD_PIXEL = 3; // 面像素大小（比 PixelCard 的 5 更细，适合密排列表）
+const CARD_RADIUS = 1; // 像素切角格数
+const CARD_NOISE = 0.05; // 静息/hover 静态低噪强度
+const CARD_NOISE_ACTIVE = 0.07; // 选中态低噪强度（略强，更有存在感）
+const CARD_NOISE_GRAN = 2; // 低噪颗粒：N×N 合成一块
+const ACTIVE_NOISE_SPEED = 1.25; // 选中态低噪流动速度（>0 才「活」；越小越慢越柔）
+const ELEV_HOVER = 3; // hover / active 硬投影高度 px（rest 为 0）
+
+/**
+ * 静息态柔调色：比白底更淡的青灰，让长列表安静不刺眼。
+ * 固定浅色向（与 MessageBubble 的 PRIORITY_PAL 同策略，不随主题变），
+ * 面/描边/高光/暗影四档。
+ */
+const REST_PAL: PixelPalette = {
+  face: "#eef5f5",
+  edge: "#c2dadb",
+  hi: "#ffffff",
+  lo: "#d8e9e9",
+};
+
+interface HistoryCardProps {
+  title: string;
+  preview: string;
+  active?: boolean;
+  onSelect: () => void;
+}
+
+export function HistoryCard({ title, preview, active = false, onSelect }: HistoryCardProps) {
+  const [hovered, setHovered] = useState(false);
+  // 态优先级：active > hover > rest（选中时忽略 hover，稳定显示选中样式）
+  const stateName = active ? "active" : hovered ? "hover" : "rest";
+  const palette = active ? PRIORITY_PAL.primary : hovered ? PRIORITY_PAL.low : REST_PAL;
+
+  return (
+    <Card
+      type="button"
+      data-state={stateName}
+      onClick={onSelect}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
+      {/* plate 底：态驱动换调色 / 抬升 / 选中态低噪流动 */}
+      <PixelFrame
+        palette={palette}
+        variant="raised"
+        pixel={CARD_PIXEL}
+        radius={CARD_RADIUS}
+        noise={active ? CARD_NOISE_ACTIVE : CARD_NOISE}
+        noiseGranularity={CARD_NOISE_GRAN}
+        noiseSpeed={active ? ACTIVE_NOISE_SPEED : 0}
+        elevation={active || hovered ? ELEV_HOVER : 0}
+      />
+      <Inner>
+        {/* 左侧像素信号脊：三格硬边方块，按态逐亮 */}
+        <Spine aria-hidden>
+          <i />
+          <i />
+          <i />
+        </Spine>
+        <Texts>
+          <CardTitle>{title}</CardTitle>
+          <CardPreview>{preview}</CardPreview>
+        </Texts>
+      </Inner>
+    </Card>
+  );
+}
+
+const Card = styled.button`
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+`;
+
+/* 内容层：浮在 plate 之上；hover/active 时整体轻抬 1px 呼应投影 */
+const Inner = styled.span`
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+  padding: 9px 11px 9px 9px;
+  transition: transform 0.14s ease;
+
+  ${Card}[data-state="hover"] &,
+  ${Card}[data-state="active"] & {
+    transform: translateY(-1px);
+  }
+`;
+
+/* 像素信号脊：3 格 4px 硬边方块，纵向堆叠；按父级态换色 */
+const Spine = styled.span`
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+
+  & > i {
+    width: 4px;
+    height: 4px;
+    background: ${t.colorBorderStrong};
+    transition: background-color 0.14s ease;
+  }
+
+  ${Card}[data-state="hover"] & > i {
+    background: ${t.colorAccent};
+  }
+  /* 选中态在青 plate 上：脊用亮色（近白）跳出来 */
+  ${Card}[data-state="active"] & > i {
+    background: ${t.colorTextOnBtn};
+  }
+`;
+
+const Texts = styled.span`
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+`;
+
+const CardTitle = styled.span`
+  display: block;
+  font: ${t.textSm};
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  color: ${t.colorText};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  ${Card}[data-state="active"] & {
+    color: ${t.colorTextOnBtnAccent};
+  }
+`;
+
+const CardPreview = styled.span`
+  display: block;
+  font: ${t.textXs};
+  line-height: 1.5;
+  color: ${t.colorTextMuted};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  ${Card}[data-state="active"] & {
+    color: ${t.colorTextOnBtnAccent};
+    opacity: 0.85;
+  }
+`;

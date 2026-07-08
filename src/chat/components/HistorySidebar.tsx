@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { styled } from "@linaria/react";
-import { t, type ThemeMode, pixelCorners } from "../../styles/theme";
+import { t, type ThemeMode } from "../../styles/theme";
 import { PixelScrollArea } from "../../components/pixel/PixelScrollArea";
 import { PixelFrame } from "../../components/pixel/PixelFrame";
 import { PixelButton } from "../../components/pixel/PixelButton";
 import { SIDEBAR_PANEL } from "../../components/pixel/palettes";
+import { HistoryCard } from "./HistoryCard";
 import { relativeDay, type Conversation } from "../types";
 
 /**
@@ -80,15 +81,13 @@ export function HistorySidebar({
               <Group key={g.label}>
                 <GroupLabel>{g.label}</GroupLabel>
                 {g.items.map((c) => (
-                  <Item
+                  <HistoryCard
                     key={c.id}
-                    type="button"
-                    data-active={c.id === activeId || undefined}
-                    onClick={() => onSelect(c.id)}
-                  >
-                    <ItemTitle>{c.title}</ItemTitle>
-                    <ItemPreview>{c.preview}</ItemPreview>
-                  </Item>
+                    title={c.title}
+                    preview={c.preview}
+                    active={c.id === activeId}
+                    onSelect={() => onSelect(c.id)}
+                  />
                 ))}
               </Group>
             ))}
@@ -138,13 +137,14 @@ const Title = styled.div`
 const ListWrap = styled.div`
   flex: 1 1 auto;
   min-height: 0;
+  padding: 0 4px;
 `;
 
 const Group = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 12px;
 `;
 
 const GroupLabel = styled.div`
@@ -152,62 +152,6 @@ const GroupLabel = styled.div`
   font: ${t.textXs};
   letter-spacing: 1px;
   color: ${t.colorTextMuted};
-`;
-
-/* 会话项：hover 柔高亮，选中态青色左脊 + 高亮底 */
-const Item = styled.button`
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px 8px 12px;
-  border: 0;
-  background: transparent;
-  clip-path: ${pixelCorners};
-  cursor: pointer;
-  text-align: left;
-  transition: background-color 0.14s ease;
-
-  &::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    background: transparent;
-    transition: background-color 0.14s ease;
-  }
-
-  &:hover {
-    background-color: ${t.colorAccentSoft};
-  }
-  &[data-active] {
-    background-color: ${t.colorAccentSoft};
-  }
-  &[data-active]::before {
-    background: ${t.colorAccent};
-  }
-`;
-
-const ItemTitle = styled.div`
-  font: ${t.textSm};
-  font-weight: bold;
-  letter-spacing: 0.5px;
-  color: ${t.colorText};
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-`;
-
-const ItemPreview = styled.div`
-  font: ${t.textXs};
-  line-height: 1.5;
-  color: ${t.colorTextMuted};
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 `;
 
 const EmptyHint = styled.div`
