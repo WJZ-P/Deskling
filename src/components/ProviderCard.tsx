@@ -3,6 +3,7 @@ import { styled } from "@linaria/react";
 import { t } from "../styles/theme";
 import { PixelFrame } from "./pixel/PixelFrame";
 import { PixelIconButton } from "./pixel/PixelIconButton";
+import { PixelConfirmModal } from "./pixel/PixelConfirmModal";
 import { EditIcon, DeleteIcon } from "./pixel/icons";
 import { PRIORITY_PAL } from "./pixel/palettes";
 import { protocolMeta, type ProviderProfile } from "../settings";
@@ -26,15 +27,17 @@ interface ProviderCardProps {
 
 export function ProviderCard({ profile, active, onSelect, onEdit, onDelete }: ProviderCardProps) {
   const [hovered, setHovered] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const stateName = active ? "active" : hovered ? "hover" : "rest";
   const palette = active ? PRIORITY_PAL.primary : PRIORITY_PAL.low;
   const meta = protocolMeta(profile.protocol);
   const hasKey = profile.apiKey.trim().length > 0;
 
   return (
-    <Card
-      role="button"
-      tabIndex={0}
+    <>
+      <Card
+        role="button"
+        tabIndex={0}
       data-state={stateName}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -70,11 +73,27 @@ export function ProviderCard({ profile, active, onSelect, onEdit, onDelete }: Pr
         </PixelIconButton>
       </CornerTR>
       <CornerBR>
-        <PixelIconButton aria-label="删除" tone="danger" onActivate={onDelete}>
+        <PixelIconButton
+          aria-label="删除"
+          tone="danger"
+          onActivate={() => setConfirming(true)}
+        >
           <DeleteIcon />
         </PixelIconButton>
       </CornerBR>
     </Card>
+
+    <PixelConfirmModal
+      open={confirming}
+      title="删除服务"
+      message={`确定删除「${profile.name || "未命名"}」分组吗？此操作不可撤销！！！`}
+      confirmLabel="删除"
+      cancelLabel="取消"
+      tone="danger"
+      onConfirm={() => { setConfirming(false); onDelete(); }}
+      onCancel={() => setConfirming(false)}
+    />
+    </>
   );
 }
 

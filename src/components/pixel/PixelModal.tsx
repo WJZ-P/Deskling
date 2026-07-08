@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
@@ -51,16 +51,21 @@ export function PixelModal({ open, title, onClose, children, footer, width }: Pi
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  // 挂载一次后常驻：首次打开才建 PixelFrame/PixelSurface 的网格（慢一次），
+  // 之后开关只切 visibility —— 再次打开网格已就绪，瞬间显示，不再卡。
+  const mountedRef = useRef(false);
+  if (open) mountedRef.current = true;
+  if (!mountedRef.current) return null; // 从未打开过 → 不占任何 DOM
 
   return createPortal(
     <Overlay
+      data-open={open || undefined}
       onPointerDown={(e) => {
         // 只在点到遮罩本身（非面板内部）时关闭
-        if (e.target === e.currentTarget) onClose();
+        if (open && e.target === e.currentTarget) onClose();
       }}
     >
-      <Panel role="dialog" aria-modal="true" style={{ width: width ?? PANEL_MAX_W }}>
+      <Panel role="dialog" aria-modal="true" data-open={open || undefined} style={{ width: width ?? PANEL_MAX_W }}>
         <PixelFrame
           palette={PRIORITY_PAL.low}
           variant="raised"
@@ -86,6 +91,8 @@ export function PixelModal({ open, title, onClose, children, footer, width }: Pi
   );
 }
 
+/* 关闭态：visibility:hidden + 不拦事件（DOM 常驻但不可见/不可点）；
+   打开态：可见 + 播淡入。动画只在 data-open 时挂，避免关闭时倒放。 */
 const Overlay = styled.div`
   position: fixed;
   inset: 0;
@@ -95,7 +102,14 @@ const Overlay = styled.div`
   justify-content: center;
   padding: 24px;
   background: rgba(6, 18, 24, 0.42);
-  animation: pmodal-fade 0.16s ease;
+  visibility: hidden;
+  pointer-events: none;
+
+  &[data-open] {
+    visibility: visible;
+    pointer-events: auto;
+    animation: pmodal-fade 0.16s ease;
+  }
 
   @keyframes pmodal-fade {
     from {
@@ -114,7 +128,10 @@ const Panel = styled.div`
   position: relative;
   max-width: 100%;
   transform-origin: center;
-  animation: pmodal-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+
+  &[data-open] {
+    animation: pmodal-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  }
 
   @keyframes pmodal-pop {
     from {

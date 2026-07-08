@@ -321,7 +321,7 @@ const FieldRow = styled.label`
 
 const FieldLabel = styled.span`
   flex: 0 0 auto;
-  width: 72px;
+  width: 82px;
   font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorTextMuted};
@@ -383,6 +383,8 @@ const ModelMark = styled.span`
   flex: 0 0 auto;
   width: 12px;
   color: ${t.colorAccent};
+  font :${t.textLg};
+  margin-top: -4px;
 `;
 
 const ModelName = styled.span`
@@ -391,7 +393,7 @@ const ModelName = styled.span`
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: ${t.textSm};
+  font: ${t.textMd};
   letter-spacing: 0.5px;
 `;
 
