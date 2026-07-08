@@ -107,7 +107,7 @@ export function ChatWindow() {
           ),
         );
         setTyping(false);
-      }, 1200);
+      }, 10000);
     },
     [activeId],
   );
@@ -127,6 +127,7 @@ export function ChatWindow() {
           onSelect={setActiveId}
           onNew={handleNew}
           now={now}
+          theme={theme}
         />
         <Main>
           {active ? (

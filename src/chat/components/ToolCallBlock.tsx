@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { styled } from "@linaria/react";
-import { t, pixelCorners } from "../../styles/theme";
+import { t } from "../../styles/theme";
+import { PixelFrame } from "../../components/pixel/PixelFrame";
+import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import type { ToolCallSegment } from "../types";
 
 /**
  * 工具调用段：agent 操作电脑的「一步」。
- * 一个内嵌凹槽小卡，左侧状态点 + 工具名（等宽），右侧一句摘要；
- * 有 detail 时整行可点开/收起看细节。配色随状态：进行中(青) / 成功(绿) / 出错(红)。
+ * 一个内嵌凹槽小卡（PixelFrame sunken + 低噪，与主面板凹槽同风），
+ * 左侧状态点 + 工具名（等宽），右侧一句摘要；有 detail 时整行可点开/收起看细节。
+ * 配色随状态：进行中(青) / 成功(绿) / 出错(红)。
  */
 
 interface ToolCallBlockProps {
@@ -25,30 +28,40 @@ export function ToolCallBlock({ seg }: ToolCallBlockProps) {
 
   return (
     <Root data-status={seg.status}>
-      <Head
-        as={hasDetail ? "button" : "div"}
-        data-clickable={hasDetail || undefined}
-        onClick={hasDetail ? () => setOpen((v) => !v) : undefined}
-      >
-        <Dot data-status={seg.status} aria-hidden />
-        <ToolName>{seg.name}</ToolName>
-        <Summary>{seg.summary}</Summary>
-        <Status data-status={seg.status}>{STATUS_LABEL[seg.status]}</Status>
-        {hasDetail && <Chevron data-open={open || undefined} aria-hidden>▾</Chevron>}
-      </Head>
-      {hasDetail && open && <Detail>{seg.detail}</Detail>}
+      {/* 凹槽底：sunken 像素框 + 低噪，和主面板 Well 一致 */}
+      <PixelFrame
+        palette={PRIORITY_PAL.low}
+        variant="sunken"
+        pixel={3}
+        radius={2}
+        noise={0.05}
+        noiseGranularity={2}
+      />
+      <Inner>
+        <Head
+          as={hasDetail ? "button" : "div"}
+          data-clickable={hasDetail || undefined}
+          onClick={hasDetail ? () => setOpen((v) => !v) : undefined}
+        >
+          <Dot data-status={seg.status} aria-hidden />
+          <ToolName>{seg.name}</ToolName>
+          <Summary>{seg.summary}</Summary>
+          <Status data-status={seg.status}>{STATUS_LABEL[seg.status]}</Status>
+          {hasDetail && <Chevron data-open={open || undefined} aria-hidden>▾</Chevron>}
+        </Head>
+        {hasDetail && open && <Detail>{seg.detail}</Detail>}
+      </Inner>
     </Root>
   );
 }
 
 const Root = styled.div`
-  border: 1px solid transparent;
-  background:
-    linear-gradient(${t.colorWell}, ${t.colorWell}) padding-box,
-    linear-gradient(${t.colorBorder}, ${t.colorBorder}) border-box;
-  clip-path: ${pixelCorners};
-  box-shadow: inset 0 1px 3px ${t.colorShadowSoft};
-  overflow: hidden;
+  position: relative;
+`;
+
+const Inner = styled.div`
+  position: relative;
+  z-index: 1;
 `;
 
 const Head = styled.div`

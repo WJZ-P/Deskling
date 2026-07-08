@@ -1,14 +1,26 @@
 import { useMemo } from "react";
 import { styled } from "@linaria/react";
-import { t, pixelCorners } from "../../styles/theme";
+import { t, type ThemeMode, pixelCorners } from "../../styles/theme";
 import { PixelScrollArea } from "../../components/pixel/PixelScrollArea";
+import { PixelFrame } from "../../components/pixel/PixelFrame";
+import { PixelButton } from "../../components/pixel/PixelButton";
+import { SIDEBAR_PANEL } from "../../components/pixel/palettes";
 import { relativeDay, type Conversation } from "../types";
 
 /**
  * 左侧历史会话栏：顶部「新建对话」按钮，下面按日期分组的会话列表。
  * 选中项有青色左脊 + 高亮底；每项显示标题 + 最近一条预览。
+ *
+ * 面板背景与主界面侧边栏同款：PixelFrame 分层边框 + 慢速动态底噪
+ * （SIDEBAR_PANEL[theme]），让对话窗和主面板风格统一。
  * 纯 UI：选择 / 新建都通过回调交给父级。
  */
+
+// ---- 面板底噪参数（对齐主侧边栏）----
+const PANEL_PIXEL = 4;
+const PANEL_NOISE = 0.08;
+const PANEL_NOISE_GRAN = 3;
+const PANEL_NOISE_SPEED = 1.0;
 
 interface HistorySidebarProps {
   conversations: Conversation[];
@@ -17,6 +29,8 @@ interface HistorySidebarProps {
   onNew: () => void;
   /** 分组相对日期用的“现在”时间戳（父级传入，避免各处重复取时钟） */
   now: number;
+  /** 主题：决定面板底噪调色（与主侧边栏一致） */
+  theme: ThemeMode;
 }
 
 export function HistorySidebar({
@@ -25,6 +39,7 @@ export function HistorySidebar({
   onSelect,
   onNew,
   now,
+  theme,
 }: HistorySidebarProps) {
   // 按 updatedAt 倒序后，按相对日期（今天/昨天/日期）分组保序
   const groups = useMemo(() => {
@@ -41,47 +56,67 @@ export function HistorySidebar({
 
   return (
     <Aside>
-      <Header>
-        <Title>对话历史</Title>
-        <NewButton type="button" onClick={onNew} title="新建对话">
-          <Plus aria-hidden>＋</Plus>
-          新建
-        </NewButton>
-      </Header>
+      {/* 面板背景：分层像素边框 + 慢速动态底噪（同主侧边栏） */}
+      <PixelFrame
+        palette={SIDEBAR_PANEL[theme]}
+        variant="raised"
+        pixel={PANEL_PIXEL}
+        radius={0}
+        noise={PANEL_NOISE}
+        noiseGranularity={PANEL_NOISE_GRAN}
+        noiseSpeed={PANEL_NOISE_SPEED}
+      />
+      <Inner>
+        <Header>
+          <Title>对话历史</Title>
+          <PixelButton variant="primary" onClick={onNew}>
+            ＋ 新建
+          </PixelButton>
+        </Header>
 
-      <ListWrap>
-        <PixelScrollArea contentStyle={{ padding: "4px 8px 10px" }}>
-          {groups.map((g) => (
-            <Group key={g.label}>
-              <GroupLabel>{g.label}</GroupLabel>
-              {g.items.map((c) => (
-                <Item
-                  key={c.id}
-                  type="button"
-                  data-active={c.id === activeId || undefined}
-                  onClick={() => onSelect(c.id)}
-                >
-                  <ItemTitle>{c.title}</ItemTitle>
-                  <ItemPreview>{c.preview}</ItemPreview>
-                </Item>
-              ))}
-            </Group>
-          ))}
-          {conversations.length === 0 && <EmptyHint>还没有历史对话喵</EmptyHint>}
-        </PixelScrollArea>
-      </ListWrap>
+        <ListWrap>
+          <PixelScrollArea contentStyle={{ padding: "4px 8px 10px" }}>
+            {groups.map((g) => (
+              <Group key={g.label}>
+                <GroupLabel>{g.label}</GroupLabel>
+                {g.items.map((c) => (
+                  <Item
+                    key={c.id}
+                    type="button"
+                    data-active={c.id === activeId || undefined}
+                    onClick={() => onSelect(c.id)}
+                  >
+                    <ItemTitle>{c.title}</ItemTitle>
+                    <ItemPreview>{c.preview}</ItemPreview>
+                  </Item>
+                ))}
+              </Group>
+            ))}
+            {conversations.length === 0 && <EmptyHint>还没有历史对话喵</EmptyHint>}
+          </PixelScrollArea>
+        </ListWrap>
+      </Inner>
     </Aside>
   );
 }
 
 const Aside = styled.aside`
+  position: relative;
   flex: 0 0 auto;
   width: 224px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid ${t.colorBorder};
-  background: ${t.colorSurface2};
+`;
+
+/* 内容层：浮在 PixelFrame 面板之上 */
+const Inner = styled.div`
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 `;
 
 const Header = styled.div`
@@ -91,7 +126,6 @@ const Header = styled.div`
   justify-content: space-between;
   gap: 8px;
   padding: 12px 12px 10px;
-  border-bottom: 1px solid ${t.colorBorder};
 `;
 
 const Title = styled.div`
@@ -99,38 +133,6 @@ const Title = styled.div`
   font-weight: bold;
   letter-spacing: 1px;
   color: ${t.colorText};
-`;
-
-const NewButton = styled.button`
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border: 1px solid transparent;
-  background:
-    linear-gradient(${t.colorAccent}, ${t.colorAccent}) padding-box,
-    linear-gradient(${t.colorAccent}, ${t.colorAccent}) border-box;
-  clip-path: ${pixelCorners};
-  cursor: pointer;
-  font: ${t.textSm};
-  font-weight: bold;
-  letter-spacing: 1px;
-  color: ${t.colorOnAccent};
-  filter: drop-shadow(0 2px 4px ${t.colorShadowSoft});
-  transition: transform 0.08s ease, filter 0.12s ease;
-
-  &:hover {
-    transform: translateY(-1px);
-    filter: drop-shadow(0 4px 8px ${t.colorShadowSoft}) brightness(1.04);
-  }
-  &:active {
-    transform: translateY(1px);
-  }
-`;
-
-const Plus = styled.span`
-  font-size: 13px;
-  line-height: 1;
 `;
 
 const ListWrap = styled.div`
