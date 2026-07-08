@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import { PixelFrame } from "../../components/pixel/PixelFrame";
+import { PixelFrame, type PixelPalette } from "../../components/pixel/PixelFrame";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import type { ToolCallSegment } from "../types";
 
@@ -10,7 +10,17 @@ import type { ToolCallSegment } from "../types";
  * 一个内嵌凹槽小卡（PixelFrame sunken + 低噪，与主面板凹槽同风），
  * 左侧状态点 + 工具名（等宽），右侧一句摘要；有 detail 时整行可点开/收起看细节。
  * 配色随状态：进行中(青) / 成功(绿) / 出错(红)。
+ *
+ * hover 或展开时：底色变青蓝、低噪动起来，传达「这一步活了」。
  */
+
+// hover/展开态专用青蓝调色：比按钮 primary 更柔和的青蓝，适合大面积凹槽底
+const ACTIVE_PAL: PixelPalette = {
+  face: "#d4f0f1",
+  edge: "#7dbfc1",
+  hi: "#ffffff",
+  lo: "#a8dadc",
+};
 
 interface ToolCallBlockProps {
   seg: ToolCallSegment;
@@ -24,18 +34,28 @@ const STATUS_LABEL: Record<ToolCallSegment["status"], string> = {
 
 export function ToolCallBlock({ seg }: ToolCallBlockProps) {
   const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const hasDetail = seg.detail != null && seg.detail.length > 0;
+  // hover 或展开都激活：底色变青蓝、低噪动起来
+  const active = hovered || open;
 
   return (
-    <Root data-status={seg.status}>
-      {/* 凹槽底：sunken 像素框 + 低噪，和主面板 Well 一致 */}
+    <Root
+      data-status={seg.status}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
+      {/* 凹槽底：active 时切换到青蓝调色 + 低噪流动 + 边缘→中心扫描激活 */}
       <PixelFrame
-        palette={PRIORITY_PAL.low}
+        palette={active ? ACTIVE_PAL : PRIORITY_PAL.low}
         variant="sunken"
         pixel={3}
         radius={2}
         noise={0.05}
         noiseGranularity={2}
+        noiseSpeed={active ? 0.9 : 0}
+        sweepIn={active}
+        sweepMs={480}
         liveResize
       />
       <Inner>
@@ -66,6 +86,7 @@ const Inner = styled.div`
 `;
 
 const Head = styled.div`
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -77,11 +98,23 @@ const Head = styled.div`
   color: ${t.colorText};
   font: ${t.textSm};
 
+  /* 左侧像素口音条：hover 时浮出，替代平涂背景 */
+  &::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 3px;
+    bottom: 3px;
+    width: 2px;
+    background: transparent;
+    transition: background-color 0.12s ease;
+  }
+
   &[data-clickable] {
     cursor: pointer;
   }
-  &[data-clickable]:hover {
-    background-color: ${t.colorAccentSoft};
+  &[data-clickable]:hover::before {
+    background: ${t.colorAccent};
   }
 `;
 
@@ -122,6 +155,11 @@ const ToolName = styled.code`
   font-size: 12px;
   letter-spacing: 0.5px;
   color: ${t.colorAccent};
+  transition: filter 0.12s ease;
+
+  ${Head}[data-clickable]:hover & {
+    filter: brightness(1.25);
+  }
 `;
 
 const Summary = styled.span`
@@ -154,10 +192,14 @@ const Chevron = styled.span`
   flex: 0 0 auto;
   font-size: 10px;
   color: ${t.colorTextMuted};
-  transition: transform 0.14s ease;
+  transition: transform 0.14s ease, color 0.12s ease;
 
   &[data-open] {
     transform: rotate(180deg);
+  }
+
+  ${Head}[data-clickable]:hover & {
+    color: ${t.colorAccent};
   }
 `;
 

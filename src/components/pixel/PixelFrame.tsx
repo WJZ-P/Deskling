@@ -86,6 +86,14 @@ interface PixelFrameProps {
    * 其余帧仍走防抖，故不拖垮性能。默认 false（窗口级/静态帧无需开）。
    */
   liveResize?: boolean;
+  /**
+   * 启用从两边往中间汇聚的扫描动画：true = 从边缘向中心扫入，false = 从中心向边缘扫出。
+   * 配合 palette 切换使用——palette 变化时，底噪块按「距离边缘远近」交错浮现/消退，
+   * 形成从两边汇聚到中间的视觉效果。用于 ToolCallBlock hover 时的动态激活。
+   */
+  sweepIn?: boolean;
+  /** 扫描动画总时长（ms），默认 500 */
+  sweepMs?: number;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
@@ -140,6 +148,8 @@ export const PixelFrame = memo(function PixelFrame({
   notch = 0,
   sizeKey,
   liveResize = false,
+  sweepIn,
+  sweepMs = 500,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
   const { w, h } = useElementSize(ref, { sizeKey, liveResize });
@@ -303,6 +313,42 @@ export const PixelFrame = memo(function PixelFrame({
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
   }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb]);
+
+  // 扫描动画：sweepIn 变化时，底噪块按「距边缘远近」交错浮现/消退——
+  //   sweepIn=true  → 边缘先显、中心最后（从两边往中间汇聚）；
+  //   sweepIn=false → 中心先隐、边缘最后（从中心向外扩散退出）。
+  // 用 WAAPI opacity 0↔1 + 按位置错落 delay 实现，不触发 React 重渲染。
+  // 依赖只含 sweepIn：仅在激活/停用时触发一次，不随 noiseBlocks 尺寸变化重复触发。
+  const noiseBlocksRef = useRef(noiseBlocks);
+  noiseBlocksRef.current = noiseBlocks;
+  const colsRef = useRef(cols);
+  colsRef.current = cols;
+  useEffect(() => {
+    if (sweepIn === undefined) return;
+    const g = noiseGroupRef.current;
+    if (!g || noise <= 0) return;
+    const blocks = noiseBlocksRef.current;
+    const c = colsRef.current;
+    const nodes = g.childNodes as unknown as SVGRectElement[];
+    const halfCols = Math.max(1, (c - 2) / 2);
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      const node = nodes[i];
+      if (!node) continue;
+      // 0 = 边缘（bx 贴近 1 或 cols-2），1 = 中心
+      const distFromEdge = Math.min(b.x - 1, c - 2 - b.x);
+      const tPos = Math.max(0, Math.min(1, distFromEdge / halfCols));
+      // sweepIn=true：边缘先(delay≈0)、中心后(delay≈sweepMs)；反之亦然
+      const delay = sweepIn ? tPos * sweepMs * 0.75 : (1 - tPos) * sweepMs * 0.75;
+      node.animate(
+        sweepIn ? [{ opacity: "0" }, { opacity: "1" }] : [{ opacity: "1" }, { opacity: "0" }],
+        // fill:"backwards"：延迟期间维持首帧值（sweepIn时不可见，sweepOut时可见），
+        // 动画结束后还原元素自身值（opacity:1）——不让扫出后噪声永久消失。
+        { duration: sweepMs * 0.35, delay, easing: "ease-out", fill: "backwards" },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sweepIn]);
 
   return (
     <svg
