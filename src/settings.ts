@@ -45,8 +45,8 @@ export const PROTOCOLS: ProtocolMeta[] = [
   {
     id: "openai-compatible",
     label: "OpenAI 兼容端点",
-    defaultBaseUrl: "", // 用户自填（中转/本地Ollama）
-    endpointPath: "/v1/chat/completions",
+    defaultBaseUrl: "", // 用户自填完整端点（中转/本地 Ollama），Base URL 即完整地址
+    endpointPath: "", // 兼容端点：不拼路径，Base URL 直接当端点用（Rust 侧 raw_endpoint）
     authStyle: "bearer",
     presetModels: [], // 无预设，用户自填
   },
@@ -67,7 +67,9 @@ export interface ProviderProfile {
   protocol: ProtocolId;
   baseUrl: string; // 可覆盖默认（代理/中转）
   apiKey: string; // 明文存 settings.json，后续迁移到 keyring
-  model: string;
+  model: string; // 当前选中的模型
+  /** 用户手动添加的模型名（与协议预设合并成可选列表；预设无覆盖时全靠这里） */
+  customModels?: string[];
   temperature?: number; // 可选参数
   maxTokens?: number;
 }
@@ -207,6 +209,7 @@ export function blankProfile(protocol: ProtocolId): ProviderProfile {
     baseUrl: meta.defaultBaseUrl,
     apiKey: "",
     model: meta.presetModels[0] ?? "",
+    customModels: [],
   };
 }
 

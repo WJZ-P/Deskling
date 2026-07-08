@@ -71,10 +71,35 @@ impl Protocol for Anthropic {
 }
 
 // ---- OpenAI / OpenAI 兼容 ----
+// 智能识别用户 baseUrl 已经填到哪一层，避免重复拼路径（如 .../v1 再拼 /v1 → 404）：
+//  - 已含 /chat/completions（完整端点）        → 原样用；
+//  - 以 /v1、/v2… 版本段结尾（OpenAI SDK 惯例）→ 只接 /chat/completions；
+//  - 只是主机                                  → 补完整 /v1/chat/completions。
+// 官方与兼容端点共用此逻辑：只要用户按常见习惯填 baseUrl，都能拼对。
 struct OpenAi;
+fn openai_endpoint(base: &str) -> String {
+    let base = trim_base(base);
+    if base.contains("/chat/completions") {
+        base.to_string()
+    } else if ends_with_version_seg(base) {
+        format!("{}/chat/completions", base)
+    } else {
+        format!("{}/v1/chat/completions", base)
+    }
+}
+/// 判断 URL 是否以版本段（/v1、/v2、/v1beta…）结尾。
+fn ends_with_version_seg(base: &str) -> bool {
+    base.rsplit('/')
+        .next()
+        .map(|seg| {
+            let s = seg.strip_prefix('v').unwrap_or("");
+            !s.is_empty() && s.chars().next().is_some_and(|c| c.is_ascii_digit())
+        })
+        .unwrap_or(false)
+}
 impl Protocol for OpenAi {
     fn endpoint(&self, p: &ProviderProfile) -> String {
-        format!("{}/v1/chat/completions", trim_base(&p.base_url))
+        openai_endpoint(&p.base_url)
     }
     fn apply_auth(&self, req: reqwest::RequestBuilder, p: &ProviderProfile) -> reqwest::RequestBuilder {
         req.bearer_auth(&p.api_key)
@@ -112,11 +137,12 @@ impl Protocol for Gemini {
 }
 
 /// 按 profile.protocol 分发到具体协议适配器。
+/// openai / openai-compatible 共用 OpenAi —— 端点构造器已能识别 baseUrl 到哪一层
+/// （完整端点 / 带 /v1 / 纯主机），故不必再按协议区分。
 fn resolve(protocol: &str) -> Box<dyn Protocol> {
     match protocol {
         "anthropic" => Box::new(Anthropic),
         "gemini" => Box::new(Gemini),
-        // openai / openai-compatible 共用 OpenAI 适配器（端点、请求体一致，仅 baseUrl 不同）
         _ => Box::new(OpenAi),
     }
 }

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
 import { PixelModal } from "./pixel/PixelModal";
+import { PixelFrame } from "./pixel/PixelFrame";
 import { PixelButton } from "./pixel/PixelButton";
 import { PixelInput } from "./pixel/PixelInput";
 import { PixelSelect, type PixelSelectOption } from "./pixel/PixelSelect";
+import { PRIORITY_PAL } from "./pixel/palettes";
 import {
   PROTOCOLS,
   protocolMeta,
@@ -64,18 +66,54 @@ export function ProviderModal({
     setTest({ status: "idle" });
   }, []);
 
-  // 当前协议的模型候选（有预设给下拉，无预设留给手填）
-  const modelOptions = useMemo<PixelSelectOption[]>(() => {
-    if (!draft) return [];
-    const meta = protocolMeta(draft.protocol);
-    const preset = meta.presetModels.map((m) => ({ value: m, label: m }));
-    if (draft.model && !meta.presetModels.includes(draft.model)) {
-      preset.unshift({ value: draft.model, label: draft.model });
-    }
-    return preset;
-  }, [draft]);
+  // 输入框里正在敲的新模型名
+  const [modelInput, setModelInput] = useState("");
 
-  // 切协议：baseUrl / model 仍是旧协议默认（用户没改过）时跟随切到新协议默认
+  // 可选模型 = 协议预设 ∪ 用户自加（customModels），去重、保序（预设在前）
+  const modelList = (() => {
+    if (!draft) return [] as string[];
+    const preset = protocolMeta(draft.protocol).presetModels;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of [...preset, ...(draft.customModels ?? [])]) {
+      if (m && !seen.has(m)) {
+        seen.add(m);
+        out.push(m);
+      }
+    }
+    return out;
+  })();
+
+  // 添加一个自定义模型：并入 customModels 并立即选中；输入框清空
+  const addModel = useCallback(() => {
+    const name = modelInput.trim();
+    if (!name) return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const preset = protocolMeta(prev.protocol).presetModels;
+      // 已在预设或已加过 → 只选中，不重复加
+      const custom = preset.includes(name) || (prev.customModels ?? []).includes(name)
+        ? (prev.customModels ?? [])
+        : [...(prev.customModels ?? []), name];
+      return { ...prev, customModels: custom, model: name };
+    });
+    setModelInput("");
+    setTest({ status: "idle" });
+  }, [modelInput]);
+
+  // 删除一个自定义模型（预设不可删）；若删的是当前选中，回退到列表首个
+  const removeModel = useCallback((name: string) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const custom = (prev.customModels ?? []).filter((m) => m !== name);
+      const preset = protocolMeta(prev.protocol).presetModels;
+      const remain = [...preset, ...custom];
+      const model = prev.model === name ? (remain[0] ?? "") : prev.model;
+      return { ...prev, customModels: custom, model };
+    });
+  }, []);
+
+  // 切协议：baseUrl / model 仍是旧协议默认时跟随，customModels 保留不清
   const handleProtocolChange = useCallback(
     (nextProto: string) => {
       setDraft((prev) => {
@@ -84,8 +122,10 @@ export function ProviderModal({
         const newMeta = protocolMeta(nextProto as ProtocolId);
         const next: ProviderProfile = { ...prev, protocol: nextProto as ProtocolId };
         if (prev.baseUrl === oldMeta.defaultBaseUrl) next.baseUrl = newMeta.defaultBaseUrl;
-        if (!newMeta.presetModels.includes(prev.model)) {
-          next.model = newMeta.presetModels[0] ?? "";
+        // 切协议后若当前 model 不在新预设 + 自定义合并列表里，回到首个预设
+        const available = [...newMeta.presetModels, ...(prev.customModels ?? [])];
+        if (!available.includes(prev.model)) {
+          next.model = newMeta.presetModels[0] ?? (prev.customModels ?? [])[0] ?? "";
         }
         return next;
       });
@@ -168,7 +208,11 @@ export function ProviderModal({
         <FieldLabel>Base URL</FieldLabel>
         <PixelInput
           value={draft.baseUrl}
-          placeholder="https://api.example.com"
+          placeholder={
+            draft.protocol === "openai-compatible"
+              ? "填完整端点，如 https://xxx/v1/chat/completions"
+              : "https://api.example.com"
+          }
           onChange={(e) => patch({ baseUrl: e.target.value })}
         />
       </FieldRow>
@@ -184,23 +228,73 @@ export function ProviderModal({
         />
       </FieldRow>
 
-      <FieldRow>
-        <FieldLabel>模型</FieldLabel>
-        {modelOptions.length > 0 ? (
-          <PixelSelect
-            options={modelOptions}
-            value={draft.model || undefined}
-            onChange={(m) => patch({ model: m })}
-            variant="normal"
+      <ModelField>
+        <FieldLabel style={{ alignSelf: "flex-start", paddingTop: 6 }}>模型</FieldLabel>
+        <ModelPanel>
+          {/* 凹槽底：sunken 像素框，和主面板 Well 一致 */}
+          <PixelFrame
+            palette={PRIORITY_PAL.low}
+            variant="sunken"
+            pixel={3}
+            radius={2}
+            noise={0.05}
+            noiseGranularity={2}
+            liveResize
           />
-        ) : (
-          <PixelInput
-            value={draft.model}
-            placeholder="填入模型名，如 gpt-4o"
-            onChange={(e) => patch({ model: e.target.value })}
-          />
-        )}
-      </FieldRow>
+          <ModelPanelInner>
+          {/* 可选模型列表（预设 + 自定义，预设不可删） */}
+          {modelList.length > 0 ? (
+            <ModelList>
+              {modelList.map((m) => {
+                const isPreset = protocolMeta(draft.protocol).presetModels.includes(m);
+                const isSelected = draft.model === m;
+                return (
+                  <ModelRow
+                    key={m}
+                    data-selected={isSelected || undefined}
+                    onClick={() => { patch({ model: m }); }}
+                  >
+                    <ModelMark aria-hidden>{isSelected ? "▸" : ""}</ModelMark>
+                    <ModelName>{m}</ModelName>
+                    {!isPreset && (
+                      <ModelDel
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`删除 ${m}`}
+                        onClick={(e) => { e.stopPropagation(); removeModel(m); }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.stopPropagation();
+                            removeModel(m);
+                          }
+                        }}
+                      >
+                        ×
+                      </ModelDel>
+                    )}
+                  </ModelRow>
+                );
+              })}
+            </ModelList>
+          ) : (
+            <ModelEmpty>还没有模型，在下方输入后添加喵</ModelEmpty>
+          )}
+
+          {/* 固定输入行：始终显示，随时添加新模型 */}
+          <ModelAdd>
+            <PixelInput
+              value={modelInput}
+              placeholder="输入模型名后按 ＋ 添加"
+              onChange={(e) => setModelInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addModel(); } }}
+            />
+            <PixelButton variant="primary" onClick={addModel} disabled={!modelInput.trim()}>
+              ＋
+            </PixelButton>
+          </ModelAdd>
+          </ModelPanelInner>
+        </ModelPanel>
+      </ModelField>
 
       {test.status !== "idle" && (
         <TestMsg data-status={test.status}>
@@ -228,13 +322,108 @@ const FieldRow = styled.label`
 const FieldLabel = styled.span`
   flex: 0 0 auto;
   width: 72px;
-  font: ${t.textSm};
+  font: ${t.textMd};
   letter-spacing: 1px;
   color: ${t.colorTextMuted};
 `;
 
 const Spacer = styled.span`
   flex: 1 1 auto;
+`;
+
+/* 模型区：整行（标签在上，面板在下），比其它单行字段高 */
+const ModelField = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+`;
+
+/* 模型展开面板：凹槽底 + 内容浮其上 */
+const ModelPanel = styled.div`
+  position: relative;
+`;
+
+const ModelPanelInner = styled.div`
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+`;
+
+/* 模型列表：超高滚动 */
+const ModelList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 150px;
+  overflow-y: auto;
+`;
+
+/* 单个模型行：左键点选中，选中态高亮；自定义项右侧有 × 删除 */
+const ModelRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: ${t.colorText};
+  transition: background-color 0.12s ease;
+
+  &:hover {
+    background-color: ${t.colorAccentSoft};
+  }
+  &[data-selected] {
+    background-color: ${t.colorAccentSoft};
+  }
+`;
+
+const ModelMark = styled.span`
+  flex: 0 0 auto;
+  width: 12px;
+  color: ${t.colorAccent};
+`;
+
+const ModelName = styled.span`
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: ${t.textSm};
+  letter-spacing: 0.5px;
+`;
+
+/* 删除 × 只对自定义模型显示 */
+const ModelDel = styled.span`
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: ${t.colorTextMuted};
+  cursor: pointer;
+
+  &:hover {
+    color: ${t.btnClose};
+  }
+`;
+
+const ModelEmpty = styled.div`
+  padding: 8px;
+  font: ${t.textXs};
+  color: ${t.colorTextMuted};
+`;
+
+/* 固定输入行：始终保留在面板底部，随时加新模型 */
+const ModelAdd = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 2px;
+
+  & > *:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 `;
 
 const TestMsg = styled.div`

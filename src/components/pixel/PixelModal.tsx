@@ -150,7 +150,7 @@ const Head = styled.header`
 
 const Title = styled.h2`
   margin: 0;
-  font: ${t.textMd};
+  font: ${t.textLg};
   font-weight: bold;
   letter-spacing: 1px;
   color: ${t.colorText};
