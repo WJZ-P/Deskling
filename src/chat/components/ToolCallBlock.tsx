@@ -36,6 +36,7 @@ export function ToolCallBlock({ seg }: ToolCallBlockProps) {
         radius={2}
         noise={0.05}
         noiseGranularity={2}
+        liveResize
       />
       <Inner>
         <Head

@@ -53,6 +53,7 @@ export function MessageBubble({ msg }: MessageBubbleProps) {
             radius={BUBBLE_RADIUS}
             noise={BUBBLE_NOISE}
             noiseGranularity={BUBBLE_NOISE_GRAN}
+            liveResize
           />
           <BubbleInner>
             {msg.segments.map((seg, i) =>

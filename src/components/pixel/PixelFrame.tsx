@@ -79,6 +79,13 @@ interface PixelFrameProps {
    * 不传则走纯防抖（见 useElementSize）。
    */
   sizeKey?: string | number;
+  /**
+   * 内容驱动的离散尺寸变化（如内嵌卡片展开/收起细节、气泡追加内容）传 true：
+   * ResizeObserver 突发首帧用 flushSync 同步提交，viewBox 当帧跟上真实尺寸，
+   * 消除「拉伸中 1px 边框变粗/变细再回弹」的抖动。连续拖窗只在起手同步一次，
+   * 其余帧仍走防抖，故不拖垮性能。默认 false（窗口级/静态帧无需开）。
+   */
+  liveResize?: boolean;
 }
 
 const asFill = (c: string): CSSProperties => ({ fill: c });
@@ -132,9 +139,10 @@ export const PixelFrame = memo(function PixelFrame({
   hollow = false,
   notch = 0,
   sizeKey,
+  liveResize = false,
 }: PixelFrameProps) {
   const ref = useRef<SVGSVGElement>(null);
-  const { w, h } = useElementSize(ref, { sizeKey });
+  const { w, h } = useElementSize(ref, { sizeKey, liveResize });
   const rid = useId().replace(/:/g, "");
   const maskId = `pf-m-${rid}`;
   const faceMaskId = `pf-fm-${rid}`;
