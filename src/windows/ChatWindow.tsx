@@ -11,14 +11,17 @@ import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { MOCK_CONVERSATIONS } from "../chat/mockData";
-import type { ChatMessage, Conversation } from "../chat/types";
+import { streamChat, toHistory, type ChatTurn } from "../chat/api";
+import { getActiveProfile } from "../settings";
+import type { ChatMessage, Conversation, MessageSegment } from "../chat/types";
 
 /**
  * AI 对话窗口（label="chat"）：自绘标题栏 + 左历史栏 + 右主对话区。
  *
- * 现阶段是 UI 表现层：会话数据来自 mock，发送后用「假回复 + 输入指示器」
- * 模拟一次流式回答，好让交互跑起来。后续接 Rust 命令 / Anthropic API 时，
- * 只需把 handleSend 换成真实的「emit 流式 token → 拼接 assistant segments」。
+ * 发送后走真实流式：handleSend 把用户消息落库 → 取当前激活 provider →
+ * streamChat 经 Rust provider_chat 命令发起 SSE 请求，逐条 delta 追加进
+ * assistant 消息的文本段。首个 delta 到达前显示输入指示器；出错则把错误
+ * 文案作为一条 assistant 文本回落展示。
  *
  * 关闭按钮 = 隐藏窗口（w.hide()），配合 Pet 页 / 托盘的 chat_toggle 再唤出，
  * 这样会话状态在一次运行内保留（不销毁窗口）。
@@ -28,13 +31,87 @@ import type { ChatMessage, Conversation } from "../chat/types";
 let seq = 1000;
 const nextId = () => `local-${seq++}`;
 
+/** 取一条消息的纯文本预览（拼接文本段，截断给列表副标题用） */
+function previewOf(segments: MessageSegment[]): string {
+  const text = segments
+    .filter((s): s is Extract<MessageSegment, { kind: "text" }> => s.kind === "text")
+    .map((s) => s.text)
+    .join("");
+  return text.slice(0, 40) || "…";
+}
+
+/** setConversations 的类型别名（helper 里复用） */
+type SetConvs = React.Dispatch<React.SetStateAction<Conversation[]>>;
+
+/**
+ * 把一段增量文本追加进指定会话里的某条 assistant 消息。
+ * 该消息不存在则先创建（惰性：首个 delta 到达才落一条空助手消息），
+ * 存在则接到它最后一个文本段尾部。同时刷新会话预览/时间。
+ */
+function appendDelta(
+  setConversations: SetConvs,
+  convId: string,
+  replyId: string,
+  chunk: string,
+): void {
+  setConversations((prev) =>
+    prev.map((c) => {
+      if (c.id !== convId) return c;
+      const idx = c.messages.findIndex((m) => m.id === replyId);
+      let messages: ChatMessage[];
+      if (idx === -1) {
+        // 首个 delta：新建一条 assistant 消息
+        const reply: ChatMessage = {
+          id: replyId,
+          role: "assistant",
+          ts: Date.now(),
+          segments: [{ kind: "text", text: chunk }],
+        };
+        messages = [...c.messages, reply];
+      } else {
+        // 续写：接到最后一个文本段（没有则补一个）
+        const msg = c.messages[idx];
+        const segs = [...msg.segments];
+        const last = segs[segs.length - 1];
+        if (last && last.kind === "text") {
+          segs[segs.length - 1] = { kind: "text", text: last.text + chunk };
+        } else {
+          segs.push({ kind: "text", text: chunk });
+        }
+        const updated: ChatMessage = { ...msg, segments: segs };
+        messages = [...c.messages];
+        messages[idx] = updated;
+      }
+      const reply = messages[messages.length - 1];
+      return {
+        ...c,
+        preview: previewOf(reply.segments),
+        updatedAt: reply.ts,
+        messages,
+      };
+    }),
+  );
+}
+
+/** 直接落一条完整的 assistant 文本消息（用于「未配置 provider」等即时提示） */
+function appendAssistantText(
+  setConversations: SetConvs,
+  convId: string,
+  replyId: string,
+  text: string,
+): void {
+  appendDelta(setConversations, convId, replyId, text);
+}
+
 export function ChatWindow() {
   const { theme, toggleTheme } = useTheme();
   const [conversations, setConversations] = useState<Conversation[]>(MOCK_CONVERSATIONS);
   const [activeId, setActiveId] = useState<string | null>(
     MOCK_CONVERSATIONS[0]?.id ?? null,
   );
+  // typing：首个 delta 到达前显示输入指示器；sending：整段请求进行中（禁输入框）
   const [typing, setTyping] = useState(false);
+  const [sending, setSending] = useState(false);
 
   // 分组相对日期用的时间基准：随会话增改刷新
   const now = useMemo(() => Date.now(), [conversations]);
@@ -60,55 +137,76 @@ export function ChatWindow() {
   const handleSend = useCallback(
     (text: string) => {
       if (!activeId) return;
+
+      const profile = getActiveProfile();
       const userMsg: ChatMessage = {
         id: nextId(),
         role: "user",
         ts: Date.now(),
         segments: [{ kind: "text", text }],
       };
-      // 先落用户消息，更新会话标题/预览
+
+      // 先落用户消息，更新会话标题/预览；同时算出「含这条」的历史给后端。
+      // 注意用 activeId 锁定当前会话，避免流式回填串到别的会话上。
+      const convId = activeId;
+      let history: ChatTurn[] = [];
       setConversations((prev) =>
-        prev.map((c) =>
-          c.id === activeId
-            ? {
-                ...c,
-                title: c.messages.length === 0 ? text.slice(0, 18) : c.title,
-                preview: text,
-                updatedAt: userMsg.ts,
-                messages: [...c.messages, userMsg],
-              }
-            : c,
-        ),
+        prev.map((c) => {
+          if (c.id !== convId) return c;
+          const messages = [...c.messages, userMsg];
+          history = toHistory(messages);
+          return {
+            ...c,
+            title: c.messages.length === 0 ? text.slice(0, 18) : c.title,
+            preview: text,
+            updatedAt: userMsg.ts,
+            messages,
+          };
+        }),
       );
 
-      // 模拟助手「思考 → 回答」：UI 阶段的占位，后续换成真实流式
-      setTyping(true);
-      window.setTimeout(() => {
-        const reply: ChatMessage = {
-          id: nextId(),
-          role: "assistant",
-          ts: Date.now(),
-          segments: [
-            {
-              kind: "text",
-              text: "收到喵～这里之后会接上真正的 AI agent，能读文件、跑命令、操作整台电脑。现在先把界面跑通的说！",
-            },
-          ],
-        };
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === activeId
-              ? {
-                  ...c,
-                  preview: "收到喵～这里之后会接上真正的 AI agent…",
-                  updatedAt: reply.ts,
-                  messages: [...c.messages, reply],
-                }
-              : c,
-          ),
+      // 没配置 provider：直接以一条助手提示收场，不发请求
+      if (!profile) {
+        appendAssistantText(
+          setConversations,
+          convId,
+          nextId(),
+          "还没配置 AI 服务商喵～去「设置 → AI 服务」加一个并选中，就能聊啦。",
         );
-        setTyping(false);
-      }, 10000);
+        return;
+      }
+
+      // 助手消息 id 惰性创建：首个 delta 到达时才落一条空助手消息，
+      // 在此之前保持输入指示器（typing）显示「思考中」。
+      const replyId = nextId();
+      let started = false;
+      setSending(true);
+      setTyping(true);
+
+      streamChat(profile, history, {
+        onDelta: (chunk) => {
+          if (!started) {
+            started = true;
+            setTyping(false);
+          }
+          appendDelta(setConversations, convId, replyId, chunk);
+        },
+        onDone: () => {
+          setTyping(false);
+          setSending(false);
+        },
+        onError: (message) => {
+          setTyping(false);
+          setSending(false);
+          // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
+          appendDelta(
+            setConversations,
+            convId,
+            replyId,
+            started ? `\n\n[出错了喵] ${message}` : `[出错了喵] ${message}`,
+          );
+        },
+      });
     },
     [activeId],
   );
@@ -145,7 +243,7 @@ export function ChatWindow() {
                 <ListArea>
                   <MessageList messages={active.messages} typing={typing} />
                 </ListArea>
-                <ChatComposer onSend={handleSend} disabled={typing} />
+                <ChatComposer onSend={handleSend} disabled={sending} />
               </>
             ) : (
               <NoConv>
