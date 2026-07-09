@@ -115,6 +115,8 @@ export function ChatWindow() {
   // typing：首个 delta 到达前显示输入指示器；sending：整段请求进行中（禁输入框）
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
+  // 正在流式输出的助手消息 id：驱动该条末尾文本段逐字蹦入（StreamingText）
+  const [streamingId, setStreamingId] = useState<string | null>(null);
 
   // 防抖落盘：会话任何变动后 ~500ms 写一次。流式 delta 高频触发，
   // 防抖把整段增量合并成一次写盘，最后一个 delta 落定后统一持久化。
@@ -192,10 +194,13 @@ export function ChatWindow() {
 
       // 助手消息 id 惰性创建：首个 delta 到达时才落一条空助手消息，
       // 在此之前保持输入指示器（typing）显示「思考中」。
+      // streamingId 提前设成 replyId：待首个 delta 建出该消息时，它一挂载就是 live，
+      // 从空基线开始逐字蹦入（连第一段 chunk 也蹦）。
       const replyId = nextId();
       let started = false;
       setSending(true);
       setTyping(true);
+      setStreamingId(replyId);
 
       streamChat(profile, history, {
         onDelta: (chunk) => {
@@ -208,10 +213,12 @@ export function ChatWindow() {
         onDone: () => {
           setTyping(false);
           setSending(false);
+          setStreamingId(null); // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
         },
         onError: (message) => {
           setTyping(false);
           setSending(false);
+          setStreamingId(null);
           // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
           appendDelta(
             setConversations,
@@ -255,7 +262,11 @@ export function ChatWindow() {
                   </ConvMeta>
                 </ConvHeader>
                 <ListArea>
-                  <MessageList messages={active.messages} typing={typing} />
+                  <MessageList
+                    messages={active.messages}
+                    typing={typing}
+                    streamingId={streamingId}
+                  />
                 </ListArea>
                 <ChatComposer onSend={handleSend} disabled={sending} />
               </>

@@ -4,6 +4,7 @@ import { PixelFrame } from "../../components/pixel/PixelFrame";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { formatClock, type ChatMessage } from "../types";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { StreamingText } from "./StreamingText";
 
 /**
  * 一条消息气泡。
@@ -24,11 +25,18 @@ const AVATAR_PIXEL = 3; // 头像面像素大小
 
 interface MessageBubbleProps {
   msg: ChatMessage;
+  /** 这条消息正在流式输出：其「最后一个文本段」逐字蹦入 */
+  live?: boolean;
 }
 
-export function MessageBubble({ msg }: MessageBubbleProps) {
+export function MessageBubble({ msg, live }: MessageBubbleProps) {
   const isUser = msg.role === "user";
   const pal = isUser ? PRIORITY_PAL.primary : PRIORITY_PAL.low;
+  // 只让「最后一个文本段」逐字蹦入：流式增量总是接在末尾，前面的段早已定稿。
+  const lastTextIdx = msg.segments.reduce(
+    (acc, seg, i) => (seg.kind === "text" ? i : acc),
+    -1,
+  );
   return (
     <Row data-role={msg.role}>
       {!isUser && (
@@ -59,7 +67,10 @@ export function MessageBubble({ msg }: MessageBubbleProps) {
             {msg.segments.map((seg, i) =>
               seg.kind === "text" ? (
                 <Text key={i} data-role={msg.role}>
-                  {seg.text}
+                  <StreamingText
+                    text={seg.text}
+                    live={live && i === lastTextIdx}
+                  />
                 </Text>
               ) : (
                 <ToolCallBlock key={i} seg={seg} />

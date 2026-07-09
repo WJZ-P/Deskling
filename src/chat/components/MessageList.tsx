@@ -14,9 +14,11 @@ import { TypingIndicator } from "./TypingIndicator";
 interface MessageListProps {
   messages: ChatMessage[];
   typing?: boolean;
+  /** 正在流式输出的那条消息 id：它的末尾文本段逐字蹦入 */
+  streamingId?: string | null;
 }
 
-export function MessageList({ messages, typing }: MessageListProps) {
+export function MessageList({ messages, typing, streamingId }: MessageListProps) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -40,7 +42,7 @@ export function MessageList({ messages, typing }: MessageListProps) {
       ) : (
         <>
           {messages.map((m) => (
-            <MessageBubble key={m.id} msg={m} />
+            <MessageBubble key={m.id} msg={m} live={m.id === streamingId} />
           ))}
           {typing && <TypingIndicator />}
         </>
