@@ -6,6 +6,7 @@ import { TrayMenu } from "./windows/TrayMenu";
 import { PetWindow } from "./windows/PetWindow";
 import { ChatWindow } from "./windows/ChatWindow";
 import { initSettings } from "./settings";
+import { initConversations } from "./chat/store";
 import { applyTheme } from "./styles/theme";
 import "./styles/theme.css";
 
@@ -22,6 +23,9 @@ async function bootstrap() {
   // 启动时先 await 读取持久化配置（主题等），失败则回退默认浅色
   const settings = await initSettings();
   applyTheme(settings.theme);
+
+  // 读入历史会话到内存缓存（供 ChatWindow 同步取初值，避免闪空）
+  await initConversations();
 
   // 同一份前端 bundle 服务多个窗口：按 label 分流
   // main = 主界面 · pet = 桌宠 · tray-menu = 托盘右键菜单 · chat = AI 对话窗

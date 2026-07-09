@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t } from "../styles/theme";
@@ -10,7 +10,7 @@ import { HistorySidebar } from "../chat/components/HistorySidebar";
 import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
-import { MOCK_CONVERSATIONS } from "../chat/mockData";
+import { getConversations, persistConversations } from "../chat/store";
 import { streamChat, toHistory, type ChatTurn } from "../chat/api";
 import { getActiveProfile } from "../settings";
 import type { ChatMessage, Conversation, MessageSegment } from "../chat/types";
@@ -105,13 +105,27 @@ function appendAssistantText(
 
 export function ChatWindow() {
   const { theme, toggleTheme } = useTheme();
-  const [conversations, setConversations] = useState<Conversation[]>(MOCK_CONVERSATIONS);
+  // 初值同步读会话缓存（bootstrap 已 initConversations 填好），避免闪空
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    getConversations(),
+  );
   const [activeId, setActiveId] = useState<string | null>(
-    MOCK_CONVERSATIONS[0]?.id ?? null,
+    () => getConversations()[0]?.id ?? null,
   );
   // typing：首个 delta 到达前显示输入指示器；sending：整段请求进行中（禁输入框）
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
+
+  // 防抖落盘：会话任何变动后 ~500ms 写一次。流式 delta 高频触发，
+  // 防抖把整段增量合并成一次写盘，最后一个 delta 落定后统一持久化。
+  const persistTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    window.clearTimeout(persistTimer.current);
+    persistTimer.current = window.setTimeout(() => {
+      void persistConversations(conversations);
+    }, 500);
+    return () => window.clearTimeout(persistTimer.current);
+  }, [conversations]);
 
   // 分组相对日期用的时间基准：随会话增改刷新
   const now = useMemo(() => Date.now(), [conversations]);
