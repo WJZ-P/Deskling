@@ -153,7 +153,8 @@ pub fn run() {
             pet_visible,
             chat_visible,
             provider::provider_test,
-            provider::provider_chat
+            provider::provider_chat,
+            provider::provider_chat_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

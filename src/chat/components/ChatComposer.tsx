@@ -30,10 +30,13 @@ const FIELD_TUNE: Partial<SurfaceTune> = {
 
 interface ChatComposerProps {
   onSend: (text: string) => void;
-  disabled?: boolean;
+  /** 点暂停：终止当前在途回复。sending=true 时发送按钮变暂停按钮 */
+  onStop?: () => void;
+  /** 是否有回复正在生成中（决定按钮是「发送」还是「暂停」） */
+  sending?: boolean;
 }
 
-export function ChatComposer({ onSend, disabled }: ChatComposerProps) {
+export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -48,26 +51,28 @@ export function ChatComposer({ onSend, disabled }: ChatComposerProps) {
   }, [value]);
 
   const submit = () => {
+    // 生成中不发送（此时按钮是暂停）；输入框仍可继续打字预输入
+    if (sending) return;
     const text = value.trim();
-    if (!text || disabled) return;
+    if (!text) return;
     onSend(text);
     setValue("");
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // 生成中：Enter 不发送，走默认换行（预输入下一句也能自由分行）
+    if (e.key === "Enter" && !e.shiftKey && !sending) {
       e.preventDefault();
       submit();
     }
   };
 
-  // 聚焦或悬停 → hover：边框点亮 + 低噪动起来（同 PixelInput）
-  const state: SurfaceState = disabled ? "rest" : focused || hovered ? "hover" : "rest";
+  // 输入框始终可用（生成中也能预输入下一句），故 hover 态只看聚焦/悬停
+  const state: SurfaceState = focused || hovered ? "hover" : "rest";
 
   return (
     <Root>
       <Field
-        data-disabled={disabled || undefined}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         onClick={() => taRef.current?.focus()}
@@ -92,7 +97,6 @@ export function ChatComposer({ onSend, disabled }: ChatComposerProps) {
             value={value}
             rows={1}
             placeholder="和 Deskling 说点什么喵～（Enter 发送 · Shift+Enter 换行）"
-            disabled={disabled}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)}
@@ -101,13 +105,20 @@ export function ChatComposer({ onSend, disabled }: ChatComposerProps) {
         </PixelSurface>
       </Field>
       <SendSlot>
-        <PixelButton
-          variant="primary"
-          disabled={disabled || value.trim().length === 0}
-          onClick={submit}
-        >
-          发送
-        </PixelButton>
+        {sending ? (
+          // 生成中：发送位变暂停。始终可点（终止本轮）
+          <PixelButton variant="normal" onClick={onStop}>
+            暂停
+          </PixelButton>
+        ) : (
+          <PixelButton
+            variant="primary"
+            disabled={value.trim().length === 0}
+            onClick={submit}
+          >
+            发送
+          </PixelButton>
+        )}
       </SendSlot>
     </Root>
   );

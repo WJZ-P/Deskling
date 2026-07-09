@@ -11,7 +11,7 @@ import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
-import { streamChat, toHistory, type ChatTurn } from "../chat/api";
+import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
 import { getActiveProfile } from "../settings";
 import type { ChatMessage, Conversation, MessageSegment } from "../chat/types";
 
@@ -27,9 +27,13 @@ import type { ChatMessage, Conversation, MessageSegment } from "../chat/types";
  * 这样会话状态在一次运行内保留（不销毁窗口）。
  */
 
-// 简易自增 id（一次运行内唯一即可）
-let seq = 1000;
-const nextId = () => `local-${seq++}`;
+// 消息 id：必须跨会话唯一。若只用运行内自增计数器，程序重启后计数器归零、
+// 重新发号会和上次持久化的旧消息 id 相撞——新一轮 replyId 恰好等于某条旧消息 id 时，
+// appendDelta 会误命中那条旧消息、把新回复接到它尾部（表现为「AI 回复追加在上次消息结尾」）。
+// 故 id 用「启动时间戳基址 + 自增」，确保每次运行发出的 id 段互不重叠。
+let seq = 0;
+const idBase = Date.now();
+const nextId = () => `local-${idBase}-${seq++}`;
 
 /** 取一条消息的纯文本预览（拼接文本段，截断给列表副标题用） */
 function previewOf(segments: MessageSegment[]): string {
@@ -117,6 +121,8 @@ export function ChatWindow() {
   const [sending, setSending] = useState(false);
   // 正在流式输出的助手消息 id：驱动该条末尾文本段逐字蹦入（StreamingText）
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  // 当前在途流式请求的句柄（含 cancel）：暂停按钮据它终止本轮
+  const streamRef = useRef<ChatStream | null>(null);
 
   // 防抖落盘：会话任何变动后 ~500ms 写一次。流式 delta 高频触发，
   // 防抖把整段增量合并成一次写盘，最后一个 delta 落定后统一持久化。
@@ -202,7 +208,15 @@ export function ChatWindow() {
       setTyping(true);
       setStreamingId(replyId);
 
-      streamChat(profile, history, {
+      // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId
+      const finish = () => {
+        setTyping(false);
+        setSending(false);
+        setStreamingId(null);
+        streamRef.current = null;
+      };
+
+      const handle = streamChat(profile, history, {
         onDelta: (chunk) => {
           if (!started) {
             started = true;
@@ -210,15 +224,9 @@ export function ChatWindow() {
           }
           appendDelta(setConversations, convId, replyId, chunk);
         },
-        onDone: () => {
-          setTyping(false);
-          setSending(false);
-          setStreamingId(null); // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
-        },
+        onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
         onError: (message) => {
-          setTyping(false);
-          setSending(false);
-          setStreamingId(null);
+          finish();
           // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
           appendDelta(
             setConversations,
@@ -228,9 +236,20 @@ export function ChatWindow() {
           );
         },
       });
+      streamRef.current = handle;
     },
     [activeId],
   );
+
+  // 暂停：请求后端终止当前流，并立即本地收尾。已产出的部分回复原样保留在气泡里，
+  // 后端随后回推的 Done 因 streamRef 已清空 + 状态已收拢，是无害空转。
+  const handleStop = useCallback(() => {
+    streamRef.current?.cancel();
+    streamRef.current = null;
+    setTyping(false);
+    setSending(false);
+    setStreamingId(null);
+  }, []);
 
   return (
     <Shell>
@@ -266,9 +285,10 @@ export function ChatWindow() {
                     messages={active.messages}
                     typing={typing}
                     streamingId={streamingId}
+                    convId={active.id}
                   />
                 </ListArea>
-                <ChatComposer onSend={handleSend} disabled={sending} />
+                <ChatComposer onSend={handleSend} onStop={handleStop} sending={sending} />
               </>
             ) : (
               <NoConv>

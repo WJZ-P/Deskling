@@ -1,6 +1,6 @@
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import { PixelFrame } from "../../components/pixel/PixelFrame";
+import { GLPixelFrame } from "../../components/pixel/GLPixelFrame";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { formatClock, type ChatMessage } from "../types";
 import { ToolCallBlock } from "./ToolCallBlock";
@@ -41,7 +41,7 @@ export function MessageBubble({ msg, live }: MessageBubbleProps) {
     <Row data-role={msg.role}>
       {!isUser && (
         <Avatar aria-hidden>
-          <PixelFrame
+          <GLPixelFrame
             palette={PRIORITY_PAL.normal}
             variant="raised"
             pixel={AVATAR_PIXEL}
@@ -54,7 +54,7 @@ export function MessageBubble({ msg, live }: MessageBubbleProps) {
       )}
       <Column data-role={msg.role}>
         <Bubble>
-          <PixelFrame
+          <GLPixelFrame
             palette={pal}
             variant="raised"
             pixel={BUBBLE_PIXEL}
@@ -62,6 +62,7 @@ export function MessageBubble({ msg, live }: MessageBubbleProps) {
             noise={BUBBLE_NOISE}
             noiseGranularity={BUBBLE_NOISE_GRAN}
             liveResize
+            animate={live}
           />
           <BubbleInner>
             {msg.segments.map((seg, i) =>

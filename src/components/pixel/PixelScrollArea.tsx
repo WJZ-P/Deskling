@@ -5,6 +5,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefCallback,
   type UIEvent,
 } from "react";
 import { styled } from "@linaria/react";
@@ -32,10 +33,27 @@ interface PixelScrollAreaProps {
   className?: string;
   /** 透传给内部滚动视口的样式（padding / gap / flex 布局等） */
   contentStyle?: CSSProperties;
+  /** 把内部真实滚动视口节点暴露给外部（虚拟列表需要挂在它上面测量/滚动） */
+  scrollRef?: RefCallback<HTMLDivElement> | React.RefObject<HTMLDivElement | null>;
 }
 
-export function PixelScrollArea({ children, className, contentStyle }: PixelScrollAreaProps) {
+export function PixelScrollArea({
+  children,
+  className,
+  contentStyle,
+  scrollRef,
+}: PixelScrollAreaProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  // 内部 ref 与外部传入的 scrollRef 双写：同一个真实视口节点
+  const setViewport = useCallback(
+    (node: HTMLDivElement | null) => {
+      viewportRef.current = node;
+      if (typeof scrollRef === "function") scrollRef(node);
+      else if (scrollRef) scrollRef.current = node;
+    },
+    [scrollRef],
+  );
   const thumbRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false); // 拖动中：由 onMove 命令式更新滑块，sync 跳过 React 回路
   const [thumb, setThumb] = useState<{ h: number; top: number; show: boolean }>({
@@ -119,7 +137,7 @@ export function PixelScrollArea({ children, className, contentStyle }: PixelScro
 
   return (
     <Root className={className}>
-      <Viewport ref={viewportRef} onScroll={onScroll} style={contentStyle}>
+      <Viewport ref={setViewport} onScroll={onScroll} style={contentStyle}>
         {children}
       </Viewport>
       {thumb.show && (

@@ -11,6 +11,34 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// 在途流式请求的取消登记表：requestId → 取消标志。
+/// 前端「暂停」按钮调 `provider_chat_cancel(requestId)` 把标志置真，
+/// 对应的 `provider_chat` 读流循环每收一块就查一次，见真即收尾（发 Done 退出）。
+/// 用 Arc<AtomicBool> 让命令持有自己那份句柄，登记表里删掉后仍能安全读。
+fn cancel_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    static REG: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 注册一个请求的取消标志并拿到句柄（重复 id 覆盖旧的）。
+fn register_cancel(request_id: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut reg) = cancel_registry().lock() {
+        reg.insert(request_id.to_string(), flag.clone());
+    }
+    flag
+}
+
+/// 请求收尾时从登记表移除自己的标志（正常结束 / 出错 / 被取消都要清）。
+fn unregister_cancel(request_id: &str) {
+    if let Ok(mut reg) = cancel_registry().lock() {
+        reg.remove(request_id);
+    }
+}
 
 /// 一轮对话消息（前端传来的历史）：role = user / assistant，content 为纯文本。
 /// P0 只走文本；后续接工具调用时再扩展成 segments。
@@ -352,12 +380,37 @@ pub async fn provider_test(profile: ProviderProfile) -> TestResult {
 /// SSE 解析：reqwest 的 bytes_stream 给的是任意切分的字节块，可能把一行劈成两半，
 /// 故用一个字节缓冲累积，按 `\n` 切出完整行再处理；`data:` 行的负载解析成 JSON
 /// 交给协议的 parse_delta 抽文本。OpenAI 末尾的 `data: [DONE]` 当作正常结束哨兵。
+/// 收尾即从取消登记表移除自己的 RAII 守卫：无论正常结束、出错还是被取消，
+/// provider_chat 的任一退出路径都会走它的 Drop，保证标志不残留。
+struct CancelGuard(String);
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        unregister_cancel(&self.0);
+    }
+}
+
+/// 取消一次在途流式对话：把该 requestId 的取消标志置真。
+/// 对应的 provider_chat 读流循环下一次查标志时收尾退出。找不到（已结束）则无操作。
+#[tauri::command]
+pub fn provider_chat_cancel(request_id: String) {
+    if let Ok(reg) = cancel_registry().lock() {
+        if let Some(flag) = reg.get(&request_id) {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn provider_chat(
+    request_id: String,
     profile: ProviderProfile,
     history: Vec<ChatTurn>,
     on_event: tauri::ipc::Channel<ChatEvent>,
 ) -> Result<(), String> {
+    // 登记取消标志并拿句柄；_guard 在函数任一退出点 Drop 时把登记项清掉
+    let cancel = register_cancel(&request_id);
+    let _guard = CancelGuard(request_id);
+
     // 参数兜底：缺 key / baseUrl 直接以 error 事件收场
     if profile.api_key.trim().is_empty() {
         let _ = on_event.send(ChatEvent::Error { message: "API Key 为空".into() });
@@ -420,6 +473,12 @@ pub async fn provider_chat(
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
+        // 用户点了暂停：置了取消标志 → 立即收尾（drop stream 断开连接）。
+        // 发一个 Done 让前端统一走收尾路径（前端已本地置为已中止，忽略迟到事件）。
+        if cancel.load(Ordering::SeqCst) {
+            let _ = on_event.send(ChatEvent::Done);
+            return Ok(());
+        }
         let bytes = match chunk {
             Ok(b) => b,
             Err(e) => {

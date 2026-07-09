@@ -56,20 +56,40 @@ export function toHistory(messages: ChatMessage[]): ChatTurn[] {
   return out;
 }
 
+/** 一次在途流式请求的句柄：调 cancel() 请求后端暂停（幂等）。 */
+export interface ChatStream {
+  /** 请求 Rust 侧终止这次流（下一次读流查标志即收尾）。 */
+  cancel: () => void;
+}
+
+// 每次请求的唯一 id：给 Rust 侧登记取消标志用（一次运行内唯一即可）
+let reqSeq = 0;
+const nextRequestId = () => `chat-${Date.now()}-${reqSeq++}`;
+
 /**
- * 发起一次流式对话。返回 Promise：命令调用完成即 resolve
- * （真正的收尾由 onDone/onError 回调驱动，命令本身总是 Ok）。
+ * 发起一次流式对话。同步返回一个句柄（含 cancel），
+ * 底层命令调用在后台进行：真正的收尾由 onDone/onError 回调驱动。
+ * 点「暂停」时调 handle.cancel() → Rust 置取消标志 → 读流循环收尾发 Done。
  */
-export async function streamChat(
+export function streamChat(
   profile: ProviderProfile,
   history: ChatTurn[],
   handlers: StreamHandlers,
-): Promise<void> {
+): ChatStream {
+  const requestId = nextRequestId();
   const channel = new Channel<ChatEvent>();
   channel.onmessage = (ev) => {
     if (ev.type === "delta") handlers.onDelta(ev.text);
     else if (ev.type === "done") handlers.onDone();
     else if (ev.type === "error") handlers.onError(ev.message);
   };
-  await invoke("provider_chat", { profile, history, onEvent: channel });
+  // 后台发起；命令自身总是 Ok，异常仅可能来自 IPC 层，兜底转成 onError
+  void invoke("provider_chat", { requestId, profile, history, onEvent: channel }).catch(
+    (err) => handlers.onError(String(err)),
+  );
+  return {
+    cancel: () => {
+      void invoke("provider_chat_cancel", { requestId }).catch(() => {});
+    },
+  };
 }
