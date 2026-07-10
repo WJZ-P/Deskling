@@ -193,8 +193,9 @@ export function ChatWindow() {
   const [activeId, setActiveId] = useState<string | null>(
     () => getConversations()[0]?.id ?? null,
   );
-  // typing：首个 delta 到达前显示输入指示器；sending：整段请求进行中（禁输入框）
-  const [typing, setTyping] = useState(false);
+  // typingConv：首个 delta 到达前显示输入指示器的「会话 id」——必须记会话而非布尔，
+  // 否则流式思考中切去/新开别的会话，loading 气泡会跟着串场；sending：整段请求进行中（禁输入框）
+  const [typingConv, setTypingConv] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   // 正在流式输出的助手消息 id：驱动该条末尾文本段逐字蹦入（StreamingText）
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -251,7 +252,7 @@ export function ChatWindow() {
         streamRef.current.cancel();
         streamRef.current = null;
         liveRef.current = null;
-        setTyping(false);
+        setTypingConv(null);
         setSending(false);
         setStreamingId(null);
       }
@@ -274,6 +275,25 @@ export function ChatWindow() {
     [],
   );
 
+  // 删除单条消息（气泡悬浮工具栏）：按 (convId, msgId) 精确定位——老数据存在
+  // 跨会话重复 id，必须带会话 id 才不误删别的会话里的同名消息。
+  // 顺手用剩余最后一条刷新会话预览（不动 updatedAt，避免列表因删除而重排）。
+  const handleDeleteMessage = useCallback((convId: string, msgId: string) => {
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== convId) return c;
+        const messages = c.messages.filter((m) => m.id !== msgId);
+        if (messages.length === c.messages.length) return c;
+        const last = messages[messages.length - 1];
+        return {
+          ...c,
+          messages,
+          preview: last ? previewOf(last.segments) : "还没有消息",
+        };
+      }),
+    );
+  }, []);
+
   const handleNew = useCallback(() => {
     const conv: Conversation = {
       id: nextId(),
@@ -286,11 +306,107 @@ export function ChatWindow() {
     setActiveId(conv.id);
   }, []);
 
+  /**
+   * 发起一轮流式请求（handleSend 与「编辑重发」共用）。
+   * 前置条件：目标会话的 messages 已更新到位，history 是要发给后端的完整轮次。
+   * 未配置 provider 时落一条提示消息收场。
+   */
+  const startStream = useCallback((convId: string, history: ChatTurn[]) => {
+    // 没配置 provider：直接以一条助手提示收场，不发请求
+    const profile = getActiveProfile();
+    if (!profile) {
+      appendAssistantText(
+        setConversations,
+        convId,
+        nextId(),
+        "还没配置 AI 服务商喵～去「设置 → AI 服务」加一个并选中，就能聊啦。",
+      );
+      return;
+    }
+
+    // 助手消息 id 惰性创建：首个 delta 到达时才落一条空助手消息，
+    // 在此之前保持输入指示器（typing）显示「思考中」。
+    // streamingId 提前设成 replyId：待首个 delta 建出该消息时，它一挂载就是 live，
+    // 从空基线开始逐字蹦入（连第一段 chunk 也蹦）。
+    const replyId = nextId();
+    let started = false;
+    setSending(true);
+    setTypingConv(convId);
+    setStreamingId(replyId);
+    liveRef.current = { convId, replyId };
+
+    // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
+    // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
+    // 取消触发的 Done 则靠它收拢没答完的审批段，不留孤儿转圈）。
+    const finish = () => {
+      setTypingConv(null);
+      setSending(false);
+      setStreamingId(null);
+      streamRef.current = null;
+      liveRef.current = null;
+      updateToolSegments(setConversations, convId, replyId, null, {
+        status: "error",
+        detail: "已取消",
+      });
+    };
+
+    const handle = streamChat(
+      profile,
+      history,
+      {
+        onDelta: (chunk) => {
+          if (!started) {
+            started = true;
+            setTypingConv(null);
+          }
+          appendDelta(setConversations, convId, replyId, chunk);
+        },
+        // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
+        // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。
+        onToolStart: (call) => {
+          if (!started) {
+            started = true;
+            setTypingConv(null);
+          }
+          appendToolSegment(setConversations, convId, replyId, {
+            kind: "tool",
+            id: call.id,
+            name: call.name,
+            summary: call.summary,
+            args: call.args,
+            needsApproval: call.needsApproval,
+            status: call.needsApproval ? "pending" : "running",
+          });
+        },
+        // 工具执行收尾：按 id 回填状态与结果预览
+        onToolEnd: (end) => {
+          updateToolSegments(setConversations, convId, replyId, end.id, {
+            status: end.status,
+            detail: end.detail,
+          });
+        },
+        onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
+        onError: (message) => {
+          finish();
+          // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
+          appendDelta(
+            setConversations,
+            convId,
+            replyId,
+            started ? `\n\n[出错了喵] ${message}` : `[出错了喵] ${message}`,
+          );
+        },
+      },
+      // 免审批开关：发送那一刻读取（跨窗口 onKeyChange 已保证缓存新鲜）
+      getSetting("autoApproveTools"),
+    );
+    streamRef.current = handle;
+  }, []);
+
   const handleSend = useCallback(
     (text: string) => {
       if (!activeId) return;
 
-      const profile = getActiveProfile();
       const userMsg: ChatMessage = {
         id: nextId(),
         role: "user",
@@ -317,96 +433,68 @@ export function ChatWindow() {
         }),
       );
 
-      // 没配置 provider：直接以一条助手提示收场，不发请求
-      if (!profile) {
-        appendAssistantText(
-          setConversations,
-          convId,
-          nextId(),
-          "还没配置 AI 服务商喵～去「设置 → AI 服务」加一个并选中，就能聊啦。",
-        );
-        return;
-      }
+      startStream(convId, history);
+    },
+    [activeId, startStream],
+  );
 
-      // 助手消息 id 惰性创建：首个 delta 到达时才落一条空助手消息，
-      // 在此之前保持输入指示器（typing）显示「思考中」。
-      // streamingId 提前设成 replyId：待首个 delta 建出该消息时，它一挂载就是 live，
-      // 从空基线开始逐字蹦入（连第一段 chunk 也蹦）。
-      const replyId = nextId();
-      let started = false;
-      setSending(true);
-      setTyping(true);
-      setStreamingId(replyId);
-      liveRef.current = { convId, replyId };
-
-      // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
-      // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
-      // 取消触发的 Done 则靠它收拢没答完的审批段，不留孤儿转圈）。
-      const finish = () => {
-        setTyping(false);
+  // 编辑单条消息 = 从这个节点「分叉重来」：替换文本、丢弃它之后的全部消息；
+  // 编辑的是用户消息时再以截断后的历史重新发起请求（重新进 loading，AI 重答）。
+  // 编辑助手消息只截断不重发——没有新的用户提问，重发没有语义。
+  const handleEditMessage = useCallback(
+    (convId: string, msgId: string, text: string) => {
+      // 有在途流先取消收尾（编辑期间输入框虽被 sending 禁用，但工具栏仍可用；
+      // 且被截断丢弃的消息里可能正包含流式落点，不取消会写进已删除的消息）
+      if (streamRef.current) {
+        streamRef.current.cancel();
+        streamRef.current = null;
+        const live = liveRef.current;
+        liveRef.current = null;
+        if (live) {
+          updateToolSegments(setConversations, live.convId, live.replyId, null, {
+            status: "error",
+            detail: "已取消",
+          });
+        }
+        setTypingConv(null);
         setSending(false);
         setStreamingId(null);
-        streamRef.current = null;
-        liveRef.current = null;
-        updateToolSegments(setConversations, convId, replyId, null, {
-          status: "error",
-          detail: "已取消",
-        });
-      };
+      }
 
-      const handle = streamChat(
-        profile,
-        history,
-        {
-          onDelta: (chunk) => {
-            if (!started) {
-              started = true;
-              setTyping(false);
-            }
-            appendDelta(setConversations, convId, replyId, chunk);
-          },
-          // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
-          // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。
-          onToolStart: (call) => {
-            if (!started) {
-              started = true;
-              setTyping(false);
-            }
-            appendToolSegment(setConversations, convId, replyId, {
-              kind: "tool",
-              id: call.id,
-              name: call.name,
-              summary: call.summary,
-              args: call.args,
-              needsApproval: call.needsApproval,
-              status: call.needsApproval ? "pending" : "running",
-            });
-          },
-          // 工具执行收尾：按 id 回填状态与结果预览
-          onToolEnd: (end) => {
-            updateToolSegments(setConversations, convId, replyId, end.id, {
-              status: end.status,
-              detail: end.detail,
-            });
-          },
-          onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
-          onError: (message) => {
-            finish();
-            // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
-            appendDelta(
-              setConversations,
-              convId,
-              replyId,
-              started ? `\n\n[出错了喵] ${message}` : `[出错了喵] ${message}`,
-            );
-          },
-        },
-        // 免审批开关：发送那一刻读取（跨窗口 onKeyChange 已保证缓存新鲜）
-        getSetting("autoApproveTools"),
+      let history: ChatTurn[] | null = null;
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== convId) return c;
+          const idx = c.messages.findIndex((m) => m.id === msgId);
+          if (idx === -1) return c;
+          const msg = c.messages[idx];
+          // 文本段收敛为一段（编辑框里是拼接文本），工具调用段原位保留
+          const segments: MessageSegment[] = [];
+          let inserted = false;
+          for (const s of msg.segments) {
+            if (s.kind === "text") {
+              if (!inserted) {
+                segments.push({ kind: "text", text });
+                inserted = true;
+              }
+            } else segments.push(s);
+          }
+          if (!inserted) segments.push({ kind: "text", text });
+          // 截断：编辑的这条成为会话新末尾，之后的消息全部丢弃
+          const messages = [...c.messages.slice(0, idx), { ...msg, segments }];
+          if (msg.role === "user") history = toHistory(messages);
+          return {
+            ...c,
+            messages,
+            preview: previewOf(segments),
+            updatedAt: Date.now(),
+          };
+        }),
       );
-      streamRef.current = handle;
+
+      if (history) startStream(convId, history);
     },
-    [activeId],
+    [startStream],
   );
 
   // 暂停：请求后端终止当前流，并立即本地收尾。已产出的部分回复原样保留在气泡里，
@@ -423,7 +511,7 @@ export function ChatWindow() {
         detail: "已取消",
       });
     }
-    setTyping(false);
+    setTypingConv(null);
     setSending(false);
     setStreamingId(null);
   }, []);
@@ -478,10 +566,12 @@ export function ChatWindow() {
                 <ListArea>
                   <MessageList
                     messages={active.messages}
-                    typing={typing}
+                    typing={typingConv === active.id}
                     streamingId={streamingId}
                     convId={active.id}
                     onApproveTool={handleApproveTool}
+                    onEditMessage={handleEditMessage}
+                    onDeleteMessage={handleDeleteMessage}
                   />
                 </ListArea>
                 <ChatComposer onSend={handleSend} onStop={handleStop} sending={sending} />
