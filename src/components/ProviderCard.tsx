@@ -138,7 +138,7 @@ const CornerBR = styled.span`
 `;
 
 const Name = styled.span`
-  font: ${t.textSm};
+  font: ${t.textMd};
   font-weight: bold;
   letter-spacing: 0.5px;
   color: ${t.colorText};
@@ -154,7 +154,7 @@ const Name = styled.span`
 `;
 
 const Meta = styled.span`
-  font: ${t.textXs};
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
 
   &[data-state="active"] {
@@ -164,7 +164,7 @@ const Meta = styled.span`
 `;
 
 const Model = styled.span`
-  font: ${t.textXs};
+  font: ${t.textSm};
   color: ${t.colorAccent};
   overflow: hidden;
   text-overflow: ellipsis;
@@ -176,7 +176,7 @@ const Model = styled.span`
 `;
 
 const NoKey = styled.span`
-  font: ${t.textXs};
+  font: ${t.textSm};
   color: ${t.btnClose};
 
   &[data-state="active"] {
