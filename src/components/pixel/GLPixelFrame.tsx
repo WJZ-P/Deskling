@@ -127,16 +127,23 @@ export const GLPixelFrame = memo(function GLPixelFrame(props: GLPixelFrameProps)
 
   // 游动动画：仅 speed>0 时挂到共享 rAF，逐帧推时间重画本 canvas。
   // 卸载/speed 转零时注销 —— 无动画帧时共享 rAF 自动停，回到零开销。
+  //
+  // 网格尺寸每帧现量（clientWidth/Height），不用 React 侧的 w/h：那份状态走
+  // 140ms 防抖，流式气泡第一行逐字变宽时它一直滞后 —— 位图停留在旧的小宽度、
+  // 被 CSS 拉伸铺满，表现为「边框变粗、切角拉成椭圆」，直到宽度停稳才回弹。
+  // 反正动画帧每帧都要重画，量一次布局的开销可忽略；静态帧不受影响仍走防抖。
   useEffect(() => {
     if (forceSvg || speed <= 0 || w === 0 || h === 0) return;
     const canvas = ref.current;
     if (!canvas) return;
     const tick = (timeSec: number) => {
-      renderPixelFrameInto(canvas, params, timeSec);
+      const liveCols = Math.max(4, Math.round(canvas.clientWidth / pixel));
+      const liveRows = Math.max(4, Math.round(canvas.clientHeight / pixel));
+      renderPixelFrameInto(canvas, { ...params, cols: liveCols, rows: liveRows }, timeSec);
     };
     addAnimatedFrame(tick);
     return () => removeAnimatedFrame(tick);
-  }, [forceSvg, speed, w, h, params]);
+  }, [forceSvg, speed, w, h, params, pixel]);
 
   // 回退 SVG：透传全部 props（含异形效果），行为与直接用 PixelFrame 完全一致
   if (forceSvg) {
