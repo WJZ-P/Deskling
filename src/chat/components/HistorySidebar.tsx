@@ -84,13 +84,16 @@ export function HistorySidebar({
               <Group key={g.label}>
                 <GroupLabel>{g.label}</GroupLabel>
                 {g.items.map((c) => (
+                  // 直接透传父级稳定回调（卡片按 id 回指）：不再每次渲染造新闭包，
+                  // 否则 HistoryCard 的 memo 会被新函数引用击穿、每个 delta 全列表重渲染
                   <HistoryCard
                     key={c.id}
+                    id={c.id}
                     title={c.title}
                     preview={c.preview}
                     active={c.id === activeId}
-                    onSelect={() => onSelect(c.id)}
-                    onDelete={() => onDelete(c.id)}
+                    onSelect={onSelect}
+                    onDelete={onDelete}
                   />
                 ))}
               </Group>

@@ -75,7 +75,10 @@ const TagLabel = styled.span`
   line-height: 1;
   color: ${t.colorTextOnBtn};
 
-  ${TagWrap}[data-variant="primary"] & {
+  /* 注意：不要写 \${TagWrap} 组件插值选择器 —— wyw-in-js 生产构建会把 CSS 里的
+     组件引用抽走后误判声明无人使用、连声明一起摇掉，导致 JSX 引用悬空、整个 app 白屏。
+     这里父级(TagWrap)是唯一带 data-variant 的直接父节点，裸属性选择器等价且安全。 */
+  [data-variant="primary"] > & {
     color: ${t.colorTextOnBtnAccent};
   }
 `;

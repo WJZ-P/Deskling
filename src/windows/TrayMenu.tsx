@@ -142,7 +142,8 @@ const Mark = styled.span`
   opacity: 0;
   transition: opacity 0.16s ease;
 
-  ${Item}:hover & {
+  /* 直接父级(Item)是 button；勿用 \${Item} 组件插值（wyw 生产构建会摇掉声明致白屏） */
+  button:hover > & {
     opacity: 1;
   }
 `;

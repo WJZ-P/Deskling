@@ -10,20 +10,23 @@ import {
 } from "./glPixelRenderer";
 
 /**
- * GPU 渲染版像素帧：视觉等价于 PixelFrame（raised/sunken/flat + 低噪 + 切角），
- * 但把 SVG 的几百个 <rect> 塌成「一张 GPU 渲染的 2D canvas」铺满，
+ * GPU 渲染版像素帧：视觉等价于 PixelFrame（raised/sunken/flat + 低噪 + 切角 +
+ * hollow 空心框），但把 SVG 的几百个 <rect> 塌成「一张 GPU 渲染的 2D canvas」铺满，
  * image-rendering: pixelated 最近邻放大，逐像素复刻 SVG 的 crispEdges 观感。
  *
  * 渲染路径：全 app 共享一个离屏 WebGL 上下文当引擎，一发着色器画到 cols×rows，
- * 再 blit（drawImage）到本组件自己的 2D <canvas>。为什么不每气泡一个 WebGL 上下文：
- * Chromium 单页上限约 16 个，几十个气泡直接爆；2D 上下文无此限，可开成百上千。
+ * 再 blit（drawImage）到本组件自己的 2D <canvas>。为什么不每帧一个 WebGL 上下文：
+ * Chromium 单页上限约 16 个，几十个帧直接爆；2D 上下文无此限，可开成百上千。
+ * 这正是「页面组件一多，SVG 版几万个 <rect> 就卡」的根治办法。
  *
- *  - animate=false（默认，静态气泡/头像）：尺寸/参数变化时渲染一次，之后零开销。
- *  - animate=true（仅正在流式输出的那条气泡）：挂到共享 rAF，逐帧推 u_time 重画，
- *    低噪平滑蠕动。流式结束 animate 转 false，rAF 自动停（无其他动画帧时不转）。
+ *  - 静态帧（noiseSpeed=0 且非 animate）：尺寸/参数变化时渲染一次，之后零开销。
+ *  - 游动帧（noiseSpeed>0，如侧栏/标题栏底噪常驻；或 animate 的流式气泡）：挂到
+ *    全 app 共享的单条 rAF，逐帧推 u_time 重画，低噪平滑蠕动。无动画帧时 rAF 自停。
  *
- * WebGL 不可用时自动回退到 SVG 版 PixelFrame，行为不降级。
- * 绝对定位铺满父级（父级需 position: relative），只作背景，不拦截事件。
+ * 异形效果（notch 书签缺口 / edgeErosion 做旧啃边 / dither 抖动 / sweep 扫描态）
+ * 着色器暂不复刻 —— 命中这些 props 时自动委托回 SVG 版 PixelFrame，观感零回归。
+ * WebGL 整体不可用时同样回退 SVG。绝对定位铺满父级（父级需 position: relative），
+ * 只作背景，不拦截事件。故本组件可作为 PixelFrame 的直接替换（drop-in）。
  */
 
 interface GLPixelFrameProps {
@@ -33,34 +36,65 @@ interface GLPixelFrameProps {
   radius?: number;
   noise?: number;
   noiseGranularity?: number;
+  /** 低噪随时间游动的速度（每秒重掷次数）：0=静态；>0 底噪常驻慢速游动（侧栏/标题栏用） */
+  noiseSpeed?: number;
   /** 像素硬投影高度（CSS px），0=无 */
   elevation?: number;
   shadowColor?: string;
+  /** 空心框：只画外圈 2px 环，中心透明（窗口收口框用） */
+  hollow?: boolean;
   /** 内容驱动的离散尺寸变化（气泡追加内容）传 true：突发首帧同步测量重渲 */
   liveResize?: boolean;
-  /** 低噪随时间蠕动（仅正在流式输出的那条气泡传 true） */
+  /** 低噪随时间蠕动（仅正在流式输出的那条气泡传 true，等价于 noiseSpeed=2.5） */
   animate?: boolean;
   sizeKey?: string | number;
+  // ---- 以下异形 props 着色器不复刻：命中即整体回退 SVG（透传给 PixelFrame）----
+  dither?: string;
+  ditherOpacity?: number;
+  edgeErosion?: number;
+  notch?: number;
+  sweepPalette?: PixelPalette;
+  sweepActive?: boolean;
 }
 
-export const GLPixelFrame = memo(function GLPixelFrame({
-  palette,
-  variant = "raised",
-  pixel = 3,
-  radius = 2,
-  noise = 0,
-  noiseGranularity = 1,
-  elevation = 0,
-  shadowColor = t.colorShadowPixel,
-  liveResize = false,
-  animate = false,
-  sizeKey,
-}: GLPixelFrameProps) {
+export const GLPixelFrame = memo(function GLPixelFrame(props: GLPixelFrameProps) {
+  const {
+    palette,
+    variant = "raised",
+    pixel = 3,
+    radius = 2,
+    noise = 0,
+    noiseGranularity = 1,
+    noiseSpeed = 0,
+    elevation = 0,
+    shadowColor = t.colorShadowPixel,
+    hollow = false,
+    liveResize = false,
+    animate = false,
+    sizeKey,
+    dither,
+    edgeErosion = 0,
+    notch = 0,
+    sweepPalette,
+  } = props;
+
   const ref = useRef<HTMLCanvasElement>(null);
   const { w, h } = useElementSize(ref, { sizeKey, liveResize });
 
   // WebGL 一次性探测：不可用则整体回退到 SVG 版
   const available = useMemo(() => glRendererAvailable(), []);
+
+  // 异形效果着色器暂不支持：命中任一即回退 SVG（含 WebGL 不可用）。
+  // notch/edgeErosion/dither/sweep 用得少，交给功能更全的 SVG 版，观感零回归。
+  const forceSvg =
+    !available ||
+    dither != null ||
+    edgeErosion > 0 ||
+    notch > 0 ||
+    sweepPalette != null;
+
+  // 有效游动速度：显式 noiseSpeed 优先；否则 animate（流式气泡）等价于 2.5Hz。
+  const speed = noiseSpeed > 0 ? noiseSpeed : animate ? 2.5 : 0;
 
   const cols = Math.max(4, Math.round(w / pixel));
   const rows = Math.max(4, Math.round(h / pixel));
@@ -68,48 +102,45 @@ export const GLPixelFrame = memo(function GLPixelFrame({
   // 渲染参数打包：静态渲染 effect 与动画 tick 共用同一份，变化即重渲/重挂。
   // useMemo 稳定引用，避免每次 render 都触发下面两个 effect。
   const params = useMemo(
-    () => ({ cols, rows, variant, palette, radius, noise, noiseGranularity }),
-    [cols, rows, variant, palette, radius, noise, noiseGranularity],
+    () => ({
+      cols,
+      rows,
+      variant,
+      palette,
+      radius,
+      noise,
+      noiseGranularity,
+      noiseSpeed: speed,
+      hollow,
+    }),
+    [cols, rows, variant, palette, radius, noise, noiseGranularity, speed, hollow],
   );
 
-  // 静态渲染：尺寸/参数变化时画一帧（不含时间相位）。动画态由下面的 rAF 覆盖，
-  // 但这里仍先画一帧，保证 animate 由真转假的收尾帧、以及尺寸突变时立即刷新。
+  // 静态渲染：尺寸/参数变化时画一帧（time=0）。游动态由下面的 rAF 覆盖，
+  // 但这里仍先画一帧，保证 speed 由正转零的收尾帧、以及尺寸突变时立即刷新。
   useEffect(() => {
-    if (!available || w === 0 || h === 0) return;
+    if (forceSvg || w === 0 || h === 0) return;
     const canvas = ref.current;
     if (!canvas) return;
     renderPixelFrameInto(canvas, params, 0);
-  }, [available, w, h, params]);
+  }, [forceSvg, w, h, params]);
 
-  // 动画：仅 animate 时挂到共享 rAF，逐帧推时间重画本 canvas。
-  // 卸载/animate 转假时注销 —— 无动画帧时共享 rAF 自动停，回到零开销。
+  // 游动动画：仅 speed>0 时挂到共享 rAF，逐帧推时间重画本 canvas。
+  // 卸载/speed 转零时注销 —— 无动画帧时共享 rAF 自动停，回到零开销。
   useEffect(() => {
-    if (!available || !animate || w === 0 || h === 0) return;
+    if (forceSvg || speed <= 0 || w === 0 || h === 0) return;
     const canvas = ref.current;
     if (!canvas) return;
     const tick = (timeSec: number) => {
-      renderPixelFrameInto(canvas, { ...params, animate: true }, timeSec);
+      renderPixelFrameInto(canvas, params, timeSec);
     };
     addAnimatedFrame(tick);
     return () => removeAnimatedFrame(tick);
-  }, [available, animate, w, h, params]);
+  }, [forceSvg, speed, w, h, params]);
 
-  // WebGL 不可用：直接渲染 SVG 版，行为与原来完全一致
-  if (!available) {
-    return (
-      <PixelFrame
-        palette={palette}
-        variant={variant}
-        pixel={pixel}
-        radius={radius}
-        noise={noise}
-        noiseGranularity={noiseGranularity}
-        elevation={elevation}
-        shadowColor={shadowColor}
-        liveResize={liveResize}
-        sizeKey={sizeKey}
-      />
-    );
+  // 回退 SVG：透传全部 props（含异形效果），行为与直接用 PixelFrame 完全一致
+  if (forceSvg) {
+    return <PixelFrame {...props} />;
   }
 
   const style: CSSProperties = {

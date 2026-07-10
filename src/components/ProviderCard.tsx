@@ -146,7 +146,9 @@ const Name = styled.span`
   text-overflow: ellipsis;
   white-space: nowrap;
 
-  ${Card}[data-state="active"] & {
+  /* 这些子元素自带 data-state（与卡片同步），用自身属性选择器即可。
+     勿用 \${Card} 组件插值选择器：wyw 生产构建会摇掉 Card 声明导致白屏。 */
+  &[data-state="active"] {
     color: ${t.colorTextOnBtnAccent};
   }
 `;
@@ -155,7 +157,7 @@ const Meta = styled.span`
   font: ${t.textXs};
   color: ${t.colorTextMuted};
 
-  ${Card}[data-state="active"] & {
+  &[data-state="active"] {
     color: ${t.colorTextOnBtnAccent};
     opacity: 0.85;
   }
@@ -168,7 +170,7 @@ const Model = styled.span`
   text-overflow: ellipsis;
   white-space: nowrap;
 
-  ${Card}[data-state="active"] & {
+  &[data-state="active"] {
     color: ${t.colorTextOnBtnAccent};
   }
 `;
@@ -177,7 +179,7 @@ const NoKey = styled.span`
   font: ${t.textXs};
   color: ${t.btnClose};
 
-  ${Card}[data-state="active"] & {
+  &[data-state="active"] {
     color: ${t.colorTextOnBtnAccent};
     opacity: 0.9;
   }

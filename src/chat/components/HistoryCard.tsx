@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { PixelFrame, type PixelPalette } from "../../components/pixel/PixelFrame";
@@ -53,14 +53,28 @@ const REST_PAL: PixelPalette = {
 };
 
 interface HistoryCardProps {
+  /** 会话 id：回调按它回指（父级传稳定函数引用 + memo，流式期间其余卡片零重渲染） */
+  id: string;
   title: string;
   preview: string;
   active?: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
 }
 
-export function HistoryCard({ title, preview, active = false, onSelect, onDelete }: HistoryCardProps) {
+/**
+ * memo：流式输出期间父级（HistorySidebar）每个 delta 都会重渲染，
+ * 但除正在更新的那条会话外，其余卡片 props 全部不变（id/title/preview 稳定、
+ * onSelect/onDelete 是父级稳定引用）→ 整卡跳过，重渲染风暴只剩 1 张卡。
+ */
+export const HistoryCard = memo(function HistoryCard({
+  id,
+  title,
+  preview,
+  active = false,
+  onSelect,
+  onDelete,
+}: HistoryCardProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -96,11 +110,11 @@ export function HistoryCard({ title, preview, active = false, onSelect, onDelete
         role="button"
         tabIndex={0}
         data-state={stateName}
-        onClick={onSelect}
+        onClick={() => onSelect(id)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onSelect();
+            onSelect(id);
           }
         }}
         onPointerEnter={() => setHovered(true)}
@@ -186,13 +200,13 @@ export function HistoryCard({ title, preview, active = false, onSelect, onDelete
         tone="danger"
         onConfirm={() => {
           setConfirming(false);
-          onDelete();
+          onDelete(id);
         }}
         onCancel={() => setConfirming(false)}
       />
     </>
   );
-}
+});
 
 const Card = styled.div`
   position: relative;
@@ -215,8 +229,10 @@ const Inner = styled.span`
   padding: 9px 11px 9px 9px;
   transition: transform 0.14s ease;
 
-  ${Card}[data-state="hover"] &,
-  ${Card}[data-state="active"] & {
+  /* 裸属性祖先选择器（data-state 只在 Card 上）。勿用 \${Card} 组件插值：
+     wyw 生产构建会把 CSS 里的组件引用抽走后摇掉 Card 声明，导致整个 app 白屏。 */
+  [data-state="hover"] &,
+  [data-state="active"] & {
     transform: translateY(-1px);
   }
 `;
@@ -236,11 +252,11 @@ const Spine = styled.span`
     transition: background-color 0.14s ease;
   }
 
-  ${Card}[data-state="hover"] & > i {
+  [data-state="hover"] & > i {
     background: ${t.colorAccent};
   }
   /* 选中态在青 plate 上：脊用亮色（近白）跳出来 */
-  ${Card}[data-state="active"] & > i {
+  [data-state="active"] & > i {
     background: ${t.colorTextOnBtn};
   }
 `;
@@ -265,7 +281,7 @@ const CardTitle = styled.span`
   /* 给右上 ⋮ 让出位置，标题不被按钮压住 */
   padding-right: 22px;
 
-  ${Card}[data-state="active"] & {
+  [data-state="active"] & {
     color: ${t.colorTextOnBtnAccent};
   }
 `;
@@ -279,7 +295,7 @@ const CardPreview = styled.span`
   text-overflow: ellipsis;
   white-space: nowrap;
 
-  ${Card}[data-state="active"] & {
+  [data-state="active"] & {
     color: ${t.colorTextOnBtnAccent};
     opacity: 0.85;
   }

@@ -1,6 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { styled } from "@linaria/react";
 import { rawColor, type ThemeMode } from "../../styles/theme";
+import {
+  glRendererAvailable,
+  renderNoiseFieldInto,
+} from "../../components/pixel/glPixelRenderer";
 
 /**
  * 像素噪声场（对话主区背景底层，canvas 实现）。
@@ -11,8 +15,10 @@ import { rawColor, type ThemeMode } from "../../styles/theme";
  *  - 蓝色低噪游动：一层随时间漂移的 2D 值噪声「蓝场」，场值高处的像素块渐染成
  *    accent 青蓝 —— 蓝斑随场缓慢移动、聚散，像在底噪里游动。低噪颗粒对底/蓝一致。
  *
- * 性能：canvas 内部分辨率 = 网格 cols×rows（每块仅 1 canvas 像素），CSS 用
- * image-rendering:pixelated 硬边放大 → 几千块也只是一次 putImageData，极轻。
+ * 渲染路径（性能）：默认走共享 WebGL 引擎（renderNoiseFieldInto）—— 每帧只是
+ * 几次 uniform + 一发着色器 + blit，主线程近零开销。此前的 CPU 版每帧要在 JS 里
+ * 跑 cols×rows×2 次 value-noise（880×620 窗口 ≈ 每帧 12 万次 Math.sin），是对话窗
+ * 最大的常驻脚本负载、开窗卡顿的元凶之一；现保留为 WebGL 不可用时的回退路径。
  * 24fps 节流 + document.hidden 暂停，不喧宾夺主也不费电。
  */
 
@@ -62,8 +68,68 @@ interface PixelNoiseFieldProps {
 
 export function PixelNoiseField({ theme }: PixelNoiseFieldProps) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // WebGL 一次性探测：可用走 GPU 路径，不可用回退下面的 CPU 循环
+  const gpu = useMemo(() => glRendererAvailable(), []);
 
+  // ---- GPU 路径：着色器算噪声，主线程每帧只发 uniform + blit ----
   useEffect(() => {
+    if (!gpu) return;
+    const canvas = ref.current;
+    if (!canvas) return;
+
+    const [br, bg, bb] = hexToRgb(rawColor("colorBg", theme));
+    const [ar, ag, ab] = hexToRgb(rawColor("colorAccent", theme));
+    const base: [number, number, number] = [br / 255, bg / 255, bb / 255];
+    const accent: [number, number, number] = [ar / 255, ag / 255, ab / 255];
+
+    let cols = 1;
+    let rows = 1;
+    const resize = () => {
+      cols = Math.max(1, Math.ceil(canvas.clientWidth / GRAN));
+      rows = Math.max(1, Math.ceil(canvas.clientHeight / GRAN));
+    };
+    resize();
+
+    let raf = 0;
+    let last = 0;
+    const t0 = performance.now();
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      if (document.hidden) return;
+      if (now - last < 1000 / FPS) return;
+      last = now;
+      // 取模压小，保 highp 精度（与共享引擎同策略）
+      const timeSec = ((now - t0) / 1000) % 3600;
+      renderNoiseFieldInto(
+        canvas,
+        {
+          cols,
+          rows,
+          base,
+          accent,
+          baseAmp: BASE_AMP,
+          shimmer: BASE_SHIMMER,
+          blueMax: BLUE_MAX,
+          blueGate: BLUE_GATE,
+          blueScale: BLUE_SCALE,
+          blueDrift: BLUE_DRIFT,
+        },
+        timeSec,
+      );
+    };
+    raf = requestAnimationFrame(frame);
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [theme, gpu]);
+
+  // ---- CPU 回退路径（原实现）：仅 WebGL 不可用时启用 ----
+  useEffect(() => {
+    if (gpu) return;
     const canvas = ref.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -137,7 +203,7 @@ export function PixelNoiseField({ theme }: PixelNoiseFieldProps) {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [theme]);
+  }, [theme, gpu]);
 
   return <Canvas ref={ref} aria-hidden />;
 }

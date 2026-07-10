@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t } from "../styles/theme";
@@ -215,8 +215,14 @@ export function ChatWindow() {
     return () => window.clearTimeout(persistTimer.current);
   }, [conversations]);
 
-  // 分组相对日期用的时间基准：随会话增改刷新
-  const now = useMemo(() => Date.now(), [conversations]);
+  // 分组相对日期（今天/昨天）用的时间基准：每分钟刷一次即可。
+  // 不能挂在 conversations 上——流式期间每个 delta 都会改 conversations，
+  // now 一起换新会把 HistorySidebar 的分组 useMemo 和全部卡片一并击穿重渲染。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -252,7 +258,9 @@ export function ChatWindow() {
         return next;
       });
     },
-    [activeId],
+    // 依赖为空 = 引用稳定：在途流归属看 liveRef、选中回退用函数式 setActiveId，
+    // 都不读 activeId。稳定引用让 HistoryCard 的 memo 不被删除回调击穿。
+    [],
   );
 
   const handleNew = useCallback(() => {

@@ -102,7 +102,8 @@ const FrameLayer = styled.span`
   transition: opacity 0.12s ease, transform 0.12s cubic-bezier(0.2, 0.9, 0.3, 1.3);
   pointer-events: none;
 
-  ${Btn}:hover & {
+  /* 直接父级(Btn)是 button；勿用 \${Btn} 组件插值（wyw 生产构建会摇掉声明致白屏） */
+  button:hover > & {
     opacity: 1;
     transform: scale(1);
   }

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { GLPixelFrame } from "../../components/pixel/GLPixelFrame";
@@ -31,7 +32,16 @@ interface MessageBubbleProps {
   onApproveTool?: (toolCallId: string, approved: boolean) => void;
 }
 
-export function MessageBubble({ msg, live, onApproveTool }: MessageBubbleProps) {
+/**
+ * memo：流式期间 MessageList 每个 delta 重渲染一次，但只有正在流式的那条消息
+ * 拿到新的 msg 对象（append 走不可变更新，未动的消息引用不变）、live 也只有它在变。
+ * 其余可视气泡 props 全等 → 整条跳过，delta 的重渲染开销与会话长度无关。
+ */
+export const MessageBubble = memo(function MessageBubble({
+  msg,
+  live,
+  onApproveTool,
+}: MessageBubbleProps) {
   const isUser = msg.role === "user";
   const pal = isUser ? PRIORITY_PAL.primary : PRIORITY_PAL.low;
   // 只让「最后一个文本段」逐字蹦入：流式增量总是接在末尾，前面的段早已定稿。
@@ -85,7 +95,7 @@ export function MessageBubble({ msg, live, onApproveTool }: MessageBubbleProps) 
       </Column>
     </Row>
   );
-}
+});
 
 const Row = styled.div`
   display: flex;

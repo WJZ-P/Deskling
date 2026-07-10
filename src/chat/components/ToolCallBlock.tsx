@@ -202,7 +202,8 @@ const ToolName = styled.code`
   color: ${t.colorAccent};
   transition: filter 0.12s ease;
 
-  ${Head}[data-clickable]:hover & {
+  /* 裸属性祖先选择器（勿用 \${Head} 组件插值：wyw 生产构建会摇掉其声明致白屏） */
+  [data-clickable]:hover & {
     filter: brightness(1.25);
   }
 `;
@@ -246,7 +247,7 @@ const Chevron = styled.span`
     transform: rotate(180deg);
   }
 
-  ${Head}[data-clickable]:hover & {
+  [data-clickable]:hover & {
     color: ${t.colorAccent};
   }
 `;
