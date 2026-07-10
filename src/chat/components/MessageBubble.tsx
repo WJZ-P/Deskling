@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { GLPixelFrame } from "../../components/pixel/GLPixelFrame";
@@ -6,6 +6,7 @@ import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { formatClock, type ChatMessage } from "../types";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { StreamingText } from "./StreamingText";
+import { MessageToolbar } from "./MessageToolbar";
 
 /**
  * 一条消息气泡。
@@ -30,6 +31,18 @@ interface MessageBubbleProps {
   live?: boolean;
   /** 审批作答：透传给工具段的同意/拒绝按钮 */
   onApproveTool?: (toolCallId: string, approved: boolean) => void;
+  /** 编辑消息文本（悬浮工具栏「编辑」→ 内嵌编辑保存后回调） */
+  onEdit?: (msgId: string, text: string) => void;
+  /** 删除这条消息（悬浮工具栏「删除」） */
+  onDelete?: (msgId: string) => void;
+}
+
+/** 拼接消息的纯文本（多个文本段之间以空行分隔，工具段跳过）——复制/编辑共用 */
+function plainTextOf(msg: ChatMessage): string {
+  return msg.segments
+    .filter((s): s is Extract<typeof s, { kind: "text" }> => s.kind === "text")
+    .map((s) => s.text)
+    .join("\n\n");
 }
 
 /**
@@ -41,6 +54,8 @@ export const MessageBubble = memo(function MessageBubble({
   msg,
   live,
   onApproveTool,
+  onEdit,
+  onDelete,
 }: MessageBubbleProps) {
   const isUser = msg.role === "user";
   const pal = isUser ? PRIORITY_PAL.primary : PRIORITY_PAL.low;
@@ -49,8 +64,33 @@ export const MessageBubble = memo(function MessageBubble({
     (acc, seg, i) => (seg.kind === "text" ? i : acc),
     -1,
   );
+
+  // 悬浮工具栏：hover 整行浮现（工具栏挂在气泡下缘，仍是 Row 子树 ——
+  // 指针从气泡移到工具栏不触发 pointerleave）。流式中 / 编辑中不显示。
+  const [hovered, setHovered] = useState(false);
+  // 内嵌编辑：draft 为编辑框草稿（进入编辑时从消息文本初始化）
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const startEdit = () => {
+    setDraft(plainTextOf(msg));
+    setEditing(true);
+  };
+  const saveEdit = () => {
+    setEditing(false);
+    const text = draft.trim();
+    if (text && text !== plainTextOf(msg)) onEdit?.(msg.id, text);
+  };
+  const copyText = () => {
+    void navigator.clipboard?.writeText(plainTextOf(msg));
+  };
+
   return (
-    <Row data-role={msg.role}>
+    <Row
+      data-role={msg.role}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
       {!isUser && (
         <Avatar aria-hidden>
           <GLPixelFrame
@@ -77,19 +117,49 @@ export const MessageBubble = memo(function MessageBubble({
             animate={live}
           />
           <BubbleInner>
-            {msg.segments.map((seg, i) =>
-              seg.kind === "text" ? (
-                <Text key={i} data-role={msg.role}>
-                  <StreamingText
-                    text={seg.text}
-                    live={live && i === lastTextIdx}
-                  />
-                </Text>
-              ) : (
-                <ToolCallBlock key={i} seg={seg} onApprove={onApproveTool} />
-              ),
+            {editing ? (
+              <EditWrap>
+                <EditArea
+                  autoFocus
+                  data-role={msg.role}
+                  value={draft}
+                  rows={Math.min(10, Math.max(2, draft.split("\n").length))}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setEditing(false);
+                    else if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      saveEdit();
+                    }
+                  }}
+                />
+                <EditHint data-role={msg.role}>
+                  Enter 保存 · Shift+Enter 换行 · Esc 取消
+                </EditHint>
+              </EditWrap>
+            ) : (
+              msg.segments.map((seg, i) =>
+                seg.kind === "text" ? (
+                  <Text key={i} data-role={msg.role}>
+                    <StreamingText
+                      text={seg.text}
+                      live={live && i === lastTextIdx}
+                    />
+                  </Text>
+                ) : (
+                  <ToolCallBlock key={i} seg={seg} onApprove={onApproveTool} />
+                ),
+              )
             )}
           </BubbleInner>
+          {/* 悬浮工具栏：气泡下缘弹簧弹出（进/退场动画组件内自理） */}
+          <MessageToolbar
+            visible={hovered && !live && !editing}
+            align={isUser ? "end" : "start"}
+            onEdit={startEdit}
+            onDelete={() => onDelete?.(msg.id)}
+            onCopy={copyText}
+          />
         </Bubble>
         <Clock>{formatClock(msg.ts)}</Clock>
       </Column>
@@ -178,4 +248,41 @@ const Clock = styled.span`
   font: ${t.textXs};
   color: ${t.colorTextMuted};
   padding: 0 2px;
+`;
+
+/* ---- 内嵌编辑态：气泡内直接改文本（气泡框/低噪原样保留）---- */
+const EditWrap = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 撑出一块稳定的编辑宽度：不随草稿字数抖动（上限仍受气泡 max-width 约束） */
+  width: min(480px, 62vw);
+  max-width: 100%;
+`;
+
+const EditArea = styled.textarea`
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+  outline: none;
+  font: ${t.textMd};
+  line-height: 1.7;
+  color: ${t.colorText};
+
+  &[data-role="user"] {
+    color: ${t.colorTextOnBtnAccent};
+  }
+`;
+
+/* 快捷键提示：比正文小一档（textSm < 正文 textMd），用深色墨字与气泡底拉开对比 */
+const EditHint = styled.div`
+  font: ${t.textSm};
+  color: ${t.colorTextOnBtn};
+
+  /* 用户气泡是青底：换成青底上的深墨色，不然灰字在青底上看不清 */
+  &[data-role="user"] {
+    color: ${t.colorTextOnBtnAccent};
+  }
 `;

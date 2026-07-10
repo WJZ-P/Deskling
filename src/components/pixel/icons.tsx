@@ -45,6 +45,24 @@ export function DeleteIcon(props: IconProps) {
   );
 }
 
+/** 编辑（方框 + 铅笔 edit_square：消息工具栏用，与 ProviderCard 的纯铅笔 EditIcon 区分） */
+export function EditSquareIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h357l-80 80H200v560h560v-278l80-80v358q0 33-23.5 56.5T760-120H200Zm280-360ZM360-360v-170l367-367q12-12 27-18t30-6q16 0 30.5 6t26.5 18l56 57q11 12 17 26.5t6 29.5q0 15-5.5 29.5T897-728L530-360H360Zm481-424-56-56 56 56ZM440-440h56l232-232-28-28-29-28-231 231v57Zm260-260-29-28 29 28 28 28-28-28Z" />
+    </Icon>
+  );
+}
+
+/** 复制（content_copy 双层卡片） */
+export function CopyIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M360-240q-33 0-56.5-23.5T280-320v-480q0-33 23.5-56.5T360-880h360q33 0 56.5 23.5T800-800v480q0 33-23.5 56.5T720-240H360Zm0-80h360v-480H360v480ZM200-80q-33 0-56.5-23.5T120-160v-560h80v560h440v80H200Zm160-240v-480 480Z" />
+    </Icon>
+  );
+}
+
 /** 发起新对话（对话框 + 加号） */
 export function NewChatIcon(props: IconProps) {
   return (

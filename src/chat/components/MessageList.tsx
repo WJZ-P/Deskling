@@ -117,6 +117,10 @@ interface MessageListProps {
   convId?: string | null;
   /** 审批作答：放行/拒绝一次 pending 的工具调用（透传到 ToolCallBlock 按钮） */
   onApproveTool?: (toolCallId: string, approved: boolean) => void;
+  /** 编辑一条消息的文本（悬浮工具栏「编辑」保存后触发；带会话 id 防串会话） */
+  onEditMessage?: (convId: string, msgId: string, text: string) => void;
+  /** 删除一条消息（悬浮工具栏「删除」） */
+  onDeleteMessage?: (convId: string, msgId: string) => void;
 }
 
 export function MessageList({
@@ -125,6 +129,8 @@ export function MessageList({
   streamingId,
   convId,
   onApproveTool,
+  onEditMessage,
+  onDeleteMessage,
 }: MessageListProps) {
   // 真实滚动视口节点由 PixelScrollArea 通过 scrollRef 回传；拿到后 virtualizer 才能挂
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -205,6 +211,21 @@ export function MessageList({
     setAway(false);
   }, [scrollEl]);
 
+  // 气泡工具栏回调：补上会话 id 再上抛。引用只随会话切换而变
+  // （切会话本来就全列表重渲染），流式期间稳定，不击穿 MessageBubble 的 memo。
+  const editMsg = useCallback(
+    (msgId: string, text: string) => {
+      if (convId) onEditMessage?.(convId, msgId, text);
+    },
+    [convId, onEditMessage],
+  );
+  const deleteMsg = useCallback(
+    (msgId: string) => {
+      if (convId) onDeleteMessage?.(convId, msgId);
+    },
+    [convId, onDeleteMessage],
+  );
+
   const items = virtualizer.getVirtualItems();
 
   return (
@@ -239,6 +260,8 @@ export function MessageList({
                       msg={m}
                       live={m.id === streamingId}
                       onApproveTool={onApproveTool}
+                      onEdit={editMsg}
+                      onDelete={deleteMsg}
                     />
                   </ItemWrap>
                 );
