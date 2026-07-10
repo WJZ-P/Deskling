@@ -81,6 +81,8 @@ export interface AppSettings {
   theme: ThemeMode;
   /** 侧边栏是否折叠为纯图标 */
   sidebarCollapsed: boolean;
+  /** 对话窗历史侧栏是否收起（仅对话窗读写，无需跨窗口同步） */
+  chatSidebarCollapsed: boolean;
   /** 主区域背景风格 */
   backdropStyle: BackdropStyleId;
   /** AI Provider 配置档列表（多档位） */
@@ -98,6 +100,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "light",
   sidebarCollapsed: false,
+  chatSidebarCollapsed: false,
   backdropStyle: "turbulence",
   providerProfiles: [],
   activeProviderId: null,

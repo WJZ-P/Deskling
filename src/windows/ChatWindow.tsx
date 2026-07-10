@@ -12,7 +12,7 @@ import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
-import { getActiveProfile, getSetting } from "../settings";
+import { getActiveProfile, getSetting, setSetting } from "../settings";
 import type {
   ChatMessage,
   Conversation,
@@ -225,6 +225,17 @@ export function ChatWindow() {
   }, []);
 
   const active = conversations.find((c) => c.id === activeId) ?? null;
+
+  // 历史侧栏收起态：改动即持久化（下次打开对话窗保持）
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    getSetting("chatSidebarCollapsed"),
+  );
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((v) => {
+      void setSetting("chatSidebarCollapsed", !v);
+      return !v;
+    });
+  }, []);
 
   const closeToTray = useCallback(() => {
     void getCurrentWindow().hide();
@@ -449,6 +460,8 @@ export function ChatWindow() {
           onDelete={handleDelete}
           now={now}
           theme={theme}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
         />
         <Main>
           {/* 对话区专属像素背景：白底噪+蓝色游动 + 点阵 + 蓝图十字 + 柔光 */}

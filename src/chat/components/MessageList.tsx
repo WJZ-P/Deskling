@@ -9,7 +9,7 @@ import {
   type SurfaceTune,
 } from "../../components/pixel/PixelSurface";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
-import { ChevronDownIcon } from "../../components/icons";
+import { ChevronDownIcon } from "../../components/pixel/icons";
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 import { TypingIndicator } from "./TypingIndicator";
@@ -102,7 +102,7 @@ function JumpToBottom({ visible, onClick }: { visible: boolean; onClick: () => v
           alignItems: "center",
         }}
       >
-        <ChevronDownIcon size={20} />
+        <ChevronDownIcon width={20} height={20} />
       </PixelSurface>
     </JumpWrap>
   );
