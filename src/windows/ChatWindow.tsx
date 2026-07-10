@@ -12,7 +12,7 @@ import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
-import { getActiveProfile } from "../settings";
+import { getActiveProfile, getSetting } from "../settings";
 import type {
   ChatMessage,
   Conversation,
@@ -343,50 +343,56 @@ export function ChatWindow() {
         });
       };
 
-      const handle = streamChat(profile, history, {
-        onDelta: (chunk) => {
-          if (!started) {
-            started = true;
-            setTyping(false);
-          }
-          appendDelta(setConversations, convId, replyId, chunk);
+      const handle = streamChat(
+        profile,
+        history,
+        {
+          onDelta: (chunk) => {
+            if (!started) {
+              started = true;
+              setTyping(false);
+            }
+            appendDelta(setConversations, convId, replyId, chunk);
+          },
+          // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
+          // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。
+          onToolStart: (call) => {
+            if (!started) {
+              started = true;
+              setTyping(false);
+            }
+            appendToolSegment(setConversations, convId, replyId, {
+              kind: "tool",
+              id: call.id,
+              name: call.name,
+              summary: call.summary,
+              args: call.args,
+              needsApproval: call.needsApproval,
+              status: call.needsApproval ? "pending" : "running",
+            });
+          },
+          // 工具执行收尾：按 id 回填状态与结果预览
+          onToolEnd: (end) => {
+            updateToolSegments(setConversations, convId, replyId, end.id, {
+              status: end.status,
+              detail: end.detail,
+            });
+          },
+          onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
+          onError: (message) => {
+            finish();
+            // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
+            appendDelta(
+              setConversations,
+              convId,
+              replyId,
+              started ? `\n\n[出错了喵] ${message}` : `[出错了喵] ${message}`,
+            );
+          },
         },
-        // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
-        // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。
-        onToolStart: (call) => {
-          if (!started) {
-            started = true;
-            setTyping(false);
-          }
-          appendToolSegment(setConversations, convId, replyId, {
-            kind: "tool",
-            id: call.id,
-            name: call.name,
-            summary: call.summary,
-            args: call.args,
-            needsApproval: call.needsApproval,
-            status: call.needsApproval ? "pending" : "running",
-          });
-        },
-        // 工具执行收尾：按 id 回填状态与结果预览
-        onToolEnd: (end) => {
-          updateToolSegments(setConversations, convId, replyId, end.id, {
-            status: end.status,
-            detail: end.detail,
-          });
-        },
-        onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
-        onError: (message) => {
-          finish();
-          // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
-          appendDelta(
-            setConversations,
-            convId,
-            replyId,
-            started ? `\n\n[出错了喵] ${message}` : `[出错了喵] ${message}`,
-          );
-        },
-      });
+        // 免审批开关：发送那一刻读取（跨窗口 onKeyChange 已保证缓存新鲜）
+        getSetting("autoApproveTools"),
+      );
       streamRef.current = handle;
     },
     [activeId],

@@ -112,6 +112,8 @@ export function streamChat(
   profile: ProviderProfile,
   history: ChatTurn[],
   handlers: StreamHandlers,
+  /** 危险工具（写/命令）免审批直接执行；由设置「免审批执行」开关决定 */
+  autoApprove: boolean,
 ): ChatStream {
   const requestId = nextRequestId();
   const channel = new Channel<ChatEvent>();
@@ -131,9 +133,13 @@ export function streamChat(
     else if (ev.type === "error") handlers.onError(ev.message);
   };
   // 后台发起；命令自身总是 Ok，异常仅可能来自 IPC 层，兜底转成 onError
-  void invoke("provider_chat", { requestId, profile, history, onEvent: channel }).catch(
-    (err) => handlers.onError(String(err)),
-  );
+  void invoke("provider_chat", {
+    requestId,
+    profile,
+    history,
+    autoApprove,
+    onEvent: channel,
+  }).catch((err) => handlers.onError(String(err)));
   return {
     cancel: () => {
       void invoke("provider_chat_cancel", { requestId }).catch(() => {});

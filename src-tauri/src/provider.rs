@@ -835,6 +835,8 @@ pub async fn provider_chat(
     request_id: String,
     profile: ProviderProfile,
     history: Vec<ChatTurn>,
+    // 免审批开关（设置页「免审批执行」）：true 时写/命令类工具跳过审批直接执行
+    auto_approve: bool,
     on_event: tauri::ipc::Channel<ChatEvent>,
 ) -> Result<(), String> {
     let cancel = register_cancel(&request_id);
@@ -974,7 +976,9 @@ pub async fn provider_chat(
             let args_val: Value =
                 serde_json::from_str(&call.args_buf).unwrap_or_else(|_| json!({}));
             let summary = tools::summarize(&call.name, &args_val);
-            let needs_approval = tools::needs_approval(&call.name);
+            // 免审批开启时一律不进审批分支；ToolStart 事件也带 false，
+            // 前端据此直接落 running 段（不渲染「同意/拒绝」按钮）。
+            let needs_approval = !auto_approve && tools::needs_approval(&call.name);
 
             let _ = on_event.send(ChatEvent::ToolStart {
                 id: call.id.clone(),

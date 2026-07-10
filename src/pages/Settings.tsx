@@ -16,6 +16,7 @@ import {
   PixelSettingDesc,
 } from "../components/pixel/PixelSettingRow";
 import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSelect";
+import { PixelSwitch } from "../components/pixel/PixelSwitch";
 import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { ThemeMode } from "../styles/theme";
@@ -23,6 +24,7 @@ import type { ProviderProfile } from "../settings";
 import {
   getProfiles,
   getSetting,
+  setSetting,
   saveProfile,
   deleteProfile,
   setActiveProvider,
@@ -77,6 +79,15 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     [refresh],
   );
 
+  // agent 工具免审批开关：改动即落盘（onKeyChange 会广播给常驻聊天窗）
+  const [autoApprove, setAutoApprove] = useState<boolean>(() =>
+    getSetting("autoApproveTools"),
+  );
+  const handleAutoApprove = useCallback((next: boolean) => {
+    setAutoApprove(next);
+    void setSetting("autoApproveTools", next);
+  }, []);
+
   return (
     <PixelPage>
       <PixelPageHeader>
@@ -121,6 +132,26 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
           onDelete={handleDelete}
           onSelect={handleSelect}
         />
+      </PixelSection>
+
+      <PixelSection title="Agent 工具">
+        <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>免审批执行</PixelSettingLabel>
+              <PixelSettingDesc>
+                {autoApprove
+                  ? "开启：写文件 / 执行命令等操作直接放行，不再逐步确认"
+                  : "关闭：每一步危险操作先弹「同意 / 拒绝」，由你把关"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={autoApprove}
+              onChange={handleAutoApprove}
+              aria-label="agent 工具免审批执行"
+            />
+          </PixelSettingRow>
+        </PixelSettingList>
       </PixelSection>
 
       <PixelSection title="声音">

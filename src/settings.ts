@@ -87,6 +87,11 @@ export interface AppSettings {
   providerProfiles: ProviderProfile[];
   /** 当前选中的 provider ID */
   activeProviderId: string | null;
+  /**
+   * agent 工具免审批：true = 写文件/命令等危险工具直接执行（默认，顺畅优先）；
+   * false = 每步危险操作先弹「同意/拒绝」审批卡。
+   */
+  autoApproveTools: boolean;
 }
 
 /** 默认值：读取失败或缺失时回退到这里 */
@@ -96,6 +101,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backdropStyle: "turbulence",
   providerProfiles: [],
   activeProviderId: null,
+  autoApproveTools: true,
 };
 
 const STORE_FILE = "settings.json";
@@ -148,6 +154,10 @@ function bindCrossWindowSync(s: Store): void {
   });
   void s.onKeyChange<string | null>("activeProviderId", (v) => {
     cache.activeProviderId = v ?? null;
+  });
+  // 审批开关在主窗口设置里改、常驻聊天窗发送时读，同样要跨窗口刷
+  void s.onKeyChange<boolean>("autoApproveTools", (v) => {
+    cache.autoApproveTools = v ?? DEFAULT_SETTINGS.autoApproveTools;
   });
 }
 
