@@ -1,8 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../styles/theme";
 import { PixelScrollArea } from "../../components/pixel/PixelScrollArea";
+import {
+  PixelSurface,
+  type SurfaceState,
+  type SurfaceTune,
+} from "../../components/pixel/PixelSurface";
+import { PRIORITY_PAL } from "../../components/pixel/palettes";
+import { ChevronDownIcon } from "../../components/icons";
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 import { TypingIndicator } from "./TypingIndicator";
@@ -30,6 +37,76 @@ const PAD_X = 22; // 列表左右留白 px（留在视口上）
 const ESTIMATE = 90; // 单条气泡估高 px；实测后由 measureElement 校正
 const OVERSCAN = 6; // 可视区上下各多挂几条，滚动时不露白
 const STICK_EPS = 24; // 距底 <此值 视为「贴底」，容忍 1px 抖动与分数像素
+const JUMP_SHOW_DIST = 120; // 距底 >此值 才浮现「滚到底部」按钮（离底一小段不打扰）
+
+// 滚底按钮手感：沿用标题栏小图标按钮的弹簧参数（更小、投影更浅）
+const JUMP_TUNE: Partial<SurfaceTune> = {
+  hoverTy: -1,
+  pressTy: 1,
+  elevRest: 1,
+  elevHover: 2,
+  elevPress: 1,
+  flickerAmp: 0.06,
+};
+
+/** 滚底按钮边长 px；像素圆 = radius 抠到边长一半（格数 = BTN/2/pixel） */
+const JUMP_BTN = 36;
+const JUMP_PIXEL = 3;
+const JUMP_RADIUS = JUMP_BTN / 2 / JUMP_PIXEL -3; // 6 格 → 整颗像素圆
+
+/**
+ * 悬浮「滚到底部」按钮：用户上滚离底后浮现在输入框上方，点击回底并恢复流式跟随。
+ * 像素圆造型（PixelSurface radius 抠满半径的阶梯圆弧，非 CSS 平滑圆）。
+ * 进/退场都有动画：visible 转 false 时不立即卸载，先播 jump-out（下滑淡出），
+ * animationend 再真正移除 —— 挂载/卸载由本组件内部的 render 状态兜底。
+ */
+function JumpToBottom({ visible, onClick }: { visible: boolean; onClick: () => void }) {
+  const [render, setRender] = useState(visible);
+  const [hovered, setHovered] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  useEffect(() => {
+    if (visible) setRender(true); // 复现时立即挂载（jump-in 动画自动播放）
+  }, [visible]);
+  if (!render) return null;
+  const state: SurfaceState = pressed ? "press" : hovered ? "hover" : "rest";
+  return (
+    <JumpWrap
+      type="button"
+      aria-label="滚到底部"
+      data-out={!visible || undefined}
+      onAnimationEnd={() => {
+        if (!visible) setRender(false); // 退场动画播完才卸载
+      }}
+      onClick={onClick}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => {
+        setHovered(false);
+        setPressed(false);
+      }}
+      onPointerDown={() => setPressed(true)}
+      onPointerUp={() => setPressed(false)}
+    >
+      <PixelSurface
+        palette={PRIORITY_PAL.normal}
+        state={state}
+        pixel={JUMP_PIXEL}
+        radius={JUMP_RADIUS}
+        noise={0.08}
+        tune={JUMP_TUNE}
+        rootStyle={{ display: "flex" }}
+        contentStyle={{
+          width: JUMP_BTN,
+          height: JUMP_BTN,
+          padding: 0,
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <ChevronDownIcon size={20} />
+      </PixelSurface>
+    </JumpWrap>
+  );
+}
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -53,6 +130,7 @@ export function MessageList({
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const total = messages.length;
   const atBottomRef = useRef(true); // 用户当前是否贴在底部（决定要不要跟随流式增长）
+  const [away, setAway] = useState(false); // 离底较远：浮现「滚到底部」按钮
 
   const virtualizer = useVirtualizer({
     count: total,
@@ -79,7 +157,9 @@ export function MessageList({
     const el = scrollEl;
     if (!el) return;
     const onScroll = () => {
-      atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_EPS;
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      atBottomRef.current = dist < STICK_EPS;
+      setAway(dist > JUMP_SHOW_DIST); // 同值 setState 会被 React 跳过，无重渲开销
     };
     const onWheel = (e: WheelEvent) => {
       // 内容根本滚不动时忽略（否则会在短内容上误关贴底，之后长出来不跟随）
@@ -101,6 +181,7 @@ export function MessageList({
     if (prevConvRef.current !== convId) {
       prevConvRef.current = convId;
       atBottomRef.current = true;
+      setAway(false); // 切会话强制回底，按钮一并收起
     }
     const el = scrollEl;
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
@@ -115,53 +196,115 @@ export function MessageList({
     if (atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [totalSize, typing, scrollEl, messages]);
 
+  // 点「滚到底部」：钉底 + 恢复贴底跟随（流式输出继续吸底），按钮即刻收起
+  const jumpToBottom = useCallback(() => {
+    const el = scrollEl;
+    if (!el) return;
+    atBottomRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    setAway(false);
+  }, [scrollEl]);
+
   const items = virtualizer.getVirtualItems();
 
   return (
-    <PixelScrollArea
-      scrollRef={setScrollEl}
-      contentStyle={{ padding: `0 ${PAD_X}px` }}
-      // 拖滑块 = 用户接管滚动：立刻解除贴底（拖到底部时 scroll 事件会重新判回贴底）
-      onUserScrollIntent={() => {
-        atBottomRef.current = false;
-      }}
-    >
-      {total === 0 && !typing ? (
-        <Empty>
-          <EmptyFace>(=^･ω･^=)</EmptyFace>
-          <EmptyText>新的一段对话，想聊点什么喵～</EmptyText>
-        </Empty>
-      ) : (
-        <Sizer style={{ height: totalSize }}>
-          {items
-            .filter((vi) => messages[vi.index])
-            .map((vi) => {
-              const m = messages[vi.index]!;
-              return (
-                <ItemWrap
-                  key={vi.key}
-                  data-index={vi.index}
-                  ref={virtualizer.measureElement}
-                  style={{ transform: `translateY(${vi.start}px)` }}
-                >
-                  <MessageBubble
-                    msg={m}
-                    live={m.id === streamingId}
-                    onApproveTool={onApproveTool}
-                  />
-                </ItemWrap>
-              );
-            })}
-        </Sizer>
-      )}
-      {typing && (
-        <TypingBelow>
-          <TypingIndicator />
-        </TypingBelow>
-      )}
-    </PixelScrollArea>
+    <Wrap>
+      <PixelScrollArea
+        scrollRef={setScrollEl}
+        contentStyle={{ padding: `0 ${PAD_X}px` }}
+        // 拖滑块 = 用户接管滚动：立刻解除贴底（拖到底部时 scroll 事件会重新判回贴底）
+        onUserScrollIntent={() => {
+          atBottomRef.current = false;
+        }}
+      >
+        {total === 0 && !typing ? (
+          <Empty>
+            <EmptyFace>(=^･ω･^=)</EmptyFace>
+            <EmptyText>新的一段对话，想聊点什么喵～</EmptyText>
+          </Empty>
+        ) : (
+          <Sizer style={{ height: totalSize }}>
+            {items
+              .filter((vi) => messages[vi.index])
+              .map((vi) => {
+                const m = messages[vi.index]!;
+                return (
+                  <ItemWrap
+                    key={vi.key}
+                    data-index={vi.index}
+                    ref={virtualizer.measureElement}
+                    style={{ transform: `translateY(${vi.start}px)` }}
+                  >
+                    <MessageBubble
+                      msg={m}
+                      live={m.id === streamingId}
+                      onApproveTool={onApproveTool}
+                    />
+                  </ItemWrap>
+                );
+              })}
+          </Sizer>
+        )}
+        {typing && (
+          <TypingBelow>
+            <TypingIndicator />
+          </TypingBelow>
+        )}
+      </PixelScrollArea>
+      <JumpToBottom visible={away} onClick={jumpToBottom} />
+    </Wrap>
   );
 }
+
+/* 外层定位容器：给悬浮「滚到底部」按钮当锚点，滚动仍全权交给内部 PixelScrollArea */
+const Wrap = styled.div`
+  position: relative;
+  height: 100%;
+`;
+
+/* 悬浮按钮外壳：钉在列表底部中央（正好在输入框上方），浮现时带上滑淡入 */
+const JumpWrap = styled.button`
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 5;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: ${t.colorTextOnBtn};
+  transform: translateX(-50%);
+  animation: jump-in 0.16s ease;
+
+  /* 退场：下滑淡出，forwards 停在终态（组件等 animationend 才卸载） */
+  &[data-out] {
+    animation: jump-out 0.16s ease forwards;
+    pointer-events: none;
+  }
+
+  @keyframes jump-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+
+  @keyframes jump-out {
+    from {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateX(-50%) translateY(8px);
+    }
+  }
+`;
 
 /* 虚拟列表撑高盒：显式高度=totalSize，子项绝对定位靠 translateY 放到各自 start */
 const Sizer = styled.div`

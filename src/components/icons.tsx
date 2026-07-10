@@ -74,6 +74,22 @@ export function ChevronIcon(props: IconProps) {
   );
 }
 
+/** 下箭头（滚到底部）：Material chevron-down 填充形，跟随 currentColor */
+export function ChevronDownIcon({ size = 22 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 -960 960 960"
+      fill="currentColor"
+      aria-hidden
+      focusable="false"
+    >
+      <path d="M480-344 240-584l56-56 184 184 184-184 56 56-240 240Z" />
+    </svg>
+  );
+}
+
 /** 桌宠：猫脸（两只三角耳 + 脸廓 + 双眼） */
 export function PetIcon(props: IconProps) {
   return (
