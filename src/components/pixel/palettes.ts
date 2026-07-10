@@ -64,6 +64,18 @@ export const PRIORITY_PAL: Record<Priority, PixelPalette> = {
 export const DITHER_ACCENT = "#d8f4f5";
 
 /**
+ * 工具调用卡（ToolCallBlock）hover/展开的扫描目标面色：柔和青蓝，
+ * 由强调色 token 提亮推导（比按钮 primary 更浅，适合大面积凹槽底）。
+ * PixelFrame 的扫描状态机只读 face；edge/hi/lo 仅为补齐 PixelPalette 类型。
+ */
+export const TOOL_SWEEP_PAL: PixelPalette = {
+  face: shade(rawColor("colorAccent", "light"), 0.62),
+  edge: shade(rawColor("colorAccent", "light"), -0.1),
+  hi: "#ffffff",
+  lo: shade(rawColor("colorAccent", "light"), 0.33),
+};
+
+/**
  * 标题栏面板调色（随主题）。全部由 theme.ts 的颜色 token 推导，
  * 面色/描边直接取表面与强描边 token，高光/暗影按面色做明暗档。
  */

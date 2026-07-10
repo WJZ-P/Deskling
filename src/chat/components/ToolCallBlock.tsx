@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import { PixelFrame, type PixelPalette } from "../../components/pixel/PixelFrame";
+import { PixelFrame } from "../../components/pixel/PixelFrame";
 import { PixelButton } from "../../components/pixel/PixelButton";
-import { PRIORITY_PAL } from "../../components/pixel/palettes";
+import { PRIORITY_PAL, TOOL_SWEEP_PAL } from "../../components/pixel/palettes";
 import type { ToolCallSegment } from "../types";
 
 /**
@@ -18,16 +18,6 @@ import type { ToolCallSegment } from "../types";
  *
  * hover 或展开时：底色变青蓝、低噪动起来，传达「这一步活了」。
  */
-
-// hover/展开态的扫描目标面色：柔和青蓝（比按钮 primary 更浅，适合大面积凹槽底）。
-// 只用 face —— palette 本身始终保持 rest（PRIORITY_PAL.low），描边/斜线不变色，
-// 故不会冒出违和白边；颜色变化只发生在铺满面区的噪声块上，由状态机从两边扫向中心。
-const SWEEP_PAL: PixelPalette = {
-  face: "#cdeced",
-  edge: "#7dbfc1",
-  hi: "#ffffff",
-  lo: "#a8dadc",
-};
 
 interface ToolCallBlockProps {
   seg: ToolCallSegment;
@@ -80,7 +70,7 @@ export function ToolCallBlock({ seg, onApprove }: ToolCallBlockProps) {
         noise={0.05}
         noiseGranularity={2}
         noiseSpeed={active ? 0.9 : 0}
-        sweepPalette={SWEEP_PAL}
+        sweepPalette={TOOL_SWEEP_PAL}
         sweepActive={active}
         liveResize
       />
@@ -137,7 +127,8 @@ const Head = styled.div`
   background: transparent;
   text-align: left;
   color: ${t.colorText};
-  font: ${t.textSm};
+  /* 跟正文同档字号：之前 textSm(12) 在气泡正文(16)旁边显得过小 */
+  font: ${t.textMd};
 
   /* 左侧像素口音条：hover 时浮出，替代平涂背景 */
   &::before {
@@ -197,14 +188,16 @@ const Dot = styled.span`
 const ToolName = styled.code`
   flex: 0 0 auto;
   font-family: ${t.fontPixel}, ui-monospace, monospace;
-  font-size: 12px;
+  font-size: 14px;
   letter-spacing: 0.5px;
-  color: ${t.colorAccent};
-  transition: filter 0.12s ease;
+  /* 深青墨：浅青扫描底（TOOL_SWEEP_PAL.face）上也要清晰可读，
+     旧的 colorAccent + hover 提亮在青蓝底上会糊成一片 */
+  color: ${t.colorTextOnBtn};
+  transition: color 0.12s ease;
 
   /* 裸属性祖先选择器（勿用 \${Head} 组件插值：wyw 生产构建会摇掉其声明致白屏） */
   [data-clickable]:hover & {
-    filter: brightness(1.25);
+    color: ${t.colorTextOnBtnAccent};
   }
 `;
 
@@ -219,7 +212,7 @@ const Summary = styled.span`
 
 const Status = styled.span`
   flex: 0 0 auto;
-  font: ${t.textXs};
+  font: ${t.textSm};
   letter-spacing: 1px;
   color: ${t.colorTextMuted};
 
@@ -239,7 +232,7 @@ const Status = styled.span`
 
 const Chevron = styled.span`
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 12px;
   color: ${t.colorTextMuted};
   transition: transform 0.14s ease, color 0.12s ease;
 
@@ -257,7 +250,7 @@ const Detail = styled.pre`
   padding: 8px 10px 10px 26px;
   border-top: 1px solid ${t.colorBorder};
   font-family: ${t.fontPixel}, ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   color: ${t.colorTextMuted};
   white-space: pre-wrap;
@@ -276,7 +269,7 @@ const ApproveRow = styled.div`
 const ApproveHint = styled.span`
   flex: 1 1 auto;
   min-width: 0;
-  font: ${t.textXs};
+  font: ${t.textSm};
   color: ${t.colorTextMuted};
   overflow: hidden;
   text-overflow: ellipsis;
