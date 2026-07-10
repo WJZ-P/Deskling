@@ -67,7 +67,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "run_command",
-            description: "在系统 shell 里执行一条命令并返回输出。可用于构建/测试/文件操作等。有副作用，需用户审批。",
+            description: "在系统 shell 里执行一条命令并返回输出（Windows 下是 cmd /C，其余平台是 sh -c）。可用于构建/测试/文件操作等。有副作用，需用户审批。",
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -193,6 +193,25 @@ async fn write_file(args: &Value) -> Result<String, String> {
     }
 }
 
+/// 把子进程输出解码成字符串：先严格按 UTF-8（现代工具多为 UTF-8），
+/// 失败再按 GBK 解 —— 中文 Windows 的 cmd / 系统报错走 CP936，
+/// 此前 from_utf8_lossy 硬解会把整段错误信息吞成 �（如 'wmic' 不存在的提示全是乱码）。
+/// 顺序不能反：GBK 几乎能「成功」解出任意字节序列，先 GBK 会把真 UTF-8 输出解成乱码。
+fn decode_console(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let (s, _, _) = encoding_rs::GBK.decode(bytes);
+        s.into_owned()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
 async fn run_command(args: &Value) -> Result<String, String> {
     let command = str_arg(args, "command");
     if command.trim().is_empty() {
@@ -202,9 +221,16 @@ async fn run_command(args: &Value) -> Result<String, String> {
     // 按平台选 shell：Windows 用 cmd /C，其余用 sh -c。
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = tokio::process::Command::new("cmd");
-        c.arg("/C").arg(&command);
-        c
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd");
+        // /C 后的整条命令必须 raw_arg 原样拼接（等价于终端手敲）：
+        // 默认 arg() 按 MSVC 规则转义（内部引号变 \"），而 cmd.exe 不认反斜杠转义，
+        // 嵌套引号会被拆散 —— 表现为 findstr /C:"a b" 的引号被吃报「无法打开 b"」、
+        // powershell -Command "..." 退化成字符串字面量被回显（退出码 0 却只输出命令文本）。
+        c.arg("/C").raw_arg(&command);
+        // CREATE_NO_WINDOW：release 是 GUI 子系统，不加会每跑一条命令闪一个黑色控制台窗
+        c.creation_flags(0x0800_0000);
+        tokio::process::Command::from(c)
     };
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
@@ -215,8 +241,8 @@ async fn run_command(args: &Value) -> Result<String, String> {
 
     match cmd.output().await {
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = decode_console(&output.stdout);
+            let stderr = decode_console(&output.stderr);
             let code = output.status.code().unwrap_or(-1);
             let mut combined = String::new();
             if !stdout.trim().is_empty() {
