@@ -103,6 +103,8 @@ const STORE_FILE = "settings.json";
 let store: Store | null = null;
 /** 内存缓存：启动时填充，供 UI 同步读取，避免异步导致的主题闪烁 */
 let cache: AppSettings = { ...DEFAULT_SETTINGS };
+/** 跨窗口同步监听只绑一次（initSettings 可能被多次调用，如 TrayMenu 聚焦时重读） */
+let crossWindowSyncBound = false;
 
 /**
  * 启动时调用：从磁盘 store 读取全部配置到内存缓存。
@@ -122,11 +124,31 @@ export async function initSettings(): Promise<AppSettings> {
       }
     }
     cache = { ...DEFAULT_SETTINGS, ...loaded };
+    bindCrossWindowSync(store);
   } catch (err) {
     console.warn("[settings] 读取失败，使用默认配置:", err);
     cache = { ...DEFAULT_SETTINGS };
   }
   return cache;
+}
+
+/**
+ * 跨窗口配置同步：Tauri 多窗口各有独立 JS 上下文与内存 cache，
+ * store 插件的 onKeyChange 会把任一窗口的写入广播给所有窗口。
+ * 常驻的聊天窗（关闭=隐藏，不销毁）启动后 cache 不再重填，若不订阅，
+ * 主窗口设置里切模型 / 改 provider 后，聊天窗发送时仍读到旧 profile（切换不生效）。
+ * 这里订阅 provider 相关键，收到广播即刷新本窗口 cache —— 只更内存，不回写 store，无回环。
+ * 只绑一次（crossWindowSyncBound 守卫），避免 initSettings 被重复调用时叠加监听。
+ */
+function bindCrossWindowSync(s: Store): void {
+  if (crossWindowSyncBound) return;
+  crossWindowSyncBound = true;
+  void s.onKeyChange<ProviderProfile[]>("providerProfiles", (v) => {
+    cache.providerProfiles = v ?? [];
+  });
+  void s.onKeyChange<string | null>("activeProviderId", (v) => {
+    cache.activeProviderId = v ?? null;
+  });
 }
 
 /** 同步读取某项配置（来自内存缓存） */
