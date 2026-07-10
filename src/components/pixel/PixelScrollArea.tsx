@@ -35,6 +35,11 @@ interface PixelScrollAreaProps {
   contentStyle?: CSSProperties;
   /** 把内部真实滚动视口节点暴露给外部（虚拟列表需要挂在它上面测量/滚动） */
   scrollRef?: RefCallback<HTMLDivElement> | React.RefObject<HTMLDivElement | null>;
+  /**
+   * 用户主动接管滚动的同步信号：拖动滑块的瞬间触发（早于异步的 scroll 事件）。
+   * 聊天列表用它立刻解除「贴底跟随」，避免流式钉底和用户拖动打架。
+   */
+  onUserScrollIntent?: () => void;
 }
 
 export function PixelScrollArea({
@@ -42,6 +47,7 @@ export function PixelScrollArea({
   className,
   contentStyle,
   scrollRef,
+  onUserScrollIntent,
 }: PixelScrollAreaProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -105,6 +111,7 @@ export function PixelScrollArea({
     e.stopPropagation();
     const el = viewportRef.current;
     if (!el) return;
+    onUserScrollIntent?.();
     const startY = e.clientY;
     const startTop = thumb.top; // 拖动起点的滑块 top（含 BAR_GAP）
     const { scrollHeight, clientHeight } = el;

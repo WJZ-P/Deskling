@@ -70,15 +70,29 @@ export function MessageList({
   });
 
   // 跟踪是否贴底：滚动时更新。阈值放宽到 STICK_EPS，避免分数像素误判「离底」。
+  //
+  // ⚠️ 只靠 scroll 事件不够：scroll 事件是异步派发的，流式输出高频重渲时，
+  // 用户刚上滑、scroll 事件还没来得及把 atBottomRef 置 false，下一个 chunk 的
+  // 钉底 effect 就抢先把 scrollTop 写回底部，把用户的滚动吞掉（表现为「滚不上去」）。
+  // 所以补一个同步信号：wheel 事件在滚动生效前同步触发，向上滚立刻解除贴底。
   useEffect(() => {
     const el = scrollEl;
     if (!el) return;
     const onScroll = () => {
       atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_EPS;
     };
+    const onWheel = (e: WheelEvent) => {
+      // 内容根本滚不动时忽略（否则会在短内容上误关贴底，之后长出来不跟随）
+      if (e.deltaY >= 0 || el.scrollHeight - el.clientHeight <= 1) return;
+      atBottomRef.current = false;
+    };
     onScroll();
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    el.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+    };
   }, [scrollEl]);
 
   // 切换会话：强制视为贴底并钉到底（聊天从底往上读，进来就停在最新）
@@ -104,7 +118,14 @@ export function MessageList({
   const items = virtualizer.getVirtualItems();
 
   return (
-    <PixelScrollArea scrollRef={setScrollEl} contentStyle={{ padding: `0 ${PAD_X}px` }}>
+    <PixelScrollArea
+      scrollRef={setScrollEl}
+      contentStyle={{ padding: `0 ${PAD_X}px` }}
+      // 拖滑块 = 用户接管滚动：立刻解除贴底（拖到底部时 scroll 事件会重新判回贴底）
+      onUserScrollIntent={() => {
+        atBottomRef.current = false;
+      }}
+    >
       {total === 0 && !typing ? (
         <Empty>
           <EmptyFace>(=^･ω･^=)</EmptyFace>
