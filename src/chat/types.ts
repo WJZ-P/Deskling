@@ -9,18 +9,29 @@
 /** 消息角色 */
 export type ChatRole = "user" | "assistant";
 
-/** 工具调用的执行状态（决定 UI 上的标记与配色） */
-export type ToolStatus = "running" | "success" | "error";
+/**
+ * 工具调用的执行状态（决定 UI 上的标记与配色）：
+ *  - pending：等待用户审批（写/命令类工具，卡片显示「同意 / 拒绝」按钮）；
+ *  - running：已放行、正在执行（状态点呼吸闪烁）；
+ *  - success / error：执行完成 / 失败。
+ */
+export type ToolStatus = "pending" | "running" | "success" | "error";
 
 /** 一次工具调用段：agent 操作电脑的一步（读文件 / 跑命令 / 点界面…） */
 export interface ToolCallSegment {
   kind: "tool";
-  /** 工具名，如 run_command / read_file / click */
+  /** 本轮请求内该次调用的唯一 id（Rust 侧生成），审批 / 状态更新按它回指 */
+  id: string;
+  /** 工具名，如 run_command / read_file / list_dir / write_file */
   name: string;
   /** 给人看的一句话摘要，如「执行 `ls -la`」 */
   summary: string;
-  /** 可选：调用细节 / 输出预览（折叠区展示） */
+  /** 调用参数的原始 JSON 串（跨轮重建 history 时回喂给模型；也用于 detail 展示） */
+  args?: string;
+  /** 可选：执行结果 / 输出预览（折叠区展示） */
   detail?: string;
+  /** true 表示危险工具（写文件 / 跑命令），pending 时需人工审批放行 */
+  needsApproval?: boolean;
   status: ToolStatus;
 }
 

@@ -27,9 +27,11 @@ interface MessageBubbleProps {
   msg: ChatMessage;
   /** 这条消息正在流式输出：其「最后一个文本段」逐字蹦入 */
   live?: boolean;
+  /** 审批作答：透传给工具段的同意/拒绝按钮 */
+  onApproveTool?: (toolCallId: string, approved: boolean) => void;
 }
 
-export function MessageBubble({ msg, live }: MessageBubbleProps) {
+export function MessageBubble({ msg, live, onApproveTool }: MessageBubbleProps) {
   const isUser = msg.role === "user";
   const pal = isUser ? PRIORITY_PAL.primary : PRIORITY_PAL.low;
   // 只让「最后一个文本段」逐字蹦入：流式增量总是接在末尾，前面的段早已定稿。
@@ -74,7 +76,7 @@ export function MessageBubble({ msg, live }: MessageBubbleProps) {
                   />
                 </Text>
               ) : (
-                <ToolCallBlock key={i} seg={seg} />
+                <ToolCallBlock key={i} seg={seg} onApprove={onApproveTool} />
               ),
             )}
           </BubbleInner>

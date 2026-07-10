@@ -5,6 +5,7 @@ use tauri::{
 };
 
 mod provider;
+mod tools;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -154,7 +155,8 @@ pub fn run() {
             chat_visible,
             provider::provider_test,
             provider::provider_chat,
-            provider::provider_chat_cancel
+            provider::provider_chat_cancel,
+            provider::provider_tool_approve
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

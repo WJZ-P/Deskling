@@ -38,9 +38,17 @@ interface MessageListProps {
   streamingId?: string | null;
   /** 当前会话 id：切换时强制回到底部 */
   convId?: string | null;
+  /** 审批作答：放行/拒绝一次 pending 的工具调用（透传到 ToolCallBlock 按钮） */
+  onApproveTool?: (toolCallId: string, approved: boolean) => void;
 }
 
-export function MessageList({ messages, typing, streamingId, convId }: MessageListProps) {
+export function MessageList({
+  messages,
+  typing,
+  streamingId,
+  convId,
+  onApproveTool,
+}: MessageListProps) {
   // 真实滚动视口节点由 PixelScrollArea 通过 scrollRef 回传；拿到后 virtualizer 才能挂
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const total = messages.length;
@@ -54,8 +62,11 @@ export function MessageList({ messages, typing, streamingId, convId }: MessageLi
     gap: GAP,
     paddingStart: PAD_Y,
     paddingEnd: PAD_Y,
-    // 用消息 id 当 key：列表只增不改序，实测高度缓存按 id 稳定，追加/重渲不失效
-    getItemKey: (i) => messages[i]?.id ?? i,
+    // 用数组下标当 key：聊天列表只在末尾追加、从不重排，下标既唯一又稳定
+    // （追加不改动已有下标，流式那条靠 resize 重测高）。
+    // 不能用 messages[i].id：老数据里存在重复 id（旧版 nextId 计数器每次重启归零，
+    // 跨多次运行发出的 id 会互撞），拿来当 key 会导致 React key 冲突 → 同一条气泡叠出多份。
+    getItemKey: (i) => i,
   });
 
   // 跟踪是否贴底：滚动时更新。阈值放宽到 STICK_EPS，避免分数像素误判「离底」。
@@ -101,20 +112,25 @@ export function MessageList({ messages, typing, streamingId, convId }: MessageLi
         </Empty>
       ) : (
         <Sizer style={{ height: totalSize }}>
-          {items.map((vi) => {
-            const m = messages[vi.index];
-            if (!m) return null;
-            return (
-              <ItemWrap
-                key={vi.key}
-                data-index={vi.index}
-                ref={virtualizer.measureElement}
-                style={{ transform: `translateY(${vi.start}px)` }}
-              >
-                <MessageBubble msg={m} live={m.id === streamingId} />
-              </ItemWrap>
-            );
-          })}
+          {items
+            .filter((vi) => messages[vi.index])
+            .map((vi) => {
+              const m = messages[vi.index]!;
+              return (
+                <ItemWrap
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  style={{ transform: `translateY(${vi.start}px)` }}
+                >
+                  <MessageBubble
+                    msg={m}
+                    live={m.id === streamingId}
+                    onApproveTool={onApproveTool}
+                  />
+                </ItemWrap>
+              );
+            })}
         </Sizer>
       )}
       {typing && (

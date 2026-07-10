@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { PixelFrame, type PixelPalette } from "../../components/pixel/PixelFrame";
+import { PixelIconButton } from "../../components/pixel/PixelIconButton";
+import { PixelConfirmModal } from "../../components/pixel/PixelConfirmModal";
+import { MoreVertIcon, DeleteIcon } from "../../components/pixel/icons";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 
 /**
@@ -18,9 +21,14 @@ import { PRIORITY_PAL } from "../../components/pixel/palettes";
  *               「当前会话」的底噪在动，呼应 agent「这条会话是活的/在跑」。
  *  - 左侧「像素信号脊」：三格硬边小方块，按态逐亮（暗/青/白）——一个新 motif，
  *    区别于 ToolCallBlock 的圆点与旧版 CSS 竖条。
+ *  - 右上「⋮」更多按钮：hover（或菜单展开时）显现，点开一个小浮层，提供删除。
+ *    删除走 PixelConfirmModal 二次确认（不可撤销）。
  *
- * 纯 UI：选择通过 onSelect 交给父级。配色走固定浅色（同气泡的 PRIORITY_PAL），
- * 不随主题切换，保证卡片在深浅面板上都是同一套识别色。
+ * 纯 UI：选择 / 删除通过 onSelect / onDelete 交给父级。配色走固定浅色
+ * （同气泡的 PRIORITY_PAL），不随主题切换，保证卡片在深浅面板上都是同一套识别色。
+ *
+ * 注意 Card 用 <div role="button"> 而非 <button>：卡片内要嵌「⋮」按钮 + 浮层按钮，
+ * button 里套 button 是非法 HTML，故用 div 承载点击 + 键盘（Enter/Space）语义。
  */
 
 // ---- 顶层可调常量（主人改这里即可喵）----
@@ -49,50 +57,144 @@ interface HistoryCardProps {
   preview: string;
   active?: boolean;
   onSelect: () => void;
+  onDelete: () => void;
 }
 
-export function HistoryCard({ title, preview, active = false, onSelect }: HistoryCardProps) {
+export function HistoryCard({ title, preview, active = false, onSelect, onDelete }: HistoryCardProps) {
   const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // 菜单展开时：点卡片外部 / 按 Esc 收起。挂在 document 上一把抓（capture 期先于卡片自身点击）。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocDown = (e: PointerEvent) => {
+      if (!cardRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onDocDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDocDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   // 态优先级：active > hover > rest（选中时忽略 hover，稳定显示选中样式）
   const stateName = active ? "active" : hovered ? "hover" : "rest";
   const palette = active ? PRIORITY_PAL.primary : hovered ? PRIORITY_PAL.low : REST_PAL;
+  // ⋮ 按钮：hover 卡片 或 菜单展开时显现（展开后移出卡片也不消失，否则点不到菜单）
+  const showMore = hovered || menuOpen;
 
   return (
-    <Card
-      type="button"
-      data-state={stateName}
-      onClick={onSelect}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-    >
-      {/* plate 底：态驱动换调色 / 抬升 / 选中态低噪流动 */}
-      <PixelFrame
-        palette={palette}
-        variant="raised"
-        pixel={CARD_PIXEL}
-        radius={CARD_RADIUS}
-        noise={active ? CARD_NOISE_ACTIVE : CARD_NOISE}
-        noiseGranularity={CARD_NOISE_GRAN}
-        noiseSpeed={active ? ACTIVE_NOISE_SPEED : 0}
-        elevation={active || hovered ? ELEV_HOVER : 0}
+    <>
+      <Card
+        ref={cardRef}
+        role="button"
+        tabIndex={0}
+        data-state={stateName}
+        onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+      >
+        {/* plate 底：态驱动换调色 / 抬升 / 选中态低噪流动 */}
+        <PixelFrame
+          palette={palette}
+          variant="raised"
+          pixel={CARD_PIXEL}
+          radius={CARD_RADIUS}
+          noise={active ? CARD_NOISE_ACTIVE : CARD_NOISE}
+          noiseGranularity={CARD_NOISE_GRAN}
+          noiseSpeed={active ? ACTIVE_NOISE_SPEED : 0}
+          elevation={active || hovered ? ELEV_HOVER : 0}
+        />
+        <Inner>
+          {/* 左侧像素信号脊：三格硬边方块，按态逐亮 */}
+          <Spine aria-hidden>
+            <i />
+            <i />
+            <i />
+          </Spine>
+          <Texts>
+            <CardTitle>{title}</CardTitle>
+            <CardPreview>{preview}</CardPreview>
+          </Texts>
+        </Inner>
+
+        {/* 右上「⋮」更多按钮：hover / 菜单展开时显现 */}
+        <MoreSlot data-show={showMore || undefined}>
+          <PixelIconButton
+            aria-label="更多操作"
+            size={26}
+            onActivate={() => setMenuOpen((v) => !v)}
+          >
+            <MoreVertIcon />
+          </PixelIconButton>
+        </MoreSlot>
+
+        {/* 小浮层选项面板：贴在 ⋮ 下方，目前只有删除。点项不冒泡到卡片选择 */}
+        {menuOpen && (
+          <Menu
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <PixelFrame
+              palette={PRIORITY_PAL.low}
+              variant="raised"
+              pixel={3}
+              radius={2}
+              noise={0.05}
+              noiseGranularity={2}
+              elevation={5}
+            />
+            <MenuInner>
+              <MenuItem
+                type="button"
+                role="menuitem"
+                data-tone="danger"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setConfirming(true);
+                }}
+              >
+                <MenuIcon aria-hidden>
+                  <DeleteIcon />
+                </MenuIcon>
+                删除对话
+              </MenuItem>
+            </MenuInner>
+          </Menu>
+        )}
+      </Card>
+
+      <PixelConfirmModal
+        open={confirming}
+        title="删除对话"
+        message={`确定删除「${title}」吗？此操作不可撤销！！！`}
+        confirmLabel="删除"
+        cancelLabel="取消"
+        tone="danger"
+        onConfirm={() => {
+          setConfirming(false);
+          onDelete();
+        }}
+        onCancel={() => setConfirming(false)}
       />
-      <Inner>
-        {/* 左侧像素信号脊：三格硬边方块，按态逐亮 */}
-        <Spine aria-hidden>
-          <i />
-          <i />
-          <i />
-        </Spine>
-        <Texts>
-          <CardTitle>{title}</CardTitle>
-          <CardPreview>{preview}</CardPreview>
-        </Texts>
-      </Inner>
-    </Card>
+    </>
   );
 }
 
-const Card = styled.button`
+const Card = styled.div`
   position: relative;
   display: block;
   width: 100%;
@@ -160,6 +262,8 @@ const CardTitle = styled.span`
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 给右上 ⋮ 让出位置，标题不被按钮压住 */
+  padding-right: 22px;
 
   ${Card}[data-state="active"] & {
     color: ${t.colorTextOnBtnAccent};
@@ -178,5 +282,73 @@ const CardPreview = styled.span`
   ${Card}[data-state="active"] & {
     color: ${t.colorTextOnBtnAccent};
     opacity: 0.85;
+  }
+`;
+
+/* 右上「⋮」按钮位：默认隐藏（透明 + 不拦事件），hover 卡片或菜单展开时淡入 */
+const MoreSlot = styled.span`
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+
+  &[data-show] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+`;
+
+/* 小浮层选项面板：绝对定位贴在 ⋮ 下方，右对齐；PixelFrame 铺底，选项浮其上 */
+const Menu = styled.div`
+  position: absolute;
+  top: 30px;
+  right: 6px;
+  z-index: 5;
+  min-width: 116px;
+`;
+
+const MenuInner = styled.div`
+  position: relative;
+  z-index: 1;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+`;
+
+const MenuItem = styled.button`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  font: ${t.textSm};
+  color: ${t.colorText};
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  &[data-tone="danger"]:hover {
+    color: ${t.btnClose};
+  }
+`;
+
+const MenuIcon = styled.span`
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+
+  & > svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
   }
 `;

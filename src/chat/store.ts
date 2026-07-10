@@ -19,6 +19,25 @@ let store: Store | null = null;
 let cache: Conversation[] = [];
 
 /**
+ * 清洗加载进来的会话：把上次运行没收尾的工具段（pending/running）落定成 error。
+ * 应用中途退出时防抖落盘可能存下未定稿状态，重启后对应的 agent loop 早已不在，
+ * 不清洗的话审批按钮/呼吸闪烁会永远悬在历史里。
+ */
+function sanitize(list: Conversation[]): Conversation[] {
+  return list.map((c) => ({
+    ...c,
+    messages: c.messages.map((m) => ({
+      ...m,
+      segments: m.segments.map((s) =>
+        s.kind === "tool" && (s.status === "pending" || s.status === "running")
+          ? { ...s, status: "error" as const, detail: s.detail ?? "已中断（应用重启）" }
+          : s,
+      ),
+    })),
+  }));
+}
+
+/**
  * 启动时调用：从磁盘读入全部会话到内存缓存。
  * 任何异常（含非 Tauri 环境）都安全回退到空列表。
  */
@@ -26,7 +45,7 @@ export async function initConversations(): Promise<Conversation[]> {
   try {
     store = await load(STORE_FILE, { autoSave: false, defaults: { [KEY]: [] } });
     const loaded = await store.get<Conversation[]>(KEY);
-    cache = Array.isArray(loaded) ? loaded : [];
+    cache = Array.isArray(loaded) ? sanitize(loaded) : [];
   } catch (err) {
     console.warn("[conversations] 读取失败，使用空列表:", err);
     cache = [];

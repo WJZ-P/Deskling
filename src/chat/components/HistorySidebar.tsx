@@ -28,6 +28,8 @@ interface HistorySidebarProps {
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  /** 删除某条会话（卡片浮层菜单里点删除并确认后触发） */
+  onDelete: (id: string) => void;
   /** 分组相对日期用的“现在”时间戳（父级传入，避免各处重复取时钟） */
   now: number;
   /** 主题：决定面板底噪调色（与主侧边栏一致） */
@@ -39,6 +41,7 @@ export function HistorySidebar({
   activeId,
   onSelect,
   onNew,
+  onDelete,
   now,
   theme,
 }: HistorySidebarProps) {
@@ -87,6 +90,7 @@ export function HistorySidebar({
                     preview={c.preview}
                     active={c.id === activeId}
                     onSelect={() => onSelect(c.id)}
+                    onDelete={() => onDelete(c.id)}
                   />
                 ))}
               </Group>
