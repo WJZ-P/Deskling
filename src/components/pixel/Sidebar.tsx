@@ -133,6 +133,7 @@ function NavButton({
         ambient={active ? NAV_ACTIVE_AMBIENT : 0}
         tune={NAV_TUNE}
         sizeKey={collapsed ? "c" : "e"}
+        liveResize
         rootStyle={{ display: "flex", width: "100%", height: "100%" }}
         contentStyle={{
           width: "100%",
@@ -198,6 +199,7 @@ function Sidebar({
         noiseGranularity={PANEL_NOISE_GRAN}
         noiseSpeed={PANEL_NOISE_SPEED}
         sizeKey={collapsed ? "c" : "e"}
+        liveResize
       />
       <Inner>
         <Group>{PRIMARY.map(renderItem)}</Group>
@@ -224,11 +226,13 @@ function Sidebar({
 
 export default Sidebar;
 
+/* 收起/展开为「瞬切」而非宽度补间（与对话窗历史侧栏一致）：
+   补间期间右侧内容区每帧 reflow 必然掉帧，且中间宽度会把像素帧拉伸出粗边框。
+   瞬切一次重排到位，配合 liveResize 当帧重建网格，全程无拉伸帧。 */
 const Aside = styled.aside`
   position: relative;
   flex-shrink: 0;
   width: 148px;
-  transition: width 0.16s ease;
 
   &[data-collapsed="true"] {
     width: 52px;

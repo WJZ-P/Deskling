@@ -123,6 +123,11 @@ interface PixelSurfaceProps {
    * 消除「粗像素突变精细」的跳变。不传则走纯防抖（见 useElementSize）。
    */
   sizeKey?: string | number;
+  /**
+   * 内容/布局驱动的离散尺寸变化（如侧栏宽度瞬切）传 true：
+   * 尺寸突发首帧用 flushSync 同步提交，网格当帧重建，不出拉伸帧（见 useElementSize）。
+   */
+  liveResize?: boolean;
   className?: string;
   children?: ReactNode;
   shadowColor?: string;
@@ -186,6 +191,7 @@ export function PixelSurface({
   ambient = 0,
   tune,
   sizeKey,
+  liveResize = false,
   className,
   children,
   shadowColor = t.colorShadowPixel,
@@ -203,7 +209,7 @@ export function PixelSurface({
   ambientRef.current = ambient;
 
   const rid = useId().replace(/:/g, "");
-  const { w, h } = useElementSize(svgRef, { sizeKey });
+  const { w, h } = useElementSize(svgRef, { sizeKey, liveResize });
 
   const cols = Math.max(4, Math.round(w / pixel));
   const rows = Math.max(4, Math.round(h / pixel));
