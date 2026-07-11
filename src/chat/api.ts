@@ -118,6 +118,8 @@ export function streamChat(
   handlers: StreamHandlers,
   /** 危险工具（写/命令）免审批直接执行；由设置「免审批执行」开关决定 */
   autoApprove: boolean,
+  /** 深度思考：Anthropic/Gemini 请求思考过程下发（输入框操作栏开关决定） */
+  thinking: boolean,
 ): ChatStream {
   const requestId = nextRequestId();
   const channel = new Channel<ChatEvent>();
@@ -143,6 +145,7 @@ export function streamChat(
     profile,
     history,
     autoApprove,
+    thinking,
     onEvent: channel,
   }).catch((err) => handlers.onError(String(err)));
   return {

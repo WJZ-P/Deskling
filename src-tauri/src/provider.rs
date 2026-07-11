@@ -253,7 +253,10 @@ trait Protocol: Send + Sync {
     /// 把跨轮纯文本历史翻成协议原生 messages 数组。
     fn initial_messages(&self, history: &[ChatTurn]) -> Vec<Value>;
     /// 用当前 messages 构造完整请求体（stream=true / tools/functions 声明都在里面）。
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value]) -> Value;
+    /// thinking=true 时请求模型下发思考过程：Anthropic 加 thinking(adaptive)、
+    /// Gemini 加 thinkingConfig(includeThoughts)；OpenAI 兼容协议无标准开关，忽略
+    /// （推理模型的 reasoning_content 由服务端自行下发，consume 侧始终解析）。
+    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value;
     /// 消化一条 SSE data 行的 JSON：文本立即 emit Delta，工具调用累进 acc。
     fn consume(
         &self,
@@ -350,7 +353,7 @@ impl Protocol for Anthropic {
             .map(|m| json!({ "role": m.role, "content": m.content }))
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value]) -> Value {
+    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value {
         let mut body = json!({
             "model": p.model,
             "max_tokens": p.max_tokens.unwrap_or(4096),
@@ -358,7 +361,14 @@ impl Protocol for Anthropic {
             "messages": messages,
             "tools": anthropic_tools_array(),
         });
-        if let Some(temp) = p.temperature {
+        if thinking {
+            // adaptive：当前世代（4.6+ / Fable）通用的思考开法；display=summarized
+            // 让新模型返回可读摘要（4.7+ 默认 omitted 是空文本，开了等于白开）。
+            // 更老的模型（4.5 及以前）不认 adaptive 会 400——由用户关开关回避。
+            body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
+        } else if let Some(temp) = p.temperature {
+            // temperature 只在不思考时带：思考模式与自定义采样参数不兼容
+            //（新模型整体拒收 temperature，老模型要求思考时 temp=1）
             body["temperature"] = json!(temp);
         }
         body
@@ -412,6 +422,17 @@ impl Protocol for Anthropic {
                             if acc.tools.iter().any(|t| t.slot == idx) {
                                 let call = acc.slot_mut(idx);
                                 call.args_buf.push_str(part);
+                            }
+                        }
+                    }
+                    // 思考增量（请求开了 thinking 才有）：只推前端渲染，
+                    // 不入 text_buf → 不进跨轮历史（signature_delta 等一概忽略）
+                    "thinking_delta" => {
+                        if let Some(text) = delta.get("thinking").and_then(Value::as_str) {
+                            if !text.is_empty() {
+                                let _ = on_event.send(ChatEvent::Thinking {
+                                    text: text.to_string(),
+                                });
                             }
                         }
                     }
@@ -506,7 +527,9 @@ impl Protocol for OpenAi {
             .map(|m| json!({ "role": m.role, "content": m.content }))
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value]) -> Value {
+    fn build_body(&self, p: &ProviderProfile, messages: &[Value], _thinking: bool) -> Value {
+        // OpenAI 兼容协议没有标准思考开关（推理模型的 reasoning_content
+        // 由服务端自行下发，consume 侧始终解析），thinking 参数忽略
         let mut body = json!({
             "model": p.model,
             "stream": true,
@@ -658,13 +681,18 @@ impl Protocol for Gemini {
             })
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value]) -> Value {
+    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value {
         let mut gen = serde_json::Map::new();
         if let Some(temp) = p.temperature {
             gen.insert("temperature".into(), json!(temp));
         }
         if let Some(max) = p.max_tokens {
             gen.insert("maxOutputTokens".into(), json!(max));
+        }
+        if thinking {
+            // 2.5 系思考模型：includeThoughts 让思考摘要随流下发（thought=true 的 part）。
+            // 关闭时不带 thinkingConfig：模型照默认行为跑，只是不下发思考内容。
+            gen.insert("thinkingConfig".into(), json!({ "includeThoughts": true }));
         }
         let mut body = json!({
             "contents": messages,
@@ -695,10 +723,18 @@ impl Protocol for Gemini {
         for part in parts {
             if let Some(text) = part.get("text").and_then(Value::as_str) {
                 if !text.is_empty() {
-                    acc.text_buf.push_str(text);
-                    let _ = on_event.send(ChatEvent::Delta {
-                        text: text.to_string(),
-                    });
+                    // thought=true 的 part 是思考摘要（includeThoughts 开启后下发）：
+                    // 只推前端渲染，不入 text_buf → 不进跨轮历史
+                    if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                        let _ = on_event.send(ChatEvent::Thinking {
+                            text: text.to_string(),
+                        });
+                    } else {
+                        acc.text_buf.push_str(text);
+                        let _ = on_event.send(ChatEvent::Delta {
+                            text: text.to_string(),
+                        });
+                    }
                 }
             }
             if let Some(fc) = part.get("functionCall") {
@@ -853,6 +889,8 @@ pub async fn provider_chat(
     history: Vec<ChatTurn>,
     // 免审批开关（设置页「免审批执行」）：true 时写/命令类工具跳过审批直接执行
     auto_approve: bool,
+    // 思考开关（输入框上方操作栏「深度思考」）：Anthropic/Gemini 请求思考过程下发
+    thinking: bool,
     on_event: tauri::ipc::Channel<ChatEvent>,
 ) -> Result<(), String> {
     let cancel = register_cancel(&request_id);
@@ -894,7 +932,7 @@ pub async fn provider_chat(
         }
 
         let url = proto.chat_endpoint(&profile);
-        let body = proto.build_body(&profile, &messages);
+        let body = proto.build_body(&profile, &messages, thinking);
 
         let req = proto
             .apply_auth(client.post(&url), &profile)

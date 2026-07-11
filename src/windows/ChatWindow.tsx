@@ -450,6 +450,8 @@ export function ChatWindow() {
       },
       // 免审批开关：发送那一刻读取（跨窗口 onKeyChange 已保证缓存新鲜）
       getSetting("autoApproveTools"),
+      // 深度思考开关：输入框操作栏切换写入，发送那一刻读取（同窗口缓存即时可见）
+      getSetting("chatThinking"),
     );
     streamRef.current = handle;
   }, []);

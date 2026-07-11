@@ -94,6 +94,11 @@ export interface AppSettings {
    * false = 每步危险操作先弹「同意/拒绝」审批卡。
    */
   autoApproveTools: boolean;
+  /**
+   * 对话「深度思考」开关（输入框上方操作栏切换，仅对话窗读写）：
+   * true 时 Anthropic/Gemini 请求思考过程下发（OpenAI 兼容协议由模型自身决定，不受此控）。
+   */
+  chatThinking: boolean;
 }
 
 /** 默认值：读取失败或缺失时回退到这里 */
@@ -105,6 +110,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   providerProfiles: [],
   activeProviderId: null,
   autoApproveTools: true,
+  chatThinking: false,
 };
 
 const STORE_FILE = "settings.json";
