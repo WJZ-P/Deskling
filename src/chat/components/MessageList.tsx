@@ -153,6 +153,21 @@ export function MessageList({
     getItemKey: (i) => i,
   });
 
+  // 条目重测高时的滚动补偿豁免。tanstack 默认：条目「顶边在视口上方」就把滚动
+  // 位置同步下移 delta（为上滑翻历史时估高→实测的修正防跳动）。但正在流式的气泡
+  // 一旦高过视口、用户上滚读它的早期内容时，它的顶边就在视口上方——而它的增长
+  // 发生在"底部"（视口下方），这个补偿反而每个 delta 都把视图往下拽一截，表现为
+  // 「内容不断往上推、停手就按不住」。故流式那条一律不补偿（贴底跟随由下方的
+  // 钉底 effect 负责），其余条目保留与库默认等价的判定。
+  // （渲染期直接赋值：useVirtualizer 返回稳定实例，每轮 render 刷新闭包）
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    if (streamingId && messages[item.index]?.id === streamingId) return false;
+    return (
+      item.start < (instance.scrollOffset ?? 0) &&
+      (!instance.itemSizeCache.has(item.key) || instance.scrollDirection !== "backward")
+    );
+  };
+
   // 跟踪是否贴底：滚动时更新。阈值放宽到 STICK_EPS，避免分数像素误判「离底」。
   //
   // ⚠️ 只靠 scroll 事件不够：scroll 事件是异步派发的，流式输出高频重渲时，
