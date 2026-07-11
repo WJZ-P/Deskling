@@ -7,7 +7,8 @@ import { PixelButton } from "./PixelButton";
 /**
  * 像素风确认弹窗（PixelModal 的薄包装）。
  *  - message：弹窗正文（可以是字符串或节点）；
- *  - tone：default 确认按钮用 primary（青），danger 用红色系（破坏性操作）；
+ *  - tone：语义标记（default / danger）。破坏性操作传 danger，但确认按钮一律
+ *    走普通 primary（青）—— 危险性由标题/正文文案表达，不靠红字。
  *  - onConfirm / onCancel：确认 / 取消回调（取消也会触发 onClose）。
  * 用法：把 open 状态和 target 放到调用方，confirm 后执行真实操作。
  */
@@ -29,7 +30,7 @@ export function PixelConfirmModal({
   message,
   confirmLabel = "确认",
   cancelLabel = "取消",
-  tone = "default",
+  // tone 仍是公开语义标记（调用方传 danger），但不再驱动样式：不解构以免未用告警
   onConfirm,
   onCancel,
 }: PixelConfirmModalProps) {
@@ -44,11 +45,7 @@ export function PixelConfirmModal({
           <PixelButton variant="low" onClick={onCancel}>
             {cancelLabel}
           </PixelButton>
-          <PixelButton
-            variant="primary"
-            onClick={onConfirm}
-            style={tone === "danger" ? { color: "var(--btn-close)" } : undefined}
-          >
+          <PixelButton variant="primary" onClick={onConfirm}>
             {confirmLabel}
           </PixelButton>
         </>
