@@ -1,7 +1,7 @@
 import { useState, type ButtonHTMLAttributes } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import { PixelSurface, type SurfaceState } from "./PixelSurface";
+import { PixelSurface, type SurfaceState, type SurfaceTune } from "./PixelSurface";
 import { PRIORITY_PAL, type Priority } from "./palettes";
 
 //  可调旋钮
@@ -14,11 +14,20 @@ interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Priority;
   /** 紧凑尺寸：更小的内边距/高度，用于图标按钮（如浮窗关闭 ✕） */
   compact?: boolean;
+  /** 美术像素大小覆写（默认 4）：小按钮配 3 观感更精细 */
+  pixel?: number;
+  /**
+   * 表面手感覆写（透传 PixelSurface）：如 { hoverTy: 0, pressTy: 0 } 做「原地不动」
+   * 的开关按钮。请传模块级常量保持引用稳定，避免每次渲染重建像素网格。
+   */
+  tune?: Partial<SurfaceTune>;
 }
 
 export function PixelButton({
   variant = "normal",
   compact = false,
+  pixel = BTN_PIXEL,
+  tune,
   children,
   disabled,
   onPointerDown,
@@ -66,9 +75,10 @@ export function PixelButton({
       <PixelSurface
         palette={PRIORITY_PAL[variant]}
         state={state}
-        pixel={BTN_PIXEL}
+        pixel={pixel}
         radius={BTN_RADIUS}
         noise={NOISE}
+        tune={tune}
       >
         <Label data-compact={compact || undefined}>{children}</Label>
       </PixelSurface>

@@ -63,6 +63,15 @@ export function CopyIcon(props: IconProps) {
   );
 }
 
+/** 灯泡（emoji_objects：输入框功能行的「深度思考」开关） */
+export function BulbIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M480-80q-26 0-47-12.5T400-126q-33 0-56.5-23.5T320-206v-142q-59-39-94.5-103T190-590q0-121 84.5-205.5T480-880q121 0 205.5 84.5T770-590q0 77-35.5 140T640-348v142q0 33-23.5 56.5T560-126q-12 21-33 33.5T480-80Zm-80-126h160v-36H400v36Zm0-76h160v-38H400v38Zm-8-118h58v-108l-88-88 42-42 76 76 76-76 42 42-88 88v108h58q54-26 88-76.5T690-590q0-88-61-149t-149-61q-88 0-149 61t-61 149q0 63 34 113.5t88 76.5Zm88-162Zm0-38Z" />
+    </Icon>
+  );
+}
+
 /** 展开/收起（unfold_more 上下双箭头：思考块的展开按钮） */
 export function UnfoldMoreIcon(props: IconProps) {
   return (
