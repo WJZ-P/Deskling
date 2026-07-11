@@ -21,6 +21,7 @@ import type { ChatMessage } from "./types";
  */
 type ChatEvent =
   | { type: "delta"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "toolStart"; id: string; name: string; summary: string; args: string; needsApproval: boolean }
   | { type: "toolEnd"; id: string; status: "success" | "error"; detail: string }
   | { type: "done" }
@@ -40,6 +41,8 @@ export interface ChatTurn {
 /** 流式回调集合 */
 export interface StreamHandlers {
   onDelta: (text: string) => void;
+  /** 一段思考增量（推理模型的 reasoning，先于正文到达）：追加进思考段 */
+  onThinking: (text: string) => void;
   /** 一个工具调用开始：据 needsApproval 决定落成 pending（待审批）还是 running */
   onToolStart: (call: {
     id: string;
@@ -58,14 +61,15 @@ export interface StreamHandlers {
  * 把一条消息压成给模型的纯文本。
  *  - 文本段原样拼接；
  *  - 已完成的工具段（success/error）折叠成一行「调用 + 结果」摘要，作为跨轮上下文；
- *  - pending/running（未定稿）的工具段忽略。
+ *  - pending/running（未定稿）的工具段忽略；
+ *  - 思考段整个跳过——reasoning 不该回喂给模型（烧 token 且污染上下文）。
  */
 function messageToText(msg: ChatMessage): string {
   const parts: string[] = [];
   for (const s of msg.segments) {
     if (s.kind === "text") {
       if (s.text) parts.push(s.text);
-    } else if (s.status === "success" || s.status === "error") {
+    } else if (s.kind === "tool" && (s.status === "success" || s.status === "error")) {
       const args = s.args ? `(${s.args})` : "";
       const result = s.detail ? `\n结果: ${s.detail}` : "";
       const tag = s.status === "error" ? "调用工具(失败)" : "调用工具";
@@ -119,6 +123,7 @@ export function streamChat(
   const channel = new Channel<ChatEvent>();
   channel.onmessage = (ev) => {
     if (ev.type === "delta") handlers.onDelta(ev.text);
+    else if (ev.type === "thinking") handlers.onThinking(ev.text);
     else if (ev.type === "toolStart")
       handlers.onToolStart({
         id: ev.id,

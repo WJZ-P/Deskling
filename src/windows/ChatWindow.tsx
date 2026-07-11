@@ -102,6 +102,48 @@ function appendDelta(
   );
 }
 
+/**
+ * 把一段思考增量追加进流式回复消息（推理模型的 reasoning 先于正文到达，
+ * 回复消息可能还不存在 → 与 appendDelta 同款惰性创建）。
+ * 增量接在最后一个思考段尾部；末段不是 thinking（如工具调用后模型再度思考）
+ * 则新起一段。不动 preview——思考不是可读正文，别把列表副标题冲成「…」。
+ */
+function appendThinking(
+  setConversations: SetConvs,
+  convId: string,
+  replyId: string,
+  chunk: string,
+): void {
+  setConversations((prev) =>
+    prev.map((c) => {
+      if (c.id !== convId) return c;
+      const idx = c.messages.findIndex((m) => m.id === replyId);
+      let messages: ChatMessage[];
+      if (idx === -1) {
+        const reply: ChatMessage = {
+          id: replyId,
+          role: "assistant",
+          ts: Date.now(),
+          segments: [{ kind: "thinking", text: chunk }],
+        };
+        messages = [...c.messages, reply];
+      } else {
+        const msg = c.messages[idx];
+        const segs = [...msg.segments];
+        const last = segs[segs.length - 1];
+        if (last && last.kind === "thinking") {
+          segs[segs.length - 1] = { kind: "thinking", text: last.text + chunk };
+        } else {
+          segs.push({ kind: "thinking", text: chunk });
+        }
+        messages = [...c.messages];
+        messages[idx] = { ...msg, segments: segs };
+      }
+      return { ...c, updatedAt: Date.now(), messages };
+    }),
+  );
+}
+
 /** 直接落一条完整的 assistant 文本消息（用于「未配置 provider」等即时提示） */
 function appendAssistantText(
   setConversations: SetConvs,
@@ -360,6 +402,15 @@ export function ChatWindow() {
             setTypingConv(null);
           }
           appendDelta(setConversations, convId, replyId, chunk);
+        },
+        // 思考增量：推理模型先吐 reasoning 再吐正文——首个思考片段一到就撤下
+        // 「思考中」指示器，由气泡里流式展开的思考块接管展示
+        onThinking: (chunk) => {
+          if (!started) {
+            started = true;
+            setTypingConv(null);
+          }
+          appendThinking(setConversations, convId, replyId, chunk);
         },
         // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
         // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。

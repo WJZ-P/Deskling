@@ -63,6 +63,15 @@ export function CopyIcon(props: IconProps) {
   );
 }
 
+/** 展开/收起（unfold_more 上下双箭头：思考块的展开按钮） */
+export function UnfoldMoreIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M480-61.91 221.91-320l74.52-74.52 183.57 183 183.57-183L738.09-320 480-61.91Zm-183.13-504L221.91-640 480-898.09 738.09-640l-74.96 74.09L480-748.48 296.87-565.91Z" />
+    </Icon>
+  );
+}
+
 /** 发起新对话（对话框 + 加号） */
 export function NewChatIcon(props: IconProps) {
   return (

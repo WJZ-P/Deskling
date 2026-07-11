@@ -119,12 +119,15 @@ pub struct ChatTurn {
 
 /// 流式对话事件：通过 tauri Channel 逐条推给前端。
 /// tag="type", rename_all="camelCase" → 前端拿到
-/// `{ type: "delta" | "toolStart" | "toolEnd" | "done" | "error", ... }`。
+/// `{ type: "delta" | "thinking" | "toolStart" | "toolEnd" | "done" | "error", ... }`。
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ChatEvent {
     /// 一段增量文本（token / 片段）。
     Delta { text: String },
+    /// 一段思考增量：推理模型（DeepSeek R1 等）与正文分开下发的 reasoning 文本。
+    /// 只推给前端渲染成可折叠思考块；不累入 text_buf → 不进跨轮历史。
+    Thinking { text: String },
     /// 模型请求一个工具调用：Rust 已解析出 id/name/args。
     /// needs_approval=true 时前端把工具段落成 pending 态、显示同意/拒绝按钮；
     /// 否则直接 running（loop 已在执行）。
@@ -532,6 +535,19 @@ impl Protocol for OpenAi {
             Some(d) => d,
             None => return,
         };
+        // 思考片段（DeepSeek 系 reasoning_content / OpenRouter 系 reasoning）：
+        // 推理模型把思考与正文分字段下发。思考只发给前端渲染，不入 text_buf——
+        // text_buf 会拼进跨轮历史，思考文本混进去既烧 token 又污染上下文。
+        if let Some(text) = delta
+            .get("reasoning_content")
+            .or_else(|| delta.get("reasoning"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            let _ = on_event.send(ChatEvent::Thinking {
+                text: text.to_string(),
+            });
+        }
         // 文本片段
         if let Some(text) = delta
             .get("content")

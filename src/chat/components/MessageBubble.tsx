@@ -5,6 +5,7 @@ import { GLPixelFrame } from "../../components/pixel/GLPixelFrame";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { formatClock, type ChatMessage } from "../types";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { StreamingText } from "./StreamingText";
 import { MessageToolbar } from "./MessageToolbar";
 
@@ -146,8 +147,16 @@ export const MessageBubble = memo(function MessageBubble({
                       live={live && i === lastTextIdx}
                     />
                   </Text>
-                ) : (
+                ) : seg.kind === "tool" ? (
                   <ToolCallBlock key={i} seg={seg} onApprove={onApproveTool} />
+                ) : (
+                  // 思考段：live 消息且位于末段 = reasoning 仍在流入（正文一来
+                  // 就会接一个文本段在后面，本段随即不再是末段 → 自动折叠）
+                  <ThinkingBlock
+                    key={i}
+                    seg={seg}
+                    streaming={live && i === msg.segments.length - 1}
+                  />
                 ),
               )
             )}

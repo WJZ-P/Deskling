@@ -41,7 +41,16 @@ export interface TextSegment {
   text: string;
 }
 
-export type MessageSegment = TextSegment | ToolCallSegment;
+/**
+ * 一段思考文本：推理模型（DeepSeek R1 等）与正文分开下发的 reasoning 过程。
+ * 渲染成可折叠的思考块（流式中展开、定稿后折叠）；不回喂给模型（跨轮历史跳过）。
+ */
+export interface ThinkingSegment {
+  kind: "thinking";
+  text: string;
+}
+
+export type MessageSegment = TextSegment | ToolCallSegment | ThinkingSegment;
 
 /** 一条消息 */
 export interface ChatMessage {
