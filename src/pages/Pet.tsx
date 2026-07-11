@@ -15,19 +15,20 @@ import { PixelProgress } from "../components/pixel/PixelProgress";
 import { PixelButton } from "../components/pixel/PixelButton";
 import { PixelFrame } from "../components/pixel/PixelFrame";
 import { PX } from "../components/pixel/palettes";
+import { PetShowcase } from "../components/PetShowcase";
+import { getPetProfiles, getSetting } from "../settings";
 
 /**
- * 桌宠页：展示当前桌宠信息的卡片。
- * 先用像素组件搭个骨架 + 占位文案，后续再接真实状态 / TTS / 互动。
+ * 桌宠页：桌宠展示栏（图标卡，点击拉起人设面板）+ 当前桌宠信息大卡。
+ * 名字/头像来自桌宠档案（settings.petProfiles）；
+ * 状态数值仍是占位，后续再接真实状态 / TTS / 互动。
  */
 
-/** 当前桌宠占位数据（后续接入真实状态源） */
+/** 当前桌宠占位数据（名字/头像已接档案，其余后续接入真实状态源） */
 const PET = {
-  name: "Deskling",
-  species: "AI 猫娘桌宠",
+  species: "AI 雪豹桌宠",
   level: 1,
   mood: "待命中",
-  face: "🐱",
   bio: "一只住在桌面上的 AI agent 桌宠，随时准备陪主人喵～",
 };
 
@@ -43,6 +44,9 @@ function Pet() {
   // 让按钮文案（召唤/收起 · 打开/关闭）跟真实窗口状态一致。
   const [petShown, setPetShown] = useState(false);
   const [chatShown, setChatShown] = useState(false);
+  // 桌宠档案：本页持有一份（展示栏 + 大卡片共用），面板保存后重读缓存刷新
+  const [pets, setPets] = useState(getPetProfiles);
+  const activePet = pets.find((p) => p.id === getSetting("activePetId")) ?? pets[0];
 
   useEffect(() => {
     void invoke<boolean>("pet_visible").then(setPetShown).catch(() => {});
@@ -72,19 +76,27 @@ function Pet() {
         <PageSubtitle>看看你的桌面小伙伴现在怎么样喵～</PageSubtitle>
       </PageHeader>
 
+      <PixelSection title="我的桌宠">
+        <PetShowcase
+          pets={pets}
+          activePetId={activePet?.id ?? ""}
+          onChanged={() => setPets(getPetProfiles())}
+        />
+      </PixelSection>
+
       <PixelSection title="当前桌宠" trailing={<Tag>在线</Tag>}>
         <Profile>
-          {/* 双层像素头像框：外青框 + 内凹槽底 + 表情 */}
+          {/* 双层像素头像框：外青框 + 内凹槽底 + 精灵图头像 */}
           <Avatar>
             <PixelFrame palette={PX.accent} variant="raised" pixel={3} radius={3} />
             <AvatarInner>
               <PixelFrame palette={PX.well} variant="sunken" pixel={3} radius={2} />
-              <AvatarFace>{PET.face}</AvatarFace>
+              <AvatarSprite src={activePet?.sprite ?? "/pet/xuebao.png"} alt="" draggable={false} />
             </AvatarInner>
           </Avatar>
 
           <Meta>
-            <PetName>{PET.name}</PetName>
+            <PetName>{activePet?.name ?? "Deskling"}</PetName>
             <PetSpecies>
               {PET.species} · Lv.{PET.level}
             </PetSpecies>
@@ -138,11 +150,13 @@ const AvatarInner = styled.div`
   justify-content: center;
 `;
 
-const AvatarFace = styled.span`
+const AvatarSprite = styled.img`
   position: relative;
   z-index: 1;
-  font-size: 34px;
-  line-height: 1;
+  width: 48px;
+  height: 48px;
+  image-rendering: pixelated;
+  -webkit-user-drag: none;
 `;
 
 const Meta = styled.div`

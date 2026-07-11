@@ -74,6 +74,32 @@ export interface ProviderProfile {
   maxTokens?: number;
 }
 
+// ==================== 桌宠档案 ====================
+
+/** 单个桌宠档案：桌宠页展示栏卡片 + 人设设置面板的数据源 */
+export interface PetProfile {
+  id: string;
+  /** 桌宠名字（展示栏悬停小签 / 桌宠页大卡标题） */
+  name: string;
+  /** 人设 prompt：作为对话的 system prompt 注入（设置面板可编辑） */
+  prompt: string;
+  /** 精灵图路径（public 下，主窗/桌宠窗通用） */
+  sprite: string;
+}
+
+/** 雪豹的默认人设 prompt（首次初始化用；用户可在面板里随意改） */
+export const DEFAULT_PET_PROMPT = `你是「雪豹」，一只住在主人桌面上的雪豹桌宠。
+
+【性格】活泼粘人、好奇心旺盛，偶尔犯懒打盹；把用户称作「主人」。
+【说话方式】中文口语，简短自然，句尾偶尔带「喵」；不堆砌颜文字。
+【干活】你有真实的工具能力（读写文件、执行命令）：主人求助时认真干活，边做边简单说明；闲聊时轻松俏皮。
+【边界】不要自称某个具体的大模型或厂商，你就是雪豹。`;
+
+/** 内置桌宠：雪豹（首次启动的默认档案） */
+const DEFAULT_PETS: PetProfile[] = [
+  { id: "xuebao", name: "雪豹", prompt: DEFAULT_PET_PROMPT, sprite: "/pet/xuebao.png" },
+];
+
 // ==================== 应用设置 ====================
 
 /** 所有持久化配置项集中在这里，新增配置时同步补默认值即可 */
@@ -99,6 +125,10 @@ export interface AppSettings {
    * true 时 Anthropic/Gemini 请求思考过程下发（OpenAI 兼容协议由模型自身决定，不受此控）。
    */
   chatThinking: boolean;
+  /** 桌宠档案列表（桌宠页展示栏；人设 prompt 等都存在档案里） */
+  petProfiles: PetProfile[];
+  /** 当前桌宠 id（展示栏排最前；对话人设取它的 prompt） */
+  activePetId: string;
 }
 
 /** 默认值：读取失败或缺失时回退到这里 */
@@ -111,6 +141,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   activeProviderId: null,
   autoApproveTools: true,
   chatThinking: false,
+  petProfiles: DEFAULT_PETS,
+  activePetId: "xuebao",
 };
 
 const STORE_FILE = "settings.json";
@@ -167,6 +199,13 @@ function bindCrossWindowSync(s: Store): void {
   // 审批开关在主窗口设置里改、常驻聊天窗发送时读，同样要跨窗口刷
   void s.onKeyChange<boolean>("autoApproveTools", (v) => {
     cache.autoApproveTools = v ?? DEFAULT_SETTINGS.autoApproveTools;
+  });
+  // 桌宠档案在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
+  void s.onKeyChange<PetProfile[]>("petProfiles", (v) => {
+    cache.petProfiles = v && v.length > 0 ? v : DEFAULT_SETTINGS.petProfiles;
+  });
+  void s.onKeyChange<string>("activePetId", (v) => {
+    cache.activePetId = v ?? DEFAULT_SETTINGS.activePetId;
   });
 }
 
@@ -290,4 +329,29 @@ export async function deleteProfile(id: string): Promise<void> {
 /** 切换当前激活的 provider */
 export async function setActiveProvider(id: string): Promise<void> {
   await setSetting("activeProviderId", id);
+}
+
+// ==================== 桌宠档案操作 ====================
+
+/** 读取全部桌宠档案（内存缓存） */
+export function getPetProfiles(): PetProfile[] {
+  return cache.petProfiles;
+}
+
+/** 当前桌宠（id 失配时回退列表首个，保证总有一只在岗） */
+export function getActivePet(): PetProfile {
+  return (
+    cache.petProfiles.find((p) => p.id === cache.activePetId) ??
+    cache.petProfiles[0] ??
+    DEFAULT_PETS[0]
+  );
+}
+
+/** 局部更新某只桌宠（合并 patch），落盘 */
+export async function updatePetProfile(
+  id: string,
+  patch: Partial<Omit<PetProfile, "id">>,
+): Promise<void> {
+  const next = cache.petProfiles.map((p) => (p.id === id ? { ...p, ...patch } : p));
+  await setSetting("petProfiles", next);
 }
