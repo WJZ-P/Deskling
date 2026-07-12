@@ -95,6 +95,17 @@ fn chat_toggle(app: AppHandle) -> bool {
     toggle_window(&app, "chat")
 }
 
+/// 显式唤出 AI 对话窗（点击桌宠说话气泡等入口：只显示并聚焦，不做 toggle——
+/// 已经开着时再点不能反而把窗口藏了）。
+#[tauri::command]
+fn chat_show(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("chat") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
 /// 查询桌宠 / 对话窗口当前可见状态（前端挂载时同步按钮文案用）。
 #[tauri::command]
 fn pet_visible(app: AppHandle) -> bool {
@@ -154,6 +165,7 @@ pub fn run() {
             tray_quit,
             pet_toggle,
             chat_toggle,
+            chat_show,
             pet_visible,
             chat_visible,
             provider::provider_test,

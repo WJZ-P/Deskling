@@ -4,6 +4,7 @@ import { t } from "../../styles/theme";
 import { PixelFrame } from "../../components/pixel/PixelFrame";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { UnfoldMoreIcon } from "../../components/pixel/icons";
+import { StreamingText } from "./StreamingText";
 import type { ThinkingSegment } from "../types";
 
 /**
@@ -63,7 +64,8 @@ export function ThinkingBlock({ seg, streaming }: ThinkingBlockProps) {
           </ExpandBtn>
         </Head>
         <Body ref={bodyRef} data-expanded={expanded || undefined}>
-          {seg.text}
+          {/* 与正文同款逐字蹦入：流入中弹簧入场，定稿后自动塌成纯文本省 DOM */}
+          <StreamingText text={seg.text} live={streaming} />
         </Body>
       </Inner>
     </Root>

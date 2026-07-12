@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { styled } from "@linaria/react";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { t } from "../styles/theme";
+import { PixelSurface } from "../components/pixel/PixelSurface";
+import { PX } from "../components/pixel/palettes";
+import { StreamingText } from "../chat/components/StreamingText";
+import { getSetting } from "../settings";
 import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
 
 /**
@@ -36,6 +42,13 @@ const FRAME_PX = SPRITE_SIZE * SPRITE_SCALE;
 const DRAG_THRESHOLD_PX = 4;
 /** idle 持续无交互这么久后入睡（ms） */
 const SLEEP_AFTER_MS = 20_000;
+/** 说话气泡兜底自消：这么久没收到新文本也没收尾（如中途暂停）就自行隐去（ms）。
+    收尾（done）后的驻留时长走设置项 petBubbleSecs（设置面板可调） */
+const BUBBLE_IDLE_MS = 10_000;
+/** 气泡退场动画时长（ms）：下沉缩小淡出，播完才真正卸载 */
+const BUBBLE_OUT_MS = 180;
+/** 气泡最大宽度 px（窗口 240 宽，留出两侧余量不贴边） */
+const BUBBLE_MAX_W = 210;
 /** 躲好后随机再过这么久探一次头：基础 + 随机幅度（ms），合计 1-3 分钟 */
 const PEEK_MIN_MS = 60_000;
 const PEEK_RAND_MS = 120_000;
@@ -87,6 +100,70 @@ export function PetWindow() {
     const n = anim.next;
     setState(n && ANIM_MANAGER.has(n) ? n : "idle");
   });
+
+  // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。两种形态——
+  // say = 正文说话（白面对话泡 + 三角尾巴）；think = 思考中（浅青想法泡 +
+  // 三个小圆圈从头顶升上去，漫画式心理活动）。收尾（done）后按设置的驻留
+  // 时长消失；中途没了下文（暂停）由兜底计时器自隐
+  const [bubble, setBubble] = useState<{
+    text: string;
+    kind: "say" | "think";
+    live: boolean;
+  } | null>(null);
+  // 退场两拍：closing 置真先播退场动画（下沉缩小淡出），播完才真正卸载
+  const [closing, setClosing] = useState(false);
+  const bubbleTimerRef = useRef(0);
+  const closeTimerRef = useRef(0);
+  const bubbleBodyRef = useRef<HTMLDivElement>(null);
+  const closeBubble = useCallback(() => {
+    window.clearTimeout(closeTimerRef.current);
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      setBubble(null);
+      setClosing(false);
+    }, BUBBLE_OUT_MS);
+  }, []);
+  useEffect(() => {
+    const unlisten = getCurrentWindow().listen<{
+      text?: string;
+      kind?: string;
+      done?: boolean;
+    }>("pet:say", (e) => {
+      const text = e.payload?.text ?? "";
+      window.clearTimeout(bubbleTimerRef.current);
+      if (!text) {
+        closeBubble(); // 新一轮开场清残留：同样体面退场，不瞬间消失
+        return;
+      }
+      // 新内容到达：撤销进行中的退场（复活），刷新内容
+      window.clearTimeout(closeTimerRef.current);
+      setClosing(false);
+      const done = !!e.payload?.done;
+      // live 驱动逐字蹦入（StreamingText）：流入中弹簧入场，收尾塌成纯文本
+      setBubble({ text, kind: e.payload?.kind === "think" ? "think" : "say", live: !done });
+      // done = 本轮说完：按设置驻留让人读完；否则兜底自隐（防暂停后气泡卡住）
+      bubbleTimerRef.current = window.setTimeout(
+        closeBubble,
+        done ? getSetting("petBubbleSecs") * 1000 : BUBBLE_IDLE_MS,
+      );
+    });
+    return () => {
+      window.clearTimeout(bubbleTimerRef.current);
+      window.clearTimeout(closeTimerRef.current);
+      void unlisten.then((f) => f());
+    };
+  }, [closeBubble]);
+  // 文本增长时滚到底：长内容气泡像字幕一样只露最新几行
+  useEffect(() => {
+    const el = bubbleBodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [bubble]);
+
+  // 点气泡拉起 AI 对话窗（设置开关，默认开；关掉后气泡不收指针事件）
+  const bubbleClickable = getSetting("petBubbleClick");
+  const openChatFromBubble = () => {
+    void invoke("chat_show").catch(() => {});
+  };
 
   // 按下起点：null = 本次按下已移交拖窗或已结束
   const downRef = useRef<{ x: number; y: number } | null>(null);
@@ -187,37 +264,201 @@ export function PetWindow() {
   };
 
   return (
-    <Stage
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-    >
-      <SpriteView
-        role="img"
-        aria-label="雪豹"
-        style={{
-          backgroundImage: `url(${anim.src})`,
-          backgroundSize: `${anim.frames * FRAME_PX}px ${FRAME_PX}px`,
-          backgroundPosition: `${-frame * FRAME_PX}px 0`,
-        }}
-      />
+    <Stage>
+      {/* 头顶气泡（PixelSurface 低噪像素面，与主面板同一套纹理）：
+          say = 白面对话泡 + 三角尾巴；think = 浅青想法泡 + 三个小圆圈升上去。
+          开了「点气泡拉起对话」则整个气泡可点（含尾巴/圆圈），否则不拦指针 */}
+      {bubble && (
+        <Bubble
+          data-clickable={bubbleClickable || undefined}
+          data-closing={closing || undefined}
+          onClick={bubbleClickable ? openChatFromBubble : undefined}
+        >
+          <PixelSurface
+            palette={bubble.kind === "think" ? PX.well : PX.panel}
+            state="rest"
+            pixel={3}
+            radius={2}
+            noise={0.08}
+            rootStyle={{ display: "flex", maxWidth: BUBBLE_MAX_W }}
+            contentStyle={{ display: "block", width: "100%", padding: "8px 11px" }}
+          >
+            <BubbleBody ref={bubbleBodyRef} data-kind={bubble.kind}>
+              {/* 弹簧字逐字蹦入（与对话窗同款）。key 按形态断开：想法泡 ⇄ 对话泡
+                  切换时整段重新蹦出，配合面色切换有「换了一口气」的感觉 */}
+              <StreamingText key={bubble.kind} text={bubble.text} live={bubble.live} />
+            </BubbleBody>
+          </PixelSurface>
+          {bubble.kind === "think" ? (
+            <ThinkTrail aria-hidden>
+              <ThinkDot data-i="0" />
+              <ThinkDot data-i="1" />
+              <ThinkDot data-i="2" />
+            </ThinkTrail>
+          ) : (
+            <Tail aria-hidden />
+          )}
+        </Bubble>
+      )}
+      {/* 只有桌宠本体可交互：按下摸头 / 拖动搬窝，空白区不拦截桌面点击 */}
+      <PetHit
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
+        <SpriteView
+          role="img"
+          aria-label="雪豹"
+          style={{
+            backgroundImage: `url(${anim.src})`,
+            backgroundSize: `${anim.frames * FRAME_PX}px ${FRAME_PX}px`,
+            backgroundPosition: `${-frame * FRAME_PX}px 0`,
+          }}
+        />
+      </PetHit>
     </Stage>
   );
 }
 
-/* 舞台：铺满透明窗口，整体透明度在这里统一控制 */
+/* 舞台：铺满透明窗口，桌宠沉底、气泡自下往上叠在头顶。
+   pointer-events:none 让空白区不拦截桌面点击（只有桌宠本体 PetHit 收事件） */
 const Stage = styled.div`
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   height: 100vh;
+  padding-bottom: 6px;
   opacity: ${PET_OPACITY};
-  cursor: grab;
   user-select: none;
+  pointer-events: none;
+`;
+
+/* 桌宠本体命中区：整个交互（摸头/拖窗）都在这，光标手型也只在它上面 */
+const PetHit = styled.div`
+  pointer-events: auto;
+  display: flex;
+  cursor: grab;
 
   &:active {
     cursor: grabbing;
+  }
+`;
+
+/* 头顶气泡：弹入登场 / 下沉缩小淡出退场（closing 两拍收场，播完才卸载）；
+   默认纯视觉不拦指针，开了「点气泡拉起对话」才收点击（退场中不再可点） */
+const Bubble = styled.div`
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 3px;
+  transform-origin: center bottom;
+  animation: bubble-pop 160ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
+
+  &[data-clickable] {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  &[data-closing] {
+    pointer-events: none;
+    animation: bubble-out ${BUBBLE_OUT_MS}ms ease-in both;
+  }
+
+  @keyframes bubble-pop {
+    from {
+      transform: translateY(5px) scale(0.95);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  @keyframes bubble-out {
+    from {
+      transform: none;
+      opacity: 1;
+    }
+    to {
+      transform: translateY(6px) scale(0.88);
+      opacity: 0;
+    }
+  }
+`;
+
+/* 气泡正文：正文号深墨（浅面上恒定可读，不吃主题），长内容内部滚动只露最新几行
+   （max-height ≈ 5 行）。思考态字色偏灰——心理活动比开口说话「轻」一档 */
+const BubbleBody = styled.div`
+  max-height: 125px;
+  overflow: hidden;
+  font: ${t.textMd};
+  line-height: 1.55;
+  letter-spacing: 0.3px;
+  color: #3a3540;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  &[data-kind="think"] {
+    color: #55616d;
+  }
+`;
+
+/* 对话尾巴：朝下的小三角，尖端指向桌宠头顶。色同气泡面（PX.panel.face = 白） */
+const Tail = styled.div`
+  width: 0;
+  height: 0;
+  margin-top: -1px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid #ffffff;
+  filter: drop-shadow(0 2px 0 ${t.colorShadowPixel});
+`;
+
+/* 想法泡的引导圆圈：三颗由大到小从气泡底下排向头顶（漫画式「冒想法」），
+   依次轻轻浮动。色取想法泡同款（PX.well 面色/描边） */
+const ThinkTrail = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+`;
+
+const ThinkDot = styled.div`
+  border-radius: 50%;
+  background: #c2e7e8; /* = PX.well.face */
+  border: 2px solid #3f9599; /* = PX.well.edge */
+  box-shadow: 0 2px 0 ${t.colorShadowPixel};
+  animation: think-bob 1.3s ease-in-out infinite;
+
+  &[data-i="0"] {
+    width: 12px;
+    height: 12px;
+  }
+  &[data-i="1"] {
+    width: 9px;
+    height: 9px;
+    animation-delay: 0.18s;
+  }
+  &[data-i="2"] {
+    width: 6px;
+    height: 6px;
+    animation-delay: 0.36s;
+  }
+
+  @keyframes think-bob {
+    0%,
+    100% {
+      transform: none;
+    }
+    50% {
+      transform: translateY(-2px);
+    }
   }
 `;
 

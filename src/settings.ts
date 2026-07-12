@@ -130,6 +130,10 @@ export interface AppSettings {
    * 常驻对话窗按下语音按钮时读取（跨窗口 onKeyChange 同步）。
    */
   sttDevice: string;
+  /** 桌宠说话气泡驻留时长（秒）：一轮回复说完后气泡再停这么久才消失 */
+  petBubbleSecs: number;
+  /** 点击桌宠气泡拉起 AI 对话窗（默认开启） */
+  petBubbleClick: boolean;
   /** 桌宠档案列表（桌宠页展示栏；人设 prompt 等都存在档案里） */
   petProfiles: PetProfile[];
   /** 当前桌宠 id（展示栏排最前；对话人设取它的 prompt） */
@@ -147,6 +151,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoApproveTools: true,
   chatThinking: false,
   sttDevice: "",
+  petBubbleSecs: 5,
+  petBubbleClick: true,
   petProfiles: DEFAULT_PETS,
   activePetId: "xuebao",
 };
@@ -209,6 +215,13 @@ function bindCrossWindowSync(s: Store): void {
   // 麦克风设备在主窗口设置里选、常驻聊天窗按下语音按钮时读，同样要跨窗口刷
   void s.onKeyChange<string>("sttDevice", (v) => {
     cache.sttDevice = v ?? DEFAULT_SETTINGS.sttDevice;
+  });
+  // 气泡驻留/点击行为在主窗口设置里改、常驻桌宠窗气泡收尾/点击时读，同样要跨窗口刷
+  void s.onKeyChange<number>("petBubbleSecs", (v) => {
+    cache.petBubbleSecs = v ?? DEFAULT_SETTINGS.petBubbleSecs;
+  });
+  void s.onKeyChange<boolean>("petBubbleClick", (v) => {
+    cache.petBubbleClick = v ?? DEFAULT_SETTINGS.petBubbleClick;
   });
   // 桌宠档案在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
   void s.onKeyChange<PetProfile[]>("petProfiles", (v) => {

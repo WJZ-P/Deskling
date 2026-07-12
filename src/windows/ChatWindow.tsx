@@ -361,6 +361,37 @@ export function ChatWindow() {
     void emitTo("pet", "pet:play", { state }).catch(() => {});
   }, []);
 
+  // 气泡桥：把当前回复的累积文本推给桌宠窗，头顶气泡逐字长出。
+  // kind 区分说话（正文，白面对话泡）与思考（reasoning，想法泡：三个小圆圈
+  // 升上去）。高频到达 → 节流 ~100ms 只发最新一版；清空（text=""）与收尾
+  // （done）立即发不节流。replyTextRef 累积本轮正文；thinkTextRef 累积当前
+  // 思考段（每进入新一段思考清零重来，气泡只演最新一段的心理活动）
+  type BubbleKind = "say" | "think";
+  const replyTextRef = useRef("");
+  const thinkTextRef = useRef("");
+  const latestSayRef = useRef<{ text: string; kind: BubbleKind }>({ text: "", kind: "say" });
+  const sayThrottleRef = useRef(0);
+  const petSay = useCallback((text: string, kind: BubbleKind = "say", done = false) => {
+    if (text === "" || done) {
+      window.clearTimeout(sayThrottleRef.current);
+      sayThrottleRef.current = 0;
+      void emitTo("pet", "pet:say", { text, kind, done }).catch(() => {});
+      return;
+    }
+    latestSayRef.current = { text, kind };
+    if (sayThrottleRef.current === 0) {
+      sayThrottleRef.current = window.setTimeout(() => {
+        sayThrottleRef.current = 0;
+        const latest = latestSayRef.current;
+        void emitTo("pet", "pet:say", {
+          text: latest.text,
+          kind: latest.kind,
+          done: false,
+        }).catch(() => {});
+      }, 100);
+    }
+  }, []);
+
   /**
    * 发起一轮流式请求（handleSend 与「编辑重发」共用）。
    * 前置条件：目标会话的 messages 已更新到位，history 是要发给后端的完整轮次。
@@ -390,6 +421,9 @@ export function ChatWindow() {
     setStreamingId(replyId);
     liveRef.current = { convId, replyId };
     petPlay("thinking"); // 等首包：桌宠托腮想
+    replyTextRef.current = "";
+    thinkTextRef.current = "";
+    petSay(""); // 清掉上一轮残留的气泡
 
     // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
     // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
@@ -401,6 +435,7 @@ export function ChatWindow() {
       streamRef.current = null;
       liveRef.current = null;
       petPlay("idle"); // 一轮收工：桌宠回待机
+      petSay(replyTextRef.current, "say", true); // 气泡收尾：驻留一会儿再消失（正文为空则直接清）
       updateToolSegments(setConversations, convId, replyId, null, {
         status: "error",
         detail: "已取消",
@@ -417,6 +452,8 @@ export function ChatWindow() {
             setTypingConv(null);
           }
           petPlay("talking"); // 正文开吐：桌宠开口说话
+          replyTextRef.current += chunk;
+          petSay(replyTextRef.current); // 累积正文推给头顶气泡（节流发送）
           appendDelta(setConversations, convId, replyId, chunk);
         },
         // 思考增量：推理模型先吐 reasoning 再吐正文——首个思考片段一到就撤下
@@ -427,6 +464,11 @@ export function ChatWindow() {
             setTypingConv(null);
           }
           petPlay("thinking"); // 推理中：继续托腮（去重后高频调用零开销）
+          // 新一段思考开始（此前在说正文/刚开场）：清零重新累积，
+          // 想法泡只演当前这段心理活动，不把工具往返的历史思考全堆上去
+          if (latestSayRef.current.kind !== "think") thinkTextRef.current = "";
+          thinkTextRef.current += chunk;
+          petSay(thinkTextRef.current, "think"); // 推给头顶想法泡（节流发送）
           appendThinking(setConversations, convId, replyId, chunk);
         },
         // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
@@ -476,7 +518,7 @@ export function ChatWindow() {
       getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
-  }, [petPlay]);
+  }, [petPlay, petSay]);
 
   const handleSend = useCallback(
     (text: string) => {

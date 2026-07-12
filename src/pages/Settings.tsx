@@ -43,6 +43,14 @@ const BACKDROP_OPTIONS: PixelSelectOption[] = BACKDROP_STYLES.map((s) => ({
   label: s.label,
 }));
 
+/** 桌宠气泡驻留时长候选（秒）：说完后气泡再停多久才消失 */
+const BUBBLE_SECS_OPTIONS: PixelSelectOption[] = [
+  { value: "3", label: "3 秒" },
+  { value: "5", label: "5 秒" },
+  { value: "10", label: "10 秒" },
+  { value: "20", label: "20 秒" },
+];
+
 function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
   const isLight = theme === "light";
   const currentDesc = BACKDROP_STYLES.find((s) => s.id === backdropStyle)?.desc ?? "";
@@ -87,6 +95,22 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
   const handleAutoApprove = useCallback((next: boolean) => {
     setAutoApprove(next);
     void setSetting("autoApproveTools", next);
+  }, []);
+
+  // 桌宠说话气泡：驻留时长 + 点击拉起对话开关，改动即落盘
+  // （onKeyChange 广播给常驻桌宠窗，下一个气泡生效）
+  const [bubbleSecs, setBubbleSecs] = useState<number>(() => getSetting("petBubbleSecs"));
+  const handleBubbleSecs = useCallback((v: string) => {
+    const secs = Number(v) || 5;
+    setBubbleSecs(secs);
+    void setSetting("petBubbleSecs", secs);
+  }, []);
+  const [bubbleClick, setBubbleClick] = useState<boolean>(() =>
+    getSetting("petBubbleClick"),
+  );
+  const handleBubbleClick = useCallback((next: boolean) => {
+    setBubbleClick(next);
+    void setSetting("petBubbleClick", next);
   }, []);
 
   // 语音输入麦克风：挂载时向后端枚举一次输入设备；改动即落盘
@@ -170,6 +194,41 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
               checked={autoApprove}
               onChange={handleAutoApprove}
               aria-label="agent 工具免审批执行"
+            />
+          </PixelSettingRow>
+        </PixelSettingList>
+      </PixelSection>
+
+      <PixelSection title="桌宠">
+        <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>气泡驻留时长</PixelSettingLabel>
+              <PixelSettingDesc>
+                桌宠说完一轮后，头顶气泡再停这么久才消失
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSelect
+              options={BUBBLE_SECS_OPTIONS}
+              value={String(bubbleSecs)}
+              onChange={handleBubbleSecs}
+              variant="normal"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>点气泡打开对话</PixelSettingLabel>
+              <PixelSettingDesc>
+                {bubbleClick
+                  ? "开启：点击桌宠头顶的气泡，直接拉起 AI 对话窗"
+                  : "关闭：气泡只是展示，不响应点击"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={bubbleClick}
+              onChange={handleBubbleClick}
+              aria-label="点击桌宠气泡打开对话窗"
             />
           </PixelSettingRow>
         </PixelSettingList>
