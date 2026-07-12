@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emitTo } from "@tauri-apps/api/event";
 import { t } from "../styles/theme";
 import { useTheme } from "../hooks/useTheme";
 import Titlebar from "../components/pixel/Titlebar";
@@ -348,6 +349,18 @@ export function ChatWindow() {
     setActiveId(conv.id);
   }, []);
 
+  // ---- 桌宠事件桥：对话进行到哪一步，桌宠就演哪一出 ----
+  // thinking = 等首包/推理中（托腮）；typing = 工具执行中（敲电脑）；
+  // talking = 正文流式输出（说话）；idle = 一轮收工回待机。
+  // 去重后 emitTo 桌宠窗（与动画测试按钮同一条 pet:play 通道；窗口隐藏时播了也无妨）。
+  // 桌宠被摸会临时插播摸头，下一次桥状态变化时自动回到对话演出
+  const petStateRef = useRef<string | null>(null);
+  const petPlay = useCallback((state: "thinking" | "talking" | "typing" | "idle") => {
+    if (petStateRef.current === state) return;
+    petStateRef.current = state;
+    void emitTo("pet", "pet:play", { state }).catch(() => {});
+  }, []);
+
   /**
    * 发起一轮流式请求（handleSend 与「编辑重发」共用）。
    * 前置条件：目标会话的 messages 已更新到位，history 是要发给后端的完整轮次。
@@ -376,6 +389,7 @@ export function ChatWindow() {
     setTypingConv(convId);
     setStreamingId(replyId);
     liveRef.current = { convId, replyId };
+    petPlay("thinking"); // 等首包：桌宠托腮想
 
     // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
     // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
@@ -386,6 +400,7 @@ export function ChatWindow() {
       setStreamingId(null);
       streamRef.current = null;
       liveRef.current = null;
+      petPlay("idle"); // 一轮收工：桌宠回待机
       updateToolSegments(setConversations, convId, replyId, null, {
         status: "error",
         detail: "已取消",
@@ -401,6 +416,7 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
+          petPlay("talking"); // 正文开吐：桌宠开口说话
           appendDelta(setConversations, convId, replyId, chunk);
         },
         // 思考增量：推理模型先吐 reasoning 再吐正文——首个思考片段一到就撤下
@@ -410,6 +426,7 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
+          petPlay("thinking"); // 推理中：继续托腮（去重后高频调用零开销）
           appendThinking(setConversations, convId, replyId, chunk);
         },
         // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
@@ -419,6 +436,7 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
+          petPlay("typing"); // 干活了：桌宠敲电脑
           appendToolSegment(setConversations, convId, replyId, {
             kind: "tool",
             id: call.id,
@@ -431,6 +449,7 @@ export function ChatWindow() {
         },
         // 工具执行收尾：按 id 回填状态与结果预览
         onToolEnd: (end) => {
+          petPlay("thinking"); // 工具跑完模型接着消化结果：回到托腮（开口时切说话）
           updateToolSegments(setConversations, convId, replyId, end.id, {
             status: end.status,
             detail: end.detail,
@@ -457,7 +476,7 @@ export function ChatWindow() {
       getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
-  }, []);
+  }, [petPlay]);
 
   const handleSend = useCallback(
     (text: string) => {

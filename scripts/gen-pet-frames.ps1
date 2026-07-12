@@ -96,6 +96,20 @@ function Half-Eyes([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(8, 9, 20, 21) 13 $BODY
 }
 
+# 上瞟眼：瞳孔整体上移 1px 到 y12-13（思考时翻眼望天）
+function Look-Up([System.Drawing.Bitmap]$bmp) {
+  Clear-Eyes $bmp
+  Set-Px $bmp @(8, 9, 20, 21) 12 $DARK
+  Set-Px $bmp @(8, 9, 20, 21) 13 $DARK
+}
+
+# 侧瞟眼：瞳孔整体左移 1px（思考时目光飘向一边）
+function Look-Side([System.Drawing.Bitmap]$bmp) {
+  Clear-Eyes $bmp
+  Set-Px $bmp @(7, 8, 19, 20) 13 $DARK
+  Set-Px $bmp @(7, 8, 19, 20) 14 $DARK
+}
+
 # 安详合眼：略宽的一字闭眼线
 function Close-Eyes([System.Drawing.Bitmap]$bmp) {
   Clear-Eyes $bmp
@@ -129,10 +143,43 @@ function Half-Mouth([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(13, 14, 15, 16) 16 $DARK
 }
 
+# 大哈欠：4x3 全张嘴（上两行深色大开口 + 底行粉舌），比 Open-Mouth 高一行
+function Yawn-Mouth([System.Drawing.Bitmap]$bmp) {
+  Clear-Mouth $bmp
+  Set-Px $bmp @(13, 14, 15, 16) 15 $DARK
+  Set-Px $bmp @(13, 14, 15, 16) 16 $DARK
+  Set-Px $bmp @(13, 16) 17 $DARK
+  Set-Px $bmp @(14, 15) 17 $PINK
+}
+
 # 脸颊腮红（两颊各 2x1 粉块）
 function Add-Blush([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(5, 6) 15 $PINK
   Set-Px $bmp @(23, 24) 15 $PINK
+}
+
+# 面朝左：瞳孔 + w 嘴整体左移 2px——五官压向行进方向，走出「往左去」的动势
+# （向左走帧带每帧都套；只动五官，头身轮廓不动避免破边）
+function Face-Left([System.Drawing.Bitmap]$bmp) {
+  Clear-Eyes $bmp
+  Set-Px $bmp @(6, 7, 18, 19) 13 $DARK
+  Set-Px $bmp @(6, 7, 18, 19) 14 $DARK
+  Clear-Mouth $bmp
+  Set-Px $bmp @(9, 12, 13, 16) 16 $DARK
+  Set-Px $bmp @(10, 11, 14, 15) 17 $DARK
+}
+
+# 左脸眨眼：Face-Left 之后用——收掉左移瞳孔的上排（行进中轻眨）
+function Face-Left-Blink([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(6, 7, 18, 19) 13 $BODY
+}
+
+# 左脸喘气嘴：Face-Left 之后用——左移 w 嘴换成一条偏左微开线「——」。
+# 只给喘气变体整条帧带统一用，不与 w 嘴帧混切（逐帧横跳不协调）
+function Face-Left-Pant([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(9, 12, 13, 16) 16 $BODY
+  Set-Px $bmp @(10, 11, 14, 15) 17 $BODY
+  Set-Px $bmp @(11, 12, 13, 14) 16 $DARK
 }
 
 # 头顶 3x3 的 Z 字（睡觉 Zzz 用），(x0, y0) 为左上角
@@ -198,10 +245,83 @@ function Hop([System.Drawing.Bitmap]$bmp, [int]$px = 1) {
   Shift-Region $bmp 0 0 31 31 0 (-$px)
 }
 
+# 整帧水平镜像：向右走 = 向左走帧的镜像——尾巴换到左侧拖在身后（不然像
+# 倒退），五官偏移/下盘压向/尾摆方向全部随之翻转。必须是该帧最后一个 op
+function Flip-H([System.Drawing.Bitmap]$bmp) {
+  $bmp.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX)
+}
+
 # 抬腿：腿身 y26-28 上移 1px（脚底并到 y27、y28 清空 → 缩腿离地，
 # y24 的身体底轮廓不动）。$x0-$x1 = 某条腿的横向范围
 function Lift-Leg([System.Drawing.Bitmap]$bmp, [int]$x0, [int]$x1) {
   Shift-Region $bmp $x0 26 $x1 28 0 -1
+}
+
+# 下盘横摆：整排腿（y25-28 全宽）左右平移 $dx px——迈步时重心/胯部压向
+# 一侧，走路不再只有头在上下动。腿排四周是空气不会破边；须在 Lift-Leg 之后
+function Legs-Shift([System.Drawing.Bitmap]$bmp, [int]$dx) {
+  Shift-Region $bmp 0 25 31 28 $dx 0
+}
+
+# 整身下沉 $n px（含竖尾，x0-31 的 y0-24）：身体坐向地面，四腿自上而下被
+# 盖住（入睡趴下 / 睡醒撑起的过渡帧；n=4 即猫貌团的坐地深度）
+function Sink([System.Drawing.Bitmap]$bmp, [int]$n) { Shift-Region $bmp 0 0 31 24 0 $n }
+
+# 踮脚伸展：躯干（含竖尾）整体上移 $n px，腿部原地、在空出的行里按
+# DWWD 补画腿柱 → 四腿拉长踮起（伸懒腰的最高点）。绝对坐标 op 之后调用
+function Stretch-Up([System.Drawing.Bitmap]$bmp, [int]$n) {
+  Shift-Region $bmp 0 0 31 24 0 (-$n)
+  foreach ($leg in 5, 10, 16, 21) {
+    for ($i = 1; $i -le $n; $i++) {
+      $bmp.SetPixel($leg, (25 - $i), $DARK)
+      $bmp.SetPixel(($leg + 1), (25 - $i), $WHITE)
+      $bmp.SetPixel(($leg + 2), (25 - $i), $WHITE)
+      $bmp.SetPixel(($leg + 3), (25 - $i), $DARK)
+    }
+  }
+}
+
+# 托腮：右外侧腿（x21-24 y25-28）整条离地收起，化作贴在右脸颊上的
+# 4x4 白爪（白 2x2 芯）——托着腮帮想事情，地上只剩三条腿
+function Think-Paw([System.Drawing.Bitmap]$bmp) {
+  for ($y = 25; $y -le 28; $y++) {
+    for ($x = 21; $x -le 24; $x++) { $bmp.SetPixel($x, $y, $CLEAR) }
+  }
+  Set-Px $bmp @(22, 23, 24, 25) 15 $DARK
+  foreach ($y in 16, 17) {
+    $bmp.SetPixel(22, $y, $DARK)
+    $bmp.SetPixel(23, $y, $WHITE)
+    $bmp.SetPixel(24, $y, $WHITE)
+    $bmp.SetPixel(25, $y, $DARK)
+  }
+  Set-Px $bmp @(22, 23, 24, 25) 18 $DARK
+}
+
+# 头顶思考点点：最多三颗 2x2 深色圆点（x11/x15/x19，y3-4 两耳间空区），
+# $n = 画前几颗（0-3，逐帧递增 = 「…」在冒）。须在 Squash-Top 之后画（悬浮不随头动）
+function Think-Dots([System.Drawing.Bitmap]$bmp, [int]$n) {
+  $cols = @(11, 15, 19)
+  for ($i = 0; $i -lt $n; $i++) {
+    $x = $cols[$i]
+    Set-Px $bmp @($x, ($x + 1)) 3 $DARK
+    Set-Px $bmp @($x, ($x + 1)) 4 $DARK
+  }
+}
+
+# 举腿挥手：左前腿（x5-8 y25-28）整条离地收起，化作身体左侧腾空挥动的
+# 小白爪（3 宽 4 高、白 2x2 芯，右缘贴身体轮廓 x3 = 从身侧举起）——
+# 猫只有四条腿：一条在挥，地上只剩三条。$top = 爪顶行，11 高位 / 13 低位
+function Wave-Leg([System.Drawing.Bitmap]$bmp, [int]$top) {
+  for ($y = 25; $y -le 28; $y++) {
+    for ($x = 5; $x -le 8; $x++) { $bmp.SetPixel($x, $y, $CLEAR) }
+  }
+  Set-Px $bmp @(0, 1, 2) $top $DARK
+  foreach ($y in ($top + 1), ($top + 2)) {
+    $bmp.SetPixel(0, $y, $DARK)
+    $bmp.SetPixel(1, $y, $WHITE)
+    $bmp.SetPixel(2, $y, $WHITE)
+  }
+  Set-Px $bmp @(0, 1, 2) ($top + 3) $DARK
 }
 
 # ---- 敲电脑道具 ----
@@ -308,6 +428,19 @@ function Loaf-TipUp([System.Drawing.Bitmap]$bmp) {
 # 与 Loaf-Breath 同帧时必须先抖后压（抖的是压缩前的耳尖坐标）
 function Loaf-FlickEar([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 21 7 25 9 -1 0 }
 
+# 趴姿半睁眼：清掉闭眼线，只留下排 2x1 低瞳（睡眼惺忪的醒来第一眼）
+function Loaf-Eyes-Half([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(7, 8, 9, 10, 19, 20, 21, 22) 18 $BODY
+  Set-Px $bmp @(8, 9, 20, 21) 18 $DARK
+}
+
+# 趴姿全睁眼：闭眼线两端清掉、瞳孔 2x2 复原（趴着但已经醒了）
+function Loaf-Eyes-Open([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(7, 10, 19, 22) 18 $BODY
+  Set-Px $bmp @(8, 9, 20, 21) 17 $DARK
+  Set-Px $bmp @(8, 9, 20, 21) 18 $DARK
+}
+
 # ---- 组帧器：每个动画一组逐帧 spec（scriptblock 收到一张底图副本随意改） ----
 function Build-Strip([string]$name, [scriptblock[]]$specs) {
   $frames = @()
@@ -325,19 +458,21 @@ function Build-Strip([string]$name, [scriptblock[]]$specs) {
 # 注释里标注每帧轨道值，调节奏就是改这张表。
 
 # ==== idle：尾巴慢波浪贯穿 + 呼吸错拍 + 收尾眨眼/耳抖（2.4s 一循环） ====
+# 呼吸放慢：B0 占前半程、B1 占后半程，头部一个循环只沉/浮各一次（2.4s），
+# 帧间差异由尾巴波浪（每帧在动）、尾峰处的眨眼弧、耳尖抖承担
 Build-Strip "idle.png" @(
-  { param($f) },                                          # 0  T0 B0 睁眼
+  { param($f) },                                          # 0  T0 B0 睁眼基准
   { param($f) Sway-Tail $f },                             # 1  T1 B0
-  { param($f) Sway-Tail2 $f; Squash-Top $f },             # 2  T2 B1（呼气）
+  { param($f) Sway-Tail2 $f },                            # 2  T2 B0
   { param($f) Sway-Tail3 $f },                            # 3  T3 B0（尾峰）
-  { param($f) Sway-Tail3 $f; Squash-Top $f },             # 4  T3 B1
-  { param($f) Sway-Tail2 $f },                            # 5  T2 B0（回摆）
-  { param($f) Sway-Tail $f; Squash-Top $f },              # 6  T1 B1
-  { param($f) Squash-Top $f },                            # 7  T0 B1
-  { param($f) Half-Eyes $f },                             # 8  眨眼：半闭
-  { param($f) Close-Eyes $f; Squash-Top $f },             # 9  全闭 + 呼气
-  { param($f) Half-Eyes $f; Sway-Tail $f },               # 10 半睁，尾巴又动了
-  { param($f) Flick-Ear $f }                              # 11 耳尖抖一下收场
+  { param($f) Half-Eyes $f; Sway-Tail3 $f },              # 4  峰驻留 + 轻眨起
+  { param($f) Close-Eyes $f; Sway-Tail3 $f },             # 5  全闭
+  { param($f) Half-Eyes $f; Sway-Tail3 $f; Squash-Top $f }, # 6  呼气缓沉 + 睁回半
+  { param($f) Sway-Tail2 $f; Squash-Top $f },             # 7  T2 B1（尾巴回摆）
+  { param($f) Sway-Tail $f; Squash-Top $f },              # 8  T1 B1
+  { param($f) Squash-Top $f },                            # 9  T0 B1
+  { param($f) Flick-Ear $f; Squash-Top $f },              # 10 耳尖抖一下（先抖后压）
+  { param($f) Half-Eyes $f }                              # 11 吸气回浮 + 轻眨 → 接回帧 0
 )
 
 # ==== talk：三态口型不停换 + 尾巴波浪 + 点头 + 一次眨眼 ====
@@ -356,21 +491,75 @@ Build-Strip "talk.png" @(
   { param($f) Sway-Tail $f; Squash-Top $f }               # 11 w嘴 T1 B1 收拍
 )
 
-# ==== walk：对角步态 + 尾巴全程打拍子 + 步点起伏（每帧腿/尾/头至少一处在变） ====
+# ==== walk：对角步态 + 下盘横摆 + 尾巴打拍子 + 脸部微变化 ====
+# A 步重心压左 / B 步重心压右（Legs-Shift 整排腿横移 = 左右摇摆的猫步），
+# 头顶起伏照旧；抬步第二拍配小喘（半张嘴），中途一次行进眨眼
 Build-Strip "walk.png" @(
-  { param($f) },                                                                     # 0  着地 T0 B0
-  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail $f; Squash-Top $f },     # 1  抬A T1 B1
-  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail2 $f; Squash-Top $f },    # 2  抬A T2 B1
-  { param($f) Sway-Tail3 $f },                                                       # 3  着地 T3 B0
-  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail3 $f; Squash-Top $f },  # 4  抬B T3 B1
-  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail2 $f; Squash-Top $f },  # 5  抬B T2 B1
-  { param($f) Sway-Tail $f },                                                        # 6  着地 T1 B0
-  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Squash-Top $f },                   # 7  抬A T0 B1
-  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail $f },                    # 8  抬A T1 B0
-  { param($f) Sway-Tail2 $f },                                                       # 9  着地 T2 B0
-  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail $f; Squash-Top $f },   # 10 抬B T1 B1
-  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Squash-Top $f }                  # 11 抬B T0 B1
+  { param($f) },                                                                                       # 0  着地 T0 B0 居中
+  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },     # 1  抬A T1 B1 压左
+  { param($f) Half-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Squash-Top $f },  # 2  抬A T2 B1 压左 小喘
+  { param($f) Sway-Tail3 $f },                                                                         # 3  着地 T3 B0 居中
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail3 $f; Squash-Top $f },   # 4  抬B T3 B1 压右
+  { param($f) Half-Mouth $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail2 $f; Squash-Top $f },  # 5  抬B T2 B1 压右 小喘
+  { param($f) Half-Eyes $f; Sway-Tail $f },                                                            # 6  着地 T1 B0 行进眨眼
+  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Squash-Top $f },                   # 7  抬A T0 B1 压左
+  { param($f) Half-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f },     # 8  抬A T1 B0 压左 小喘
+  { param($f) Sway-Tail2 $f },                                                                         # 9  着地 T2 B0 居中
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Squash-Top $f },    # 10 抬B T1 B1 压右
+  { param($f) Half-Mouth $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Squash-Top $f }    # 11 抬B T0 B1 压右 小喘
 )
+
+# ==== walk-left / walk-right：向左走 + 它的整帧镜像 ====
+# 两套口型变体，播放侧进入状态时随机抽一套整段播。
+# 步态轨道两套完全相同（下盘一律压左 = 身体往左倾着走，F6 行进眨眼）；
+# 区别只在口型：A 版全程 w 嘴 / B 版全程喘气线「——」。口型不做段中混切
+# （w↔喘气逐帧横跳不协调）。窗口向左位移时播（对话/散步同一条通路）。
+# 向右走 = 下方 spec 逐帧套 Flip-H 镜像（尾巴换到左侧拖在身后，不然像倒退）
+
+# 变体 A：w 嘴版
+$WALK_LEFT_W = @(
+  { param($f) Face-Left $f },                                                                                        # 0  着地 T0 B0 居中
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },     # 1  抬A T1 B1 压左
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Squash-Top $f },    # 2  抬A T2 B1 压左
+  { param($f) Face-Left $f; Sway-Tail3 $f },                                                                         # 3  着地 T3 B0 居中
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail3 $f; Squash-Top $f },  # 4  抬B T3 B1 压左
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail2 $f; Squash-Top $f },  # 5  抬B T2 B1 压左
+  { param($f) Face-Left $f; Face-Left-Blink $f; Sway-Tail $f },                                                      # 6  着地 T1 B0 行进眨眼
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Squash-Top $f },                   # 7  抬A T0 B1 压左
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f },                    # 8  抬A T1 B0 压左
+  { param($f) Face-Left $f; Sway-Tail2 $f },                                                                         # 9  着地 T2 B0 居中
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },   # 10 抬B T1 B1 压左
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Squash-Top $f }                  # 11 抬B T0 B1 压左
+)
+
+# 变体 B：喘气线版（帧序同 A，每帧多套一个 Face-Left-Pant）
+$WALK_LEFT_PANT = @(
+  { param($f) Face-Left $f; Face-Left-Pant $f },                                                                                        # 0  着地 T0 B0 居中
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },     # 1  抬A T1 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Squash-Top $f },    # 2  抬A T2 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Sway-Tail3 $f },                                                                         # 3  着地 T3 B0 居中
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail3 $f; Squash-Top $f },  # 4  抬B T3 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail2 $f; Squash-Top $f },  # 5  抬B T2 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Face-Left-Blink $f; Sway-Tail $f },                                                      # 6  着地 T1 B0 行进眨眼
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Squash-Top $f },                   # 7  抬A T0 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f },                    # 8  抬A T1 B0 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Sway-Tail2 $f },                                                                         # 9  着地 T2 B0 居中
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },   # 10 抬B T1 B1 压左
+  { param($f) Face-Left $f; Face-Left-Pant $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Squash-Top $f }                  # 11 抬B T0 B1 压左
+)
+
+# 镜像包装：原 spec 跑完后整帧水平翻转（向右走复用向左走的全部帧序）
+function Add-Flip([scriptblock[]]$specs) {
+  $specs | ForEach-Object {
+    $orig = $_
+    { param($f) & $orig $f; Flip-H $f }.GetNewClosure()
+  }
+}
+
+Build-Strip "walk-left.png" $WALK_LEFT_W
+Build-Strip "walk-left-pant.png" $WALK_LEFT_PANT
+Build-Strip "walk-right.png" (Add-Flip $WALK_LEFT_W)
+Build-Strip "walk-right-pant.png" (Add-Flip $WALK_LEFT_PANT)
 
 # ==== typing：左右爪敲击 + 双爪齐拍 + 眨眼/抬眼/顿一下（每帧爪位或眼神在变） ====
 Build-Strip "typing.png" @(
@@ -422,6 +611,195 @@ Build-Strip "sleep.png" @(
   { param($f) Make-Loaf $f; Loaf-TipUp $f; Loaf-Breath $f },                # 9  B1 尾尖悬着 + 呼气
   { param($f) Make-Loaf $f; Loaf-FlickEar $f; Loaf-Breath $f },             # 10 B1 右耳内抖（先抖后压）
   { param($f) Make-Loaf $f; Loaf-Breath $f }                                # 11 B1 静息 → 接回帧 0
+)
+
+# ==== yawn：打哈欠入睡过渡（play-once → sleeping） ====
+# 三幕：睡意上头（半垂眼 + 嘴渐开）→ 大哈欠（闭眼 + 4x3 全张嘴 + 缩脖）
+# → 逐帧趴下（Sink 1/2/3 递进、尾巴渐卷）团成猫貌团，末帧与 sleep 首帧无缝
+Build-Strip "yawn.png" @(
+  { param($f) Half-Eyes $f; Sway-Tail $f },                                  # 0  睡意上头 T1
+  { param($f) Half-Eyes $f; Half-Mouth $f; Sway-Tail2 $f },                  # 1  嘴微张 T2
+  { param($f) Close-Eyes $f; Open-Mouth $f; Sway-Tail3 $f },                 # 2  哈欠张开 T3
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail3 $f; Squash-Top $f },  # 3  最大 + 缩脖 T3
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail2 $f; Squash-Top $f },  # 4  持续 T2
+  { param($f) Close-Eyes $f; Open-Mouth $f; Sway-Tail $f },                  # 5  哈欠收 T1
+  { param($f) Half-Eyes $f; Half-Mouth $f; Squash-Top $f },                  # 6  眼皮重 B1
+  { param($f) Half-Eyes $f },                                                # 7  迷糊站着
+  { param($f) Close-Eyes $f; Sway-Tail $f; Sink $f 1 },                      # 8  开始趴 T1
+  { param($f) Close-Eyes $f; Sway-Tail2 $f; Sink $f 2 },                     # 9  再趴 T2
+  { param($f) Close-Eyes $f; Sway-Tail3 $f; Sink $f 3 },                     # 10 快贴地 T3
+  { param($f) Make-Loaf $f }                                                 # 11 团成猫貌团 → 接 sleeping
+)
+
+# ==== stretch：伸懒腰醒来（play-once → idle） ====
+# 三幕：趴着睁眼（半睁 → 全睁）→ 撑起站直（Sink 3/2/1 反向）→ 踮脚大伸展
+# （Stretch-Up 1/2 腿拉长 + 眯眼张嘴「喵—」）→ 落地抖耳回神
+Build-Strip "stretch.png" @(
+  { param($f) Make-Loaf $f; Loaf-Eyes-Half $f },                              # 0  趴着半睁眼
+  { param($f) Make-Loaf $f; Loaf-Eyes-Open $f },                              # 1  睁全眼
+  { param($f) Half-Eyes $f; Sway-Tail3 $f; Sink $f 3 },                       # 2  撑起 T3
+  { param($f) Half-Eyes $f; Sway-Tail2 $f; Sink $f 2 },                       # 3  再起 T2
+  { param($f) Half-Eyes $f; Sway-Tail $f; Sink $f 1 },                        # 4  快站直 T1
+  { param($f) Half-Eyes $f },                                                 # 5  站直
+  { param($f) Close-Eyes $f; Open-Mouth $f; Sway-Tail2 $f; Stretch-Up $f 1 }, # 6  踮脚伸展 T2
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail3 $f; Stretch-Up $f 2 }, # 7  伸到最高「喵—」T3
+  { param($f) Close-Eyes $f; Open-Mouth $f; Sway-Tail2 $f; Stretch-Up $f 2 }, # 8  保持 T2
+  { param($f) Half-Eyes $f; Sway-Tail $f; Stretch-Up $f 1 },                  # 9  落下来 T1
+  { param($f) Squash-Top $f },                                                # 10 落地一沉
+  { param($f) Sway-Tail $f; Flick-Ear $f }                                    # 11 抖耳回神 → idle
+)
+
+# ==== dangle：拖拽悬空（循环，拖窗时播放） ====
+# 被拎起来：整身离地（Hop 1/2 摆荡）+ 对角双腿交替蹬空 + 尾巴大幅乱甩
+# + 口型 w/半张/惊呼轮换、耳朵偶尔被风掀一下。Hop 必须是每帧最后一个 op
+Build-Strip "dangle.png" @(
+  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail $f; Hop $f 1 },                                 # 0  H1 蹬A T1
+  { param($f) Half-Mouth $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail2 $f; Hop $f 1 },               # 1  H1 蹬B T2
+  { param($f) Open-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail3 $f; Hop $f 2 },                 # 2  H2 蹬A T3 惊呼
+  { param($f) Open-Mouth $f; Flick-Ear $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail3 $f; Hop $f 2 }, # 3  H2 蹬B T3 耳飞
+  { param($f) Half-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail2 $f; Hop $f 2 },                 # 4  H2 蹬A T2
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail $f; Hop $f 1 },                               # 5  H1 蹬B T1
+  { param($f) Half-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Hop $f 1 },                                # 6  H1 蹬A T0
+  { param($f) Open-Mouth $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail $f; Hop $f 2 },                # 7  H2 蹬B T1
+  { param($f) Open-Mouth $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail2 $f; Hop $f 2 },                 # 8  H2 蹬A T2
+  { param($f) Half-Mouth $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Sway-Tail3 $f; Hop $f 1 },               # 9  H1 蹬B T3
+  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Sway-Tail2 $f; Hop $f 1 },                                # 10 H1 蹬A T2
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Hop $f 1 }                                              # 11 H1 蹬B T0 → 接回帧 0
+)
+
+# ==== greet：登场打招呼（play-once → idle，召唤到桌面时播一次） ====
+# 三幕：蹦跳落地（Hop 2/1 + 落地压缩）→ 左前腿举起挥手「嗨！」（Wave-Leg
+# 收腿化挥爪，地上只剩三条腿；开心眯眼 + 口型轮换）→ 收腿落地腮红回常态。
+# 起手/收手各有一帧 Lift-Leg 抬腿过渡，腿的去向连贯
+Build-Strip "greet.png" @(
+  { param($f) Happy-Eyes $f; Open-Mouth $f; Sway-Tail $f; Hop $f 2 },         # 0  跳着登场 H2
+  { param($f) Happy-Eyes $f; Open-Mouth $f; Sway-Tail2 $f; Hop $f 1 },        # 1  落下中 H1
+  { param($f) Happy-Eyes $f; Sway-Tail $f; Squash-Top $f },                   # 2  落地压缩
+  { param($f) Happy-Eyes $f },                                                # 3  站稳
+  { param($f) Happy-Eyes $f; Lift-Leg $f 5 8; Sway-Tail $f },                 # 4  左前腿离地起手 T1
+  { param($f) Happy-Eyes $f; Open-Mouth $f; Wave-Leg $f 11; Sway-Tail2 $f },  # 5  举到高位「嗨！」T2
+  { param($f) Happy-Eyes $f; Open-Mouth $f; Wave-Leg $f 13; Sway-Tail3 $f },  # 6  挥下 T3
+  { param($f) Happy-Eyes $f; Wave-Leg $f 11; Sway-Tail2 $f },                 # 7  再挥上 T2
+  { param($f) Happy-Eyes $f; Half-Mouth $f; Wave-Leg $f 13; Sway-Tail $f },   # 8  再挥下 T1
+  { param($f) Happy-Eyes $f; Add-Blush $f; Wave-Leg $f 11; Sway-Tail $f },    # 9  高位定格小害羞 T1
+  { param($f) Happy-Eyes $f; Add-Blush $f; Lift-Leg $f 5 8; Sway-Tail2 $f },  # 10 收腿落地中 T2
+  { param($f) Add-Blush $f }                                                  # 11 四腿站稳 + 腮红 → idle
+)
+
+# ---- 躲屏幕边缘道具（hide / hidden 用） ----
+# 整画布左移 $px：跑出画面的像素直接裁掉（身体滑出屏幕边）。必须是该帧
+# 最后一个身体 op（速度线/尘土这类留在原地的场景装饰在它之后按绝对坐标画）
+function Slide-Left([System.Drawing.Bitmap]$bmp, [int]$px) {
+  Shift-Region $bmp 0 0 31 31 (-$px) 0
+}
+
+# 头顶惊叹号「!」：x14-15 竖条 y0-2 + 点 y4。悬浮标记——画在 Hop 之后，
+# 身体弹起时「!」原地不动（受惊定身特效）
+function Alert-Mark([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(14, 15) 0 $DARK
+  Set-Px $bmp @(14, 15) 1 $DARK
+  Set-Px $bmp @(14, 15) 2 $DARK
+  Set-Px $bmp @(14, 15) 4 $DARK
+}
+
+# 冲刺速度线：身后三条 3px 灰短线（y12/17/22 交错），$x0 = 三条线的最左列。
+# 在 Slide-Left 之后画——落在身体腾出来的空区，跟着每帧的车尾走
+function Dash-Lines([System.Drawing.Bitmap]$bmp, [int]$x0) {
+  Set-Px $bmp @(($x0 + 1), ($x0 + 2), ($x0 + 3)) 12 $TGREY
+  Set-Px $bmp @($x0, ($x0 + 1), ($x0 + 2)) 17 $TGREY
+  Set-Px $bmp @(($x0 + 1), ($x0 + 2), ($x0 + 3)) 22 $TGREY
+}
+
+# 消失尘土：跑没影处地边扬起的灰粒（大 4 粒 → 小 2 粒两档渐散），
+# Slide-Left 之后画；位置避开左移后的尾巴列（x2-6）下方留白区
+function Dust-Big([System.Drawing.Bitmap]$bmp) {
+  $bmp.SetPixel(6, 25, $TGREY)
+  $bmp.SetPixel(8, 26, $TGREY)
+  $bmp.SetPixel(5, 27, $TGREY)
+  $bmp.SetPixel(9, 27, $TGREY)
+}
+function Dust-Small([System.Drawing.Bitmap]$bmp) {
+  $bmp.SetPixel(7, 26, $TGREY)
+  $bmp.SetPixel(6, 27, $TGREY)
+}
+
+# 尾巴松垂：竖尾上段（x28-31 y6-14）下沉 1px——顶帽降一格、尾巴显短一截，
+# 露在屏幕外的尾巴「泄劲搭下来」用。与 Sway 组合须先垂后摆（摆区能罩住垂完的列）
+function Tail-Sag([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 28 6 31 14 0 1 }
+
+# ==== hide / hidden / peek：躲屏幕边缘（全屏应用来了，闪人！） ====
+# hide（play-once → hidden）三幕：惊觉（左瞟 + 「!」+ 弹起）→ 压低蓄力 →
+# 左冲出画（Slide-Left 3/7/12/17/21/24 递进 + 走路步态 + 身后速度线）→
+# 消失扬尘，末帧只剩尾巴（Slide 25：尾巴挪到 x3-6、屁股沿贴边 x0-1）。
+# hidden（循环）：近静态只剩尾巴。peek（play-once → hidden）：探头偷看，
+# 播放侧随机 1-3 分钟才定时触发一次。右侧版一律 Add-Flip 整帧镜像
+$HIDE_LEFT = @(
+  { param($f) Look-Side $f; Flick-Ear $f; Alert-Mark $f },                                                            # 0  惊觉：左瞟 + 耳抖 + 「!」
+  { param($f) Look-Side $f; Open-Mouth $f; Sway-Tail $f; Hop $f 1; Alert-Mark $f },                                   # 1  吓得弹起（「!」悬停原地）
+  { param($f) Face-Left $f; Sway-Tail2 $f; Legs-Shift $f -1; Squash-Top $f },                                         # 2  压低蓄力朝左
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Slide-Left $f 3 },   # 3  起跑 S3
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail3 $f; Slide-Left $f 7; Dash-Lines $f 27 },  # 4  加速 S7
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Slide-Left $f 12; Dash-Lines $f 23 },   # 5  半出画 S12
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail $f; Slide-Left $f 17; Dash-Lines $f 18 },  # 6  大半出画 S17
+  { param($f) Face-Left $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Slide-Left $f 21; Dash-Lines $f 14 },                  # 7  只剩后身 S21
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Slide-Left $f 24; Dash-Lines $f 10 },                              # 8  只剩后腿尾巴 S24
+  { param($f) Sway-Tail $f; Slide-Left $f 25; Dust-Big $f },                                                          # 9  溜没了 T1 扬尘
+  { param($f) Sway-Tail2 $f; Slide-Left $f 25; Dust-Small $f },                                                       # 10 尘散 T2
+  { param($f) Sway-Tail $f; Slide-Left $f 25 }                                                                        # 11 只剩尾巴 T1 → 接 hidden
+)
+
+# hidden 循环：近静态——只剩尾巴，6 帧独立姿势（摆相 × 松垂），驻留节奏
+# （长停 + 偶发一摆）由播放侧 sequence 编排（重复帧号 = 定格，不算凑数帧）
+$HIDDEN_LEFT = @(
+  { param($f) Slide-Left $f 25 },                              # 0  T0 尾巴立正（驻留主帧）
+  { param($f) Sway-Tail $f; Slide-Left $f 25 },                # 1  T1
+  { param($f) Sway-Tail2 $f; Slide-Left $f 25 },               # 2  T2
+  { param($f) Sway-Tail3 $f; Slide-Left $f 25 },               # 3  T3 摆到最弯
+  { param($f) Tail-Sag $f; Slide-Left $f 25 },                 # 4  T0 松垂
+  { param($f) Tail-Sag $f; Sway-Tail $f; Slide-Left $f 25 }    # 5  T1 垂着轻摆
+)
+
+# peek 探头（play-once → hidden）：藏久了忍不住——蹭出来两步 → 右眼粉耳
+# 探出画缘（Slide 20：右眼 x20-21 刚好露出）→ 眨眼/尾摇张望几拍 → 缩回去
+$PEEK_LEFT = @(
+  { param($f) Slide-Left $f 24 },                              # 0  蹭出 1px
+  { param($f) Slide-Left $f 22 },                              # 1  再蹭
+  { param($f) Slide-Left $f 20 },                              # 2  探到位（右眼露出）
+  { param($f) Half-Eyes $f; Slide-Left $f 20 },                # 3  眨眼
+  { param($f) Sway-Tail $f; Slide-Left $f 20 },                # 4  张望 T1
+  { param($f) Sway-Tail2 $f; Slide-Left $f 20 },               # 5  T2
+  { param($f) Sway-Tail3 $f; Slide-Left $f 20 },               # 6  T3
+  { param($f) Half-Eyes $f; Sway-Tail2 $f; Slide-Left $f 20 }, # 7  再眨 T2
+  { param($f) Sway-Tail $f; Slide-Left $f 21 },                # 8  开始缩 T1
+  { param($f) Sway-Tail $f; Slide-Left $f 22 },                # 9  缩 T1
+  { param($f) Sway-Tail $f; Slide-Left $f 23 },                # 10 缩 T1
+  { param($f) Sway-Tail $f; Slide-Left $f 24 }                 # 11 缩到只剩尾巴 → 接 hidden
+)
+
+Build-Strip "hide-left.png" $HIDE_LEFT
+Build-Strip "hidden-left.png" $HIDDEN_LEFT
+Build-Strip "peek-left.png" $PEEK_LEFT
+Build-Strip "hide-right.png" (Add-Flip $HIDE_LEFT)
+Build-Strip "hidden-right.png" (Add-Flip $HIDDEN_LEFT)
+Build-Strip "peek-right.png" (Add-Flip $PEEK_LEFT)
+
+# ==== think：思考中（循环，将来接对话窗事件桥的深度思考等待阶段） ====
+# 右前腿举起托腮（Think-Paw，地上三条腿），头顶「…」点点逐帧冒出又散去，
+# 眼神上瞟 → 侧瞟 → 眯眼轮换，配呼吸和慢速尾摆。op 顺序：眼/尾 → 托腮 →
+# 呼吸压缩 → 点点（悬浮物最后画，不随头动）
+Build-Strip "think.png" @(
+  { param($f) Look-Up $f; Think-Paw $f; Think-Dots $f 1 },                               # 0  上瞟 ·   T0
+  { param($f) Look-Up $f; Sway-Tail $f; Think-Paw $f; Think-Dots $f 2 },                 # 1  上瞟 ··  T1
+  { param($f) Look-Up $f; Sway-Tail2 $f; Think-Paw $f; Think-Dots $f 3 },                # 2  上瞟 ··· T2
+  { param($f) Look-Up $f; Sway-Tail2 $f; Think-Paw $f; Squash-Top $f; Think-Dots $f 3 }, # 3  持续 ··· T2 B1
+  { param($f) Look-Side $f; Sway-Tail $f; Think-Paw $f; Think-Dots $f 3 },               # 4  目光飘走 ··· T1
+  { param($f) Look-Side $f; Think-Paw $f; Squash-Top $f; Think-Dots $f 3 },              # 5  侧瞟 ··· T0 B1
+  { param($f) Look-Side $f; Sway-Tail $f; Think-Paw $f },                                # 6  点点散了 T1
+  { param($f) Half-Eyes $f; Sway-Tail2 $f; Think-Paw $f; Think-Dots $f 1 },              # 7  眯眼再想 · T2
+  { param($f) Half-Eyes $f; Sway-Tail2 $f; Think-Paw $f; Squash-Top $f; Think-Dots $f 2 },# 8  眯眼 ·· T2 B1
+  { param($f) Half-Eyes $f; Sway-Tail $f; Think-Paw $f; Think-Dots $f 3 },               # 9  眯眼 ··· T1
+  { param($f) Look-Up $f; Sway-Tail $f; Think-Paw $f; Squash-Top $f; Think-Dots $f 3 },  # 10 回神上瞟 ··· T1 B1
+  { param($f) Look-Up $f; Think-Paw $f; Squash-Top $f }                                  # 11 空点点 T0 B1 → 接回帧 0
 )
 
 $base.Dispose()

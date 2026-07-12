@@ -45,9 +45,20 @@ const ANIM_TESTS = [
   { key: "idle", label: "待机" },
   { key: "talking", label: "说话" },
   { key: "walking", label: "走路" },
+  { key: "walkingLeft", label: "走路←" },
+  { key: "walkingRight", label: "走路→" },
   { key: "typing", label: "敲电脑" },
   { key: "petted", label: "摸头" },
   { key: "sleeping", label: "睡觉" },
+  { key: "yawning", label: "打哈欠" },
+  { key: "stretching", label: "伸懒腰" },
+  { key: "dangling", label: "悬空" },
+  { key: "greeting", label: "打招呼" },
+  { key: "thinking", label: "思考中" },
+  { key: "hidingLeft", label: "躲←" },
+  { key: "hidingRight", label: "躲→" },
+  { key: "peekingLeft", label: "探头←" },
+  { key: "peekingRight", label: "探头→" },
 ] as const;
 
 function Pet() {
@@ -66,7 +77,10 @@ function Pet() {
 
   const togglePet = async () => {
     try {
-      setPetShown(await invoke<boolean>("pet_toggle"));
+      const shown = await invoke<boolean>("pet_toggle");
+      setPetShown(shown);
+      // 召唤上桌：让小家伙落地打个招呼（收起时不发）
+      if (shown) void emitTo("pet", "pet:play", { state: "greeting" });
     } catch (err) {
       console.warn("pet_toggle failed:", err);
     }
@@ -147,7 +161,9 @@ function Pet() {
           ))}
         </TestRow>
         <TestHint>
-          桌宠在桌面上时点按切换动画；「摸头」播完自动回待机，循环类动画点「待机」收场
+          桌宠在桌面上时点按切换动画；摸头/伸懒腰/打招呼播完自动回待机，
+          打哈欠播完顺势入睡，躲←/躲→播完只剩尾巴近乎静止、随机 1-3 分钟
+          自己探头一次（探头按钮可直接看），循环类动画点「待机」收场
         </TestHint>
       </PixelSection>
     </Page>
