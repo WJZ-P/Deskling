@@ -14,6 +14,8 @@ interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Priority;
   /** 紧凑尺寸：更小的内边距/高度，用于图标按钮（如浮窗关闭 ✕） */
   compact?: boolean;
+  /** 小号文本按钮：textSm 字 + 薄内边距，用于测试行/功能行这类小操作 */
+  small?: boolean;
   /** 美术像素大小覆写（默认 4）：小按钮配 3 观感更精细 */
   pixel?: number;
   /**
@@ -26,6 +28,7 @@ interface PixelButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export function PixelButton({
   variant = "normal",
   compact = false,
+  small = false,
   pixel = BTN_PIXEL,
   tune,
   children,
@@ -80,7 +83,9 @@ export function PixelButton({
         noise={NOISE}
         tune={tune}
       >
-        <Label data-compact={compact || undefined}>{children}</Label>
+        <Label data-compact={compact || undefined} data-small={small || undefined}>
+          {children}
+        </Label>
       </PixelSurface>
     </Btn>
   );
@@ -124,5 +129,15 @@ const Label = styled.span`
     min-height: 0;
     padding: 4px 7px;
     letter-spacing: 0;
+  }
+
+  /* 小号：文本小按钮（测试行/功能行）——小一号字、薄内边距。
+     font 简写会重置字重，需在其后补回 bold */
+  &[data-small] {
+    min-height: 0;
+    padding: 4px 10px;
+    font: ${t.textSm};
+    font-weight: bold;
+    letter-spacing: 0.5px;
   }
 `;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import { t } from "../styles/theme";
 import {
   Page,
@@ -38,6 +39,16 @@ const STATS = [
   { key: "mood", label: "心情", value: 90 },
   { key: "bond", label: "亲密度", value: 40 },
 ];
+
+/** 动画测试项：key 与桌宠窗 ANIMS 的状态键一一对应 */
+const ANIM_TESTS = [
+  { key: "idle", label: "待机" },
+  { key: "talking", label: "说话" },
+  { key: "walking", label: "走路" },
+  { key: "typing", label: "敲电脑" },
+  { key: "petted", label: "摸头" },
+  { key: "sleeping", label: "睡觉" },
+] as const;
 
 function Pet() {
   // 桌宠 / 对话窗的可见状态：挂载时向后端查一次，之后每次 toggle 用返回值更新，
@@ -121,6 +132,24 @@ function Pet() {
           </PixelButton>
         </Actions>
       </PixelSection>
+
+      <PixelSection title="动画测试">
+        <TestRow>
+          {ANIM_TESTS.map((t) => (
+            <PixelButton
+              key={t.key}
+              small
+              pixel={3}
+              onClick={() => void emitTo("pet", "pet:play", { state: t.key })}
+            >
+              {t.label}
+            </PixelButton>
+          ))}
+        </TestRow>
+        <TestHint>
+          桌宠在桌面上时点按切换动画；「摸头」播完自动回待机，循环类动画点「待机」收场
+        </TestHint>
+      </PixelSection>
     </Page>
   );
 }
@@ -195,4 +224,17 @@ const Actions = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: calc(${t.unit} * 2);
+`;
+
+/* 动画测试按钮排 */
+const TestRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(${t.unit} * 2);
+`;
+
+const TestHint = styled.p`
+  margin: 0;
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
 `;

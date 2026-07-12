@@ -50,53 +50,64 @@ interface AnimDef {
   loop: boolean;
 }
 
-/** 动画清单：状态 → 帧带。新增状态在这里登记即可 */
+/** 0..11 线性序列：12 帧逐帧微差的帧带直接顺播 */
+const SEQ_12 = Array.from({ length: 12 }, (_, i) => i);
+
+/**
+ * 动画清单：状态 → 帧带。每条帧带 12 帧、逐帧微差（呼吸/甩尾/眨眼/点头
+ * 等微动作已编织进帧序），播放侧只管顺播，节奏全在帧带里。
+ * 新增状态 = 生成器加一段 Build-Strip spec + 这里登记一条。
+ */
 const ANIMS = {
-  // 4s 一循环：长驻 1.5s → 尾巴内摆 ~0.4s → 停 1s → 眨眼 ~0.5s → 停 0.6s
-  // （帧 0 睁眼 / 1 半闭 / 2 合眼 / 3 甩尾）
+  // 待机：呼吸 + 尾巴波浪 + 眨眼（2.4s 一循环）
   idle: {
     src: "/pet/anim/idle.png",
-    frames: 4,
-    sequence: [
-      ...Array<number>(12).fill(0), 3, 3, 3,
-      ...Array<number>(8).fill(0), 1, 2, 2, 1,
-      ...Array<number>(5).fill(0),
-    ],
-    fps: 8,
-    loop: true,
-  },
-  // 说话：嘴部开合打拍子，后半程尾巴跟着不安分
-  // （帧 0 闭嘴 / 1 张嘴 / 2 闭嘴甩尾 / 3 张嘴甩尾；触发源 = 对话窗事件桥，待接入）
-  talking: {
-    src: "/pet/anim/talk.png",
-    frames: 4,
-    sequence: [0, 1, 0, 1, 2, 3, 2, 3],
+    frames: 12,
+    sequence: SEQ_12,
     fps: 5,
     loop: true,
   },
-  // 走路：对角碎步（0 着地 / 1 抬腿A+甩尾 / 2 抬腿B），步点带头顶起伏
+  // 说话：嘴部开合打拍子 + 点头 + 尾巴伴奏（触发源 = 对话窗事件桥，待接入）
+  talking: {
+    src: "/pet/anim/talk.png",
+    frames: 12,
+    sequence: SEQ_12,
+    fps: 6,
+    loop: true,
+  },
+  // 走路：两个对角步态循环，步点带头顶起伏、尾巴打拍子
   // 触发源 = 窗口移动事件（被拖着走 / 将来自主散步同一条通路）
   walking: {
     src: "/pet/anim/walk.png",
-    frames: 3,
-    sequence: [0, 1, 0, 2],
+    frames: 12,
+    sequence: SEQ_12,
+    fps: 10,
+    loop: true,
+  },
+  // 敲电脑：左右爪交替敲击，节奏里夹眨眼/抬眼/顿一下
+  // 触发源 = 将来「干活中」（agent 执行工具）事件桥，待接入
+  typing: {
+    src: "/pet/anim/typing.png",
+    frames: 12,
+    sequence: SEQ_12,
     fps: 8,
     loop: true,
   },
-  // 摸头：眯眼腮红 ⇄ 张嘴 + 全身上跳 1px（开心蹦跶），播完自回 idle
+  // 摸头：两轮开心蹦跶（起跳→最高→回落→落地压缩），播完自回 idle
   petted: {
     src: "/pet/anim/petted.png",
-    frames: 2,
-    sequence: [0, 1, 0, 1, 0],
-    fps: 6,
+    frames: 12,
+    sequence: SEQ_12,
+    fps: 8,
     loop: false,
   },
-  // 睡觉：合眼，头顶 1px 呼吸下压 + Zzz 缓慢起伏（2s 一次呼吸）
+  // 睡觉：猫貌团趴姿（身子坐地、腿收起、双爪枕在横躺的尾巴上）——
+  // 呼吸起伏 + Zzz 从头顶飘起淡去 + 尾尖/耳朵偶发小动作（6s 一循环）
   sleeping: {
     src: "/pet/anim/sleep.png",
-    frames: 2,
-    sequence: [0, 1],
-    fps: 1,
+    frames: 12,
+    sequence: SEQ_12,
+    fps: 2,
     loop: true,
   },
 } satisfies Record<string, AnimDef>;
@@ -161,6 +172,18 @@ export function PetWindow() {
     });
     return () => {
       window.clearTimeout(stopTimer);
+      void unlisten.then((f) => f());
+    };
+  }, []);
+
+  // 状态点播通道：其他窗口 emitTo("pet", "pet:play", { state }) 直接切状态。
+  // 桌宠页的动画测试按钮走这里；将来对话窗事件桥（talking/typing）也走这条
+  useEffect(() => {
+    const unlisten = getCurrentWindow().listen<{ state?: string }>("pet:play", (e) => {
+      const s = e.payload?.state;
+      if (s && s in ANIMS) setState(s as PetState);
+    });
+    return () => {
       void unlisten.then((f) => f());
     };
   }, []);
