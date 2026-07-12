@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.wjz.deskling",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm fetch:stt && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm fetch:stt && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -66,6 +66,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": ["resources/stt/"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

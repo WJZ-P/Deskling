@@ -5,6 +5,7 @@ use tauri::{
 };
 
 mod provider;
+mod stt;
 mod tools;
 
 #[tauri::command]
@@ -134,6 +135,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        // 语音输入全局状态：录音会话 + 常驻 SenseVoice 识别器
+        .manage(stt::SttState::default())
         .setup(|app| {
             setup_tray(app)?;
             Ok(())
@@ -156,7 +159,11 @@ pub fn run() {
             provider::provider_test,
             provider::provider_chat,
             provider::provider_chat_cancel,
-            provider::provider_tool_approve
+            provider::provider_tool_approve,
+            stt::stt_devices,
+            stt::stt_start,
+            stt::stt_stop,
+            stt::stt_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

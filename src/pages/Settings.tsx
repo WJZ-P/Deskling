@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   PixelPage,
   PixelPageHeader,
@@ -88,6 +89,26 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     void setSetting("autoApproveTools", next);
   }, []);
 
+  // 语音输入麦克风：挂载时向后端枚举一次输入设备；改动即落盘
+  // （onKeyChange 广播给常驻对话窗，下次按语音按钮生效）
+  const [micDevices, setMicDevices] = useState<string[]>([]);
+  const [micDevice, setMicDevice] = useState<string>(() => getSetting("sttDevice"));
+  useEffect(() => {
+    void invoke<string[]>("stt_devices").then(setMicDevices).catch(() => {});
+  }, []);
+  const handleMicDevice = useCallback((v: string) => {
+    setMicDevice(v);
+    void setSetting("sttDevice", v);
+  }, []);
+  // 已选设备当前不在枚举列表（被拔掉了）时仍保留为一项，下拉不至于显示错位
+  const micOptions: PixelSelectOption[] = [
+    { value: "", label: "系统默认" },
+    ...micDevices.map((d) => ({ value: d, label: d })),
+    ...(micDevice && !micDevices.includes(micDevice)
+      ? [{ value: micDevice, label: `${micDevice}（未找到）` }]
+      : []),
+  ];
+
   return (
     <PixelPage>
       <PixelPageHeader>
@@ -156,6 +177,19 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
 
       <PixelSection title="声音">
         <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>麦克风</PixelSettingLabel>
+              <PixelSettingDesc>对话窗语音输入用哪个设备收音</PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSelect
+              options={micOptions}
+              value={micDevice}
+              onChange={handleMicDevice}
+              variant="normal"
+            />
+          </PixelSettingRow>
+
           <PixelSettingRow>
             <PixelSettingInfo>
               <PixelSettingLabel>语音</PixelSettingLabel>

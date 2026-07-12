@@ -125,6 +125,11 @@ export interface AppSettings {
    * true 时 Anthropic/Gemini 请求思考过程下发（OpenAI 兼容协议由模型自身决定，不受此控）。
    */
   chatThinking: boolean;
+  /**
+   * 语音输入麦克风设备名（"" = 系统默认）：主窗口设置页「声音 · 麦克风」选择，
+   * 常驻对话窗按下语音按钮时读取（跨窗口 onKeyChange 同步）。
+   */
+  sttDevice: string;
   /** 桌宠档案列表（桌宠页展示栏；人设 prompt 等都存在档案里） */
   petProfiles: PetProfile[];
   /** 当前桌宠 id（展示栏排最前；对话人设取它的 prompt） */
@@ -141,6 +146,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   activeProviderId: null,
   autoApproveTools: true,
   chatThinking: false,
+  sttDevice: "",
   petProfiles: DEFAULT_PETS,
   activePetId: "xuebao",
 };
@@ -199,6 +205,10 @@ function bindCrossWindowSync(s: Store): void {
   // 审批开关在主窗口设置里改、常驻聊天窗发送时读，同样要跨窗口刷
   void s.onKeyChange<boolean>("autoApproveTools", (v) => {
     cache.autoApproveTools = v ?? DEFAULT_SETTINGS.autoApproveTools;
+  });
+  // 麦克风设备在主窗口设置里选、常驻聊天窗按下语音按钮时读，同样要跨窗口刷
+  void s.onKeyChange<string>("sttDevice", (v) => {
+    cache.sttDevice = v ?? DEFAULT_SETTINGS.sttDevice;
   });
   // 桌宠档案在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
   void s.onKeyChange<PetProfile[]>("petProfiles", (v) => {

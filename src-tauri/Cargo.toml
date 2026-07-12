@@ -28,6 +28,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 futures-util = "0.3"
 # agent 工具执行：tokio::process 跑命令；sync 的 oneshot 用于审批阻塞唤醒
 tokio = { version = "1", features = ["process", "sync", "io-util", "macros", "rt"] }
+sherpa-onnx = "1.13.4"
+cpal = "0.18.1"
 
 # 命令输出编码回退：中文 Windows 控制台输出是 GBK(CP936)，UTF-8 解码失败时用它救乱码
 [target.'cfg(windows)'.dependencies]

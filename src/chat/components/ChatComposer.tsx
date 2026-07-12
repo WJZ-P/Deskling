@@ -1,19 +1,31 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { styled } from "@linaria/react";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../../styles/theme";
 import { PixelButton } from "../../components/pixel/PixelButton";
 import { PixelSurface, type SurfaceState, type SurfaceTune } from "../../components/pixel/PixelSurface";
 import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { PixelTip } from "../../components/pixel/PixelTip";
-import { BulbIcon } from "../../components/pixel/icons";
+import { BulbIcon, MicIcon } from "../../components/pixel/icons";
 import { getActiveProfile, getSetting, setSetting } from "../../settings";
 
 /**
  * 底部输入区：QQ 式一体输入框——整块像素面里从上到下依次是
- *   功能行（会话级小开关，如「深度思考」）→ 自增高 textarea → 右下角发送/暂停。
+ *   功能行（会话级小开关，如「深度思考」）→ 自增高 textarea → 底行
+ *   （左：按住说话麦克风 · 右：发送/暂停）。
  *  - Enter 发送，Shift+Enter 换行；
  *  - 空白内容不发送；
  *  - textarea 随内容增高，到上限后内部滚动（不撑爆窗口）。
+ *  - 麦克风双模式：点按 = 切换式开录（再点一下结束）；按住 = 说完松手即停。
+ *    停止后离线识别（SenseVoice，stt_stop 返回文本）追加进输入框——
+ *    落框不直发，识别错了还能改。设备由设置页「麦克风」项指定。
  * 输入面用 PixelSurface（同 PixelInput 引擎）：静态低噪常驻，
  * 聚焦时外描边逐像素点亮、低噪动起来，和主面板输入框手感一致。
  * 纯 UI：把内容交给 onSend，清空由本组件负责。
@@ -53,6 +65,13 @@ interface ChatComposerProps {
  */
 const THINKING_PROTOCOLS: ReadonlySet<string> = new Set(["anthropic", "gemini"]);
 
+/** 语音按钮状态机：待命 → 录音中 → 识别中（停止后）；出错短暂驻留错误态 */
+type VoiceState = "idle" | "rec" | "busy" | "err";
+/** 语音错误提示驻留时长（ms），过后自动回待命 */
+const VOICE_ERR_MS = 2400;
+/** 短于此时长（ms）的按下视为「点按」= 切换式开录；按得更久则是长按 = 松手即停 */
+const TAP_MS = 300;
+
 export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
@@ -60,6 +79,69 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   // 「深度思考」开关：持久化在 settings（发送那一刻由 ChatWindow 读取），这里持有 UI 镜像
   const [thinking, setThinking] = useState<boolean>(() => getSetting("chatThinking"));
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // ---- 语音输入：点按 = 切换式开/关，长按 = 说完松手即停 ----
+  const [voice, setVoice] = useState<VoiceState>("idle");
+  const [voiceErr, setVoiceErr] = useState("");
+  // 本次按下的时刻：松手时用时长区分「点按（切换式开启）」与「长按（松手停）」
+  const pressAtRef = useRef(0);
+  // 录音中再次按下 = 切换式关闭：这一下的松手直接停止识别
+  const stopOnUpRef = useRef(false);
+  const errTimerRef = useRef(0);
+  useEffect(() => () => window.clearTimeout(errTimerRef.current), []);
+
+  const flashVoiceErr = (msg: string) => {
+    setVoiceErr(msg);
+    setVoice("err");
+    window.clearTimeout(errTimerRef.current);
+    errTimerRef.current = window.setTimeout(() => setVoice("idle"), VOICE_ERR_MS);
+  };
+
+  // 按下：待命则开麦；录音中则标记「松手即停」（切换式的第二次点按）。
+  // setPointerCapture 把后续指针事件锁给按钮：拖出按钮再松手也能正常收尾
+  const voiceDown = async (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (voice === "busy") return;
+    if (voice === "rec") {
+      stopOnUpRef.current = true;
+      return;
+    }
+    pressAtRef.current = Date.now();
+    stopOnUpRef.current = false;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      // 麦克风设备来自设置页选择（"" = 系统默认，跨窗口 onKeyChange 保证缓存新鲜）
+      await invoke("stt_start", { device: getSetting("sttDevice") || null });
+      // 开麦完成即进录音态：快速点按（哪怕开麦完成前就松了手）= 切换式开启
+      setVoice("rec");
+    } catch (err) {
+      flashVoiceErr(String(err));
+    }
+  };
+
+  // 松手：短按 = 切换式开启，保持录音等下一次点按；长按或切换式第二次点按 =
+  // 停止识别，文本追加进输入框（不直发，识别错了还能改）
+  const voiceUp = async () => {
+    const heldMs = Date.now() - pressAtRef.current;
+    if (voice !== "rec") return; // 开麦尚未完成的松手：完成后按切换式保持录音
+    if (!stopOnUpRef.current && heldMs < TAP_MS) return; // 点按开启：保持录音
+    setVoice("busy");
+    try {
+      const text = await invoke<string>("stt_stop");
+      if (text) setValue((v) => (v ? v + text : text));
+      setVoice("idle");
+      taRef.current?.focus();
+    } catch (err) {
+      flashVoiceErr(String(err));
+    }
+  };
+
+  // 系统级中断（指针被拖拽劫走等）：丢弃本次录音
+  const voiceCancel = () => {
+    stopOnUpRef.current = false;
+    if (voice !== "rec") return;
+    void invoke("stt_cancel").catch(() => {});
+    setVoice("idle");
+  };
 
   // 内容变化时重算高度：先塌到 auto 量 scrollHeight，再夹到 [MIN,MAX]
   useLayoutEffect(() => {
@@ -154,6 +236,35 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
             onBlur={() => setFocused(false)}
           />
           <SendRow>
+            <VoiceGroup>
+              {/* 状态提示在左、麦克风贴着发送按钮 */}
+              {voice === "rec" && <VoiceHint data-rec>录音中…点按/松手结束</VoiceHint>}
+              {voice === "busy" && <VoiceHint>识别中…</VoiceHint>}
+              {voice === "err" && <VoiceHint data-err>{voiceErr}</VoiceHint>}
+              {/* 语音按钮：与发送同规格（图标 24px + 上下 8px = 40px 齐高），
+                  pointer 事件驱动；mousedown preventDefault 防抢 textarea 焦点 */}
+              <PixelTip
+                tip={
+                  voice === "rec"
+                    ? "再点一下 / 松开结束"
+                    : voice === "busy"
+                      ? "识别中…"
+                      : "点按开录 · 按住说完松手"
+                }
+              >
+                <PixelButton
+                  variant={voice === "rec" ? "primary" : "low"}
+                  disabled={voice === "busy"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => void voiceDown(e)}
+                  onPointerUp={() => void voiceUp()}
+                  onPointerCancel={voiceCancel}
+                >
+                  {/* 负 margin 收窄默认 18px 横向内边距，图标钮不至于过宽 */}
+                  <MicIcon style={{ fontSize: 24, margin: "0 -6px" }} />
+                </PixelButton>
+              </PixelTip>
+            </VoiceGroup>
             {sending ? (
               // 生成中：发送位变暂停。始终可点（终止本轮）
               <PixelButton
@@ -200,12 +311,36 @@ const ToolRow = styled.div`
   margin-bottom: 7px;
 `;
 
-/* 发送行：输入面内部底栏，发送/暂停靠右下角 */
+/* 发送行：输入面内部底栏——按住说话 + 发送/暂停 一起靠右下角 */
 const SendRow = styled.div`
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 7px;
+`;
+
+/* 状态提示（录音中/识别中/错误一闪）+ 麦克风，麦克风贴着发送按钮 */
+const VoiceGroup = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+`;
+
+const VoiceHint = styled.span`
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &[data-rec] {
+    color: ${t.colorAccent};
+  }
+  &[data-err] {
+    color: ${t.btnClose};
+  }
 `;
 
 const Textarea = styled.textarea`
