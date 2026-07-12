@@ -120,6 +120,8 @@ export function streamChat(
   autoApprove: boolean,
   /** 深度思考：Anthropic/Gemini 请求思考过程下发（输入框操作栏开关决定） */
   thinking: boolean,
+  /** 人设/系统提示词（当前桌宠档案的 prompt）：只在对话开头注入一次；null/空白不注入 */
+  system: string | null,
 ): ChatStream {
   const requestId = nextRequestId();
   const channel = new Channel<ChatEvent>();
@@ -146,6 +148,7 @@ export function streamChat(
     history,
     autoApprove,
     thinking,
+    system,
     onEvent: channel,
   }).catch((err) => handlers.onError(String(err)));
   return {

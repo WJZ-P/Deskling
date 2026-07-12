@@ -12,7 +12,7 @@ import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
-import { getActiveProfile, getSetting, setSetting } from "../settings";
+import { getActivePet, getActiveProfile, getSetting, setSetting } from "../settings";
 import type {
   ChatMessage,
   Conversation,
@@ -452,6 +452,9 @@ export function ChatWindow() {
       getSetting("autoApproveTools"),
       // 深度思考开关：输入框操作栏切换写入，发送那一刻读取（同窗口缓存即时可见）
       getSetting("chatThinking"),
+      // 人设：当前桌宠档案的 prompt（主窗口桌宠页编辑，跨窗口 onKeyChange 同步），
+      // 只注入对话开头一次；清空人设则不注入
+      getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
   }, []);

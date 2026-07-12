@@ -256,7 +256,16 @@ trait Protocol: Send + Sync {
     /// thinking=true 时请求模型下发思考过程：Anthropic 加 thinking(adaptive)、
     /// Gemini 加 thinkingConfig(includeThoughts)；OpenAI 兼容协议无标准开关，忽略
     /// （推理模型的 reasoning_content 由服务端自行下发，consume 侧始终解析）。
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value;
+    /// system：人设/系统提示词（当前桌宠档案的 prompt）。只在对话开头出现一次、
+    /// 不随轮次重复插入：Anthropic 走顶层 system 字段、OpenAI 走首条 role=system
+    /// 消息、Gemini 走 systemInstruction —— 三家都是独立于对话轮的原生形态。
+    fn build_body(
+        &self,
+        p: &ProviderProfile,
+        messages: &[Value],
+        thinking: bool,
+        system: Option<&str>,
+    ) -> Value;
     /// 消化一条 SSE data 行的 JSON：文本立即 emit Delta，工具调用累进 acc。
     fn consume(
         &self,
@@ -353,7 +362,13 @@ impl Protocol for Anthropic {
             .map(|m| json!({ "role": m.role, "content": m.content }))
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value {
+    fn build_body(
+        &self,
+        p: &ProviderProfile,
+        messages: &[Value],
+        thinking: bool,
+        system: Option<&str>,
+    ) -> Value {
         let mut body = json!({
             "model": p.model,
             "max_tokens": p.max_tokens.unwrap_or(4096),
@@ -361,6 +376,10 @@ impl Protocol for Anthropic {
             "messages": messages,
             "tools": anthropic_tools_array(),
         });
+        if let Some(sys) = system {
+            // 协议原生顶层 system 字段：不进 messages，对话全程只此一份
+            body["system"] = json!(sys);
+        }
         if thinking {
             // adaptive：当前世代（4.6+ / Fable）通用的思考开法；display=summarized
             // 让新模型返回可读摘要（4.7+ 默认 omitted 是空文本，开了等于白开）。
@@ -527,13 +546,27 @@ impl Protocol for OpenAi {
             .map(|m| json!({ "role": m.role, "content": m.content }))
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value], _thinking: bool) -> Value {
+    fn build_body(
+        &self,
+        p: &ProviderProfile,
+        messages: &[Value],
+        _thinking: bool,
+        system: Option<&str>,
+    ) -> Value {
         // OpenAI 兼容协议没有标准思考开关（推理模型的 reasoning_content
         // 由服务端自行下发，consume 侧始终解析），thinking 参数忽略
+        // system 是 OpenAI 系唯一形态：messages 首条 role=system。messages 本身
+        // 不持有它（agent loop 追加的轮次在其后），每次构体时前插这一条
+        let msgs: Vec<Value> = match system {
+            Some(sys) => std::iter::once(json!({ "role": "system", "content": sys }))
+                .chain(messages.iter().cloned())
+                .collect(),
+            None => messages.to_vec(),
+        };
         let mut body = json!({
             "model": p.model,
             "stream": true,
-            "messages": messages,
+            "messages": msgs,
             "tools": openai_tools_array(),
         });
         if let Some(temp) = p.temperature {
@@ -681,7 +714,13 @@ impl Protocol for Gemini {
             })
             .collect()
     }
-    fn build_body(&self, p: &ProviderProfile, messages: &[Value], thinking: bool) -> Value {
+    fn build_body(
+        &self,
+        p: &ProviderProfile,
+        messages: &[Value],
+        thinking: bool,
+        system: Option<&str>,
+    ) -> Value {
         let mut gen = serde_json::Map::new();
         if let Some(temp) = p.temperature {
             gen.insert("temperature".into(), json!(temp));
@@ -698,6 +737,10 @@ impl Protocol for Gemini {
             "contents": messages,
             "tools": gemini_tools_array(),
         });
+        if let Some(sys) = system {
+            // 协议原生 systemInstruction：独立于 contents，对话全程只此一份
+            body["systemInstruction"] = json!({ "parts": [{ "text": sys }] });
+        }
         if !gen.is_empty() {
             body["generationConfig"] = Value::Object(gen);
         }
@@ -891,6 +934,8 @@ pub async fn provider_chat(
     auto_approve: bool,
     // 思考开关（输入框上方操作栏「深度思考」）：Anthropic/Gemini 请求思考过程下发
     thinking: bool,
+    // 人设/系统提示词（当前桌宠档案的 prompt）：只注入对话开头一次，None/空白不注入
+    system: Option<String>,
     on_event: tauri::ipc::Channel<ChatEvent>,
 ) -> Result<(), String> {
     let cancel = register_cancel(&request_id);
@@ -923,6 +968,9 @@ pub async fn provider_chat(
     // 协议原生 messages 数组：初始由跨轮纯文本历史转成；后续 loop 里追加 tool_use / tool_result
     let mut messages: Vec<Value> = proto.initial_messages(&history);
 
+    // 空白人设视同未设置（前端已 trim，这里兜底）
+    let system = system.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
     // 单次运行的 agent 步数硬上限，避免模型死循环
     const MAX_STEPS: usize = 12;
     for _step in 0..MAX_STEPS {
@@ -932,7 +980,7 @@ pub async fn provider_chat(
         }
 
         let url = proto.chat_endpoint(&profile);
-        let body = proto.build_body(&profile, &messages, thinking);
+        let body = proto.build_body(&profile, &messages, thinking, system.as_deref());
 
         let req = proto
             .apply_auth(client.post(&url), &profile)
