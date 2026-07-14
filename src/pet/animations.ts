@@ -58,8 +58,19 @@ export const ANIMS = {
   // 说话：嘴部开合打拍子 + 点头 + 尾巴伴奏（触发源 = 对话窗事件桥，正文流式输出时）
   talking: [strip("/pet/anim/talk.png", 6)],
   // 走路（正面）：对角步态 + 下盘横摆 + 尾巴打拍子
-  // 触发源 = 窗口移动事件（向右/纵向位移；将来自主散步同一条通路）
+  // 触发源 = 窗口移动事件的零位移兜底（首个事件方向未知时；将来自主散步同一条通路）
   walking: [strip("/pet/anim/walk.png", 10)],
+  // 往下走：五官整体下移 1px 低头看脚下（纵向向下位移时播），
+  // 与左右走同款双口型变体（全程 w 嘴 / 全程喘气线），进入状态时随机抽一套
+  walkingDown: [
+    strip("/pet/anim/walk-down.png", 10),
+    strip("/pet/anim/walk-down-pant.png", 10),
+  ],
+  // 往上走：五官整体上移 1px 仰着头走（纵向向上位移时播），同样两套口型变体
+  walkingUp: [
+    strip("/pet/anim/walk-up.png", 10),
+    strip("/pet/anim/walk-up-pant.png", 10),
+  ],
   // 向左走：步态同 walking 且下盘一律压左，五官左移 2px 压向行进方向。
   // 两套口型变体（全程 w 嘴 / 全程喘气线），进入状态时随机抽一套
   walkingLeft: [
@@ -105,12 +116,16 @@ export const ANIMS = {
   ],
   // 探头偷看（左）：蹭出画缘 → 右眼粉耳露出、眨眼张望 → 缩回去，播完接回躲好
   peekingLeft: [strip("/pet/anim/peek-left.png", 4, { loop: false, next: "hiddenLeft" })],
-  // 躲到屏幕右缘 / 躲好（右）/ 探头（右）：左侧版的整帧镜像
+  // 召回（左）：从只剩尾巴的躲好态跑回画面——尾巴一挺 → 探头确认 → 面朝屏内
+  // 小跑滑回 → 刹车转正脸抖耳，播完回 idle。点尾巴（原地不拖）或测试按钮触发
+  unhideLeft: [strip("/pet/anim/unhide-left.png", 10, { loop: false })],
+  // 躲到屏幕右缘 / 躲好（右）/ 探头（右）/ 召回（右）：左侧版的整帧镜像
   hidingRight: [strip("/pet/anim/hide-right.png", 10, { loop: false, next: "hiddenRight" })],
   hiddenRight: [
     { src: "/pet/anim/hidden-right.png", frames: 6, sequence: HIDDEN_SEQ, fps: 2, loop: true },
   ],
   peekingRight: [strip("/pet/anim/peek-right.png", 4, { loop: false, next: "hiddenRight" })],
+  unhideRight: [strip("/pet/anim/unhide-right.png", 10, { loop: false })],
 } satisfies Record<string, AnimDef[]>;
 
 /** 桌宠状态：键即登记表的键（状态 ⇄ 动画组一一对应） */

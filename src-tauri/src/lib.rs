@@ -107,6 +107,22 @@ fn chat_show(app: AppHandle) {
     }
 }
 
+/// 系统级查询鼠标主键是否按住。OS 拖窗的模态循环期间网页收不到指针事件，
+/// 桌宠窗的移动停表用它区分「拖到屏幕边顶住不动」和「已经松手」——按住就
+/// 保持悬空动画并推迟落点校正。两个键都查，兼容系统级左右键互换的用户
+#[tauri::command]
+fn mouse_pressed() -> bool {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+        };
+        GetAsyncKeyState(VK_LBUTTON as i32) < 0 || GetAsyncKeyState(VK_RBUTTON as i32) < 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 /// 查询桌宠 / 对话窗口当前可见状态（前端挂载时同步按钮文案用）。
 #[tauri::command]
 fn pet_visible(app: AppHandle) -> bool {
@@ -171,6 +187,7 @@ pub fn run() {
             chat_show,
             pet_visible,
             chat_visible,
+            mouse_pressed,
             provider::provider_test,
             provider::provider_chat,
             provider::provider_chat_cancel,

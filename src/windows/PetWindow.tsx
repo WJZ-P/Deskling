@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  currentMonitor,
+  cursorPosition,
+  getCurrentWindow,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 import { t } from "../styles/theme";
 import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
@@ -24,7 +29,12 @@ import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
  * 拖窗 = dangling（被拎起蹬腿），停稳回 idle；召唤上桌播一次 entering
  * （底边探头张望再蹦出）接 greeting（落地挥手）；thinking/typing/talking
  * 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 → 正文输出说话，收工回 idle）。
- * 交互：按下后原地松手 = 摸摸；移动超过阈值 = 移交系统拖窗。
+ * 交互：命中区收紧到本体最小矩形（帧带非透明像素并集包围盒，运行时扫描，
+ * 工坊任意精灵图通用）；按下后原地松手 = 摸摸；移动超过阈值 = 移交系统拖窗。
+ * 命中区外的一切空白（含精灵框透明边角）经光标巡逻 setIgnoreCursorEvents
+ * 整窗穿透，点击直达桌面。拖拽松手后做落位：大半拖出左/右屏缘 = 贴边播
+ * 躲边动画藏起来只剩尾巴（捏尾巴可拽回）；其余越界吸回工作区——有脚的家伙
+ * 最低只能站在任务栏上沿，两侧/顶部同理（以本体矩形为准，气泡位不受限）。
  * 由 Pet 页「召唤到桌面」按钮（pet_toggle 命令，再点即收起）唤出；点 X 的
  * 全局拦截同样适用于本窗口（关闭 = 隐藏）。
  */
@@ -54,6 +64,12 @@ const PEEK_MIN_MS = 60_000;
 const PEEK_RAND_MS = 120_000;
 /** 窗口停止移动这么久后走路收步回待机（ms） */
 const WALK_STOP_MS = 300;
+/** 光标巡逻周期 ms：读全局光标判断在不在交互区，切换整窗穿透。
+    调小则光标扫上桌宠后更快恢复可点，代价是 IPC 更密 */
+const CURSOR_PATROL_MS = 60;
+/** 松手时本体出侧边超过这个比例的身位，判定为「想塞出去」→ 贴边躲藏；
+    低于则吸回屏内 */
+const HIDE_OVER_RATIO = 0.2;
 
 // 动画登记表（状态 → 帧带变体组）在 src/pet/animations.ts；管理器负责
 // 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
@@ -88,6 +104,62 @@ function useSpriteAnim(def: AnimDef, onEnd?: () => void): number {
   return frame;
 }
 
+/** 桌宠本体命中矩形（32×32 帧内坐标，w/h 含端点） */
+interface BodyRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+// 帧带 src → 本体矩形缓存（帧带静态不变，整个会话每条只真扫一次）
+const bodyRectCache = new Map<string, Promise<BodyRect>>();
+
+/**
+ * 扫帧带全帧非透明像素的并集包围盒 = 该状态下桌宠本体的最小命中矩形。
+ * 横向折回帧内坐标（x % SPRITE_SIZE）：任一帧在该位置有像素就算体——
+ * 换帧时命中区不跳动。逐像素判 alpha 对创意工坊的任意精灵图都适用；
+ * 矩形内部残留的透明缺口（耳朵旁的天空这类）不追求剔除，「最小矩形」
+ * 即约定精度。解码失败按整帧兜底（宁可多接事件不可点不了）
+ */
+function stripBodyRect(src: string): Promise<BodyRect> {
+  let rect = bodyRectCache.get(src);
+  if (!rect) {
+    rect = new Promise<BodyRect>((resolve) => {
+      const full = { x: 0, y: 0, w: SPRITE_SIZE, h: SPRITE_SIZE };
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(full);
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let x0 = SPRITE_SIZE;
+        let y0 = SPRITE_SIZE;
+        let x1 = -1;
+        let y1 = -1;
+        for (let y = 0; y < canvas.height; y++) {
+          for (let x = 0; x < canvas.width; x++) {
+            if (data[(y * canvas.width + x) * 4 + 3] === 0) continue;
+            const fx = x % SPRITE_SIZE;
+            if (fx < x0) x0 = fx;
+            if (fx > x1) x1 = fx;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+        resolve(x1 < 0 ? full : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+      };
+      img.onerror = () => resolve(full);
+      img.src = src;
+    });
+    bodyRectCache.set(src, rect);
+  }
+  return rect;
+}
+
 export function PetWindow() {
   // 初始即 entering：启动时从画面底边探头张望再蹦出来，接 greeting 落地挥手
   // 完成整套登场（隐藏启动则悄悄播完落回 idle）
@@ -101,6 +173,19 @@ export function PetWindow() {
     const n = anim.next;
     setState(n && ANIM_MANAGER.has(n) ? n : "idle");
   });
+
+  // 当前帧带的本体命中矩形：换状态重取（有缓存，仅每条帧带首次真扫）。
+  // 新矩形到位前沿用旧值——比瞬间跳回整帧兜底更稳；首帧未就绪按整帧
+  const [bodyRect, setBodyRect] = useState<BodyRect | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void stripBodyRect(anim.src).then((r) => {
+      if (alive) setBodyRect(r);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [anim]);
 
   // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。两种形态——
   // say = 正文说话（白面对话泡 + 三角尾巴）；think = 思考中（浅青想法泡 +
@@ -168,6 +253,76 @@ export function PetWindow() {
 
   // 按下起点：null = 本次按下已移交拖窗或已结束
   const downRef = useRef<{ x: number; y: number } | null>(null);
+  // 本体命中区 / 气泡的 DOM 引用（光标巡逻逐 tick 量矩形用）；
+  // 精灵帧引用（松手落位躲边时量帧矩形做贴边基准）
+  const hitRef = useRef<HTMLDivElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const spriteRef = useRef<HTMLDivElement>(null);
+  // state 的 ref 镜像：巡逻计时器闭包里读最新状态，不随状态变化重建计时器
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
+  // 巡逻 tick 就只剩 cursorPosition 一次 IPC
+  const winPosRef = useRef<{ x: number; y: number } | null>(null);
+  // 真 = 下一次 onMoved 来自落点校正的 setPosition：只记位置，不进走路状态
+  const clampMoveRef = useRef(false);
+
+  // 松手落位：按本体命中矩形（非整窗，头顶气泡展示位可以越出屏顶）三选一——
+  //  · 本体拖出左/右屏缘超过 HIDE_OVER_RATIO 个身位 = 想把它塞出去：窗口
+  //    贴到屏缘（精灵帧边对齐 workArea 边），播躲边动画冲出画面，只剩尾巴
+  //    露在外面（hiding → hidden，探头计时器接管）；
+  //  · 其余越界：吸回工作区——有脚的家伙最低站在任务栏上沿（workArea 底边），
+  //    两侧吸边、顶部兜住防拖丢；
+  //  · 没越界：不动。
+  // OS 拖窗的模态循环里抢 setPosition 会打架，所以只挂在移动停表上，且
+  // 停表靠系统键位查询保证真松手了才落位
+  const settleAfterMove = async () => {
+    const pos = winPosRef.current;
+    const hit = hitRef.current;
+    const sprite = spriteRef.current;
+    if (!pos || !hit || !sprite) return;
+    const monitor = await currentMonitor();
+    if (!monitor) return;
+    const dpr = window.devicePixelRatio;
+    const wa = monitor.workArea;
+    // 本体矩形的屏幕坐标（物理 px）
+    const r = hit.getBoundingClientRect();
+    const left = pos.x + r.left * dpr;
+    const top = pos.y + r.top * dpr;
+    const right = pos.x + r.right * dpr;
+    const bottom = pos.y + r.bottom * dpr;
+    // 纵向一律夹回（躲边时同样生效：尾巴也不许埋进任务栏）
+    let dy = 0;
+    if (top < wa.position.y) dy = wa.position.y - top;
+    else if (bottom > wa.position.y + wa.size.height) {
+      dy = wa.position.y + wa.size.height - bottom;
+    }
+    // 横向：出界超过 HIDE_OVER_RATIO 个身位 → 躲边；更小的越界 → 吸回
+    const overL = wa.position.x - left;
+    const overR = right - (wa.position.x + wa.size.width);
+    const fr = sprite.getBoundingClientRect(); // 精灵帧矩形（躲边的贴边基准）
+    let dx = 0;
+    let hide: "hidingLeft" | "hidingRight" | null = null;
+    if (overL > (right - left) * HIDE_OVER_RATIO) {
+      hide = "hidingLeft";
+      dx = wa.position.x - (pos.x + fr.left * dpr);
+    } else if (overR > (right - left) * HIDE_OVER_RATIO) {
+      hide = "hidingRight";
+      dx = wa.position.x + wa.size.width - (pos.x + fr.right * dpr);
+    } else if (overL > 0) {
+      dx = overL;
+    } else if (overR > 0) {
+      dx = -overR;
+    }
+    if (dx || dy) {
+      clampMoveRef.current = true;
+      await getCurrentWindow().setPosition(
+        new PhysicalPosition(Math.round(pos.x + dx), Math.round(pos.y + dy)),
+      );
+    }
+    // 贴好边再开演：惊觉「!」→ 冲出画面 → 只剩尾巴（播完自动接 hidden）
+    if (hide) setState(hide);
+  };
 
   // 久置入睡：idle 持续 SLEEP_AFTER_MS 无交互 → 打个哈欠趴下（播完接 sleeping）
   useEffect(() => {
@@ -188,33 +343,65 @@ export function PetWindow() {
   }, [state]);
 
   // 移动停表：走路/悬空状态在窗口停稳 WALK_STOP_MS 后回待机。
-  // 拖拽分支和 onMoved 共用（悬空由拖拽进入，之后靠 onMoved 续命）
+  // 拖拽分支和 onMoved 共用（悬空由拖拽进入，之后靠 onMoved 续命）。
+  // 坑：拖到屏幕边缘顶住时光标被物理边界挡停，窗口不再位移、onMoved 断流，
+  // 但手还没松——OS 拖窗期间网页收不到指针事件，只能拿系统级键位查询兜底：
+  // 仍按着就续命保持悬空，真松手了才收步 + 落点校正（校正也因此严格发生在
+  // 松手后，不会中途跟 OS 拖窗抢窗口）
   const stopTimerRef = useRef(0);
   const bumpMoveStop = () => {
     window.clearTimeout(stopTimerRef.current);
     stopTimerRef.current = window.setTimeout(() => {
-      setState((s) =>
-        s === "walking" || s === "walkingLeft" || s === "walkingRight" || s === "dangling"
-          ? "idle"
-          : s,
-      );
+      void (async () => {
+        if (stateRef.current === "dangling") {
+          const held = await invoke<boolean>("mouse_pressed").catch(() => false);
+          if (held) {
+            bumpMoveStop();
+            return;
+          }
+        }
+        setState((s) =>
+          s === "walking" ||
+          s === "walkingLeft" ||
+          s === "walkingRight" ||
+          s === "walkingUp" ||
+          s === "walkingDown" ||
+          s === "dangling"
+            ? "idle"
+            : s,
+        );
+        // 停稳后落位：大半出侧边贴边躲起来，其余越界吸回工作区
+        void settleAfterMove();
+      })();
     }, WALK_STOP_MS);
   };
 
   // 窗口在移动：被指针拎着 = 悬空蹬腿（拖拽分支已置 dangling，这里保持）；
-  // 其余移动（将来自主散步）按水平位移选朝向——向左/向右用对应侧脸帧带，
-  // 纯纵向用正面步态。拖拽中途停顿超时会先落回 idle，再动会显示走路——
-  // OS 拖窗期间收不到指针事件，无法分辨仍被拎着，可接受
+  // 其余移动（将来自主散步）按主导轴选朝向——横向占优（含平手）用侧脸帧带，
+  // 纵向占优分上下：向下 = 低头看脚下，向上 = 仰头走（五官压向行进方向，
+  // 同左右走）；零位移（首个事件方向未知）兜底正面步态
   const lastXRef = useRef<number | null>(null);
+  const lastYRef = useRef<number | null>(null);
   useEffect(() => {
     const unlisten = getCurrentWindow().onMoved(({ payload }) => {
+      winPosRef.current = { x: payload.x, y: payload.y };
+      // 落点校正引发的贴靠移动：只记位置，不进走路状态也不再武装停表
+      // （吸附完还播一段走路会很怪，且停表重触发会造成校正循环）
+      if (clampMoveRef.current) {
+        clampMoveRef.current = false;
+        lastXRef.current = payload.x;
+        lastYRef.current = payload.y;
+        return;
+      }
       const dx = lastXRef.current === null ? 0 : payload.x - lastXRef.current;
+      const dy = lastYRef.current === null ? 0 : payload.y - lastYRef.current;
       lastXRef.current = payload.x;
+      lastYRef.current = payload.y;
       setState((s) => {
         if (s === "dangling") return s;
-        if (dx < 0) return "walkingLeft";
-        if (dx > 0) return "walkingRight";
-        return "walking";
+        if (dx === 0 && dy === 0) return "walking";
+        if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "walkingLeft" : "walkingRight";
+        return dy < 0 ? "walkingUp" : "walkingDown";
       });
       bumpMoveStop();
     });
@@ -237,10 +424,79 @@ export function PetWindow() {
     };
   }, []);
 
+  // 光标巡逻：把「空白穿透」做成真的——网页里的 pointer-events 只管页内命中，
+  // 窗口本身仍会吃掉整个矩形的鼠标事件（透明处点击也到不了桌面）。每 tick 读
+  // 全局光标换算窗内坐标，落在交互区（本体命中矩形 + 可点气泡）外就
+  // setIgnoreCursorEvents(true) 整窗穿透；ignore 后网页收不到任何鼠标事件，
+  // 也只能靠这条轮询把 ignore 解回来。
+  // 按住期间 / 拖窗与走路中一律不动 ignore：拖拽时窗口位置高速变化，缓存的
+  // 位置与光标读数存在错拍，误判「在区外」会把拖到一半的窗口变穿透直接脱手
+  useEffect(() => {
+    const win = getCurrentWindow();
+    // 初始位置：onMoved 只在动窗时来，首次得自己查；顺带做一次启动落位
+    // 校正（如上次会话把窗口留在了任务栏里）
+    void win.outerPosition().then((p) => {
+      winPosRef.current ??= { x: p.x, y: p.y };
+      void settleAfterMove();
+    });
+    let ignored: boolean | null = null; // null = 未知，首 tick 必设一次
+    let busy = false; // tick 内多次 await，防重入
+    const timer = window.setInterval(() => {
+      if (busy) return;
+      const s = stateRef.current;
+      if (
+        downRef.current ||
+        s === "dangling" ||
+        s === "walking" ||
+        s === "walkingLeft" ||
+        s === "walkingRight" ||
+        s === "walkingUp" ||
+        s === "walkingDown"
+      )
+        return;
+      busy = true;
+      void (async () => {
+        try {
+          const pos = winPosRef.current;
+          if (!pos) return;
+          const cursor = await cursorPosition();
+          // 物理 px → 窗内逻辑 px（无边框窗：外沿即内容原点）
+          const x = (cursor.x - pos.x) / window.devicePixelRatio;
+          const y = (cursor.y - pos.y) / window.devicePixelRatio;
+          const rects: DOMRect[] = [];
+          if (hitRef.current) rects.push(hitRef.current.getBoundingClientRect());
+          const bub = bubbleRef.current;
+          // 气泡只在「可点拉起对话」且不在退场时算交互区
+          if (bub?.dataset.clickable && !bub.dataset.closing) {
+            rects.push(bub.getBoundingClientRect());
+          }
+          const inside = rects.some(
+            (r) => x >= r.left && x < r.right && y >= r.top && y < r.bottom,
+          );
+          if (!inside !== ignored) {
+            ignored = !inside;
+            await win.setIgnoreCursorEvents(ignored);
+          }
+        } catch {
+          // 窗口销毁/最小化等瞬态失败：下 tick 重试
+        } finally {
+          busy = false;
+        }
+      })();
+    }, CURSOR_PATROL_MS);
+    return () => {
+      window.clearInterval(timer);
+      void win.setIgnoreCursorEvents(false);
+    };
+  }, []);
+
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     setActivity((n) => n + 1);
     downRef.current = { x: e.screenX, y: e.screenY };
+    // 捕获指针：命中矩形收紧后，贴边按住稍一滑就出区，不捕获会丢
+    // move/up（拖拽判定失灵、downRef 悬空）。移交系统拖窗后捕获自然失效
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -257,9 +513,20 @@ export function PetWindow() {
   };
 
   const onPointerUp = () => {
-    // 原地松手：睡着时摸 = 伸懒腰醒来（播完回 idle）；其余状态 = 摸摸开心
+    // 原地松手（没触发拖拽）：按当前状态给不同反馈——
+    //  · 躲好/探头中点尾巴 = 召回，从边缘跑回画面（拖尾巴则仍走上面的悬空搬窝）；
+    //  · 睡着摸 = 伸懒腰醒来；· 其余 = 摸摸开心。
+    // 躲/召回进行中（hiding/unhide）不打断，保持原状态
     if (downRef.current) {
-      setState((s) => (s === "sleeping" ? "stretching" : "petted"));
+      setState((s) => {
+        if (s === "hiddenLeft" || s === "peekingLeft") return "unhideLeft";
+        if (s === "hiddenRight" || s === "peekingRight") return "unhideRight";
+        if (s === "hidingLeft" || s === "hidingRight" || s === "unhideLeft" || s === "unhideRight") {
+          return s;
+        }
+        if (s === "sleeping") return "stretching";
+        return "petted";
+      });
     }
     downRef.current = null;
   };
@@ -271,6 +538,7 @@ export function PetWindow() {
           开了「点气泡拉起对话」则整个气泡可点（含尾巴/圆圈），否则不拦指针 */}
       {bubble && (
         <Bubble
+          ref={bubbleRef}
           data-clickable={bubbleClickable || undefined}
           data-closing={closing || undefined}
           onClick={bubbleClickable ? openChatFromBubble : undefined}
@@ -301,13 +569,12 @@ export function PetWindow() {
           )}
         </Bubble>
       )}
-      {/* 只有桌宠本体可交互：按下摸头 / 拖动搬窝，空白区不拦截桌面点击 */}
-      <PetHit
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-      >
+      {/* 只有桌宠本体可交互：命中区 = 当前帧带非透明像素的最小包围盒（覆盖层，
+          扫描未就绪前按整帧兜底），按下摸头 / 拖动搬窝；精灵框其余透明边角
+          和窗口空白一样，由光标巡逻做成真穿透 */}
+      <SpriteBox>
         <SpriteView
+          ref={spriteRef}
           role="img"
           aria-label="雪豹"
           style={{
@@ -316,13 +583,26 @@ export function PetWindow() {
             backgroundPosition: `${-frame * FRAME_PX}px 0`,
           }}
         />
-      </PetHit>
+        <PetHit
+          ref={hitRef}
+          style={{
+            left: (bodyRect?.x ?? 0) * SPRITE_SCALE,
+            top: (bodyRect?.y ?? 0) * SPRITE_SCALE,
+            width: (bodyRect?.w ?? SPRITE_SIZE) * SPRITE_SCALE,
+            height: (bodyRect?.h ?? SPRITE_SIZE) * SPRITE_SCALE,
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
+      </SpriteBox>
     </Stage>
   );
 }
 
 /* 舞台：铺满透明窗口，桌宠沉底、气泡自下往上叠在头顶。
-   pointer-events:none 让空白区不拦截桌面点击（只有桌宠本体 PetHit 收事件） */
+   pointer-events:none 只管网页内命中（事件都归 PetHit / 可点气泡）；
+   对桌面的真穿透由光标巡逻切 setIgnoreCursorEvents 实现 */
 const Stage = styled.div`
   position: relative;
   display: flex;
@@ -336,10 +616,17 @@ const Stage = styled.div`
   pointer-events: none;
 `;
 
-/* 桌宠本体命中区：整个交互（摸头/拖窗）都在这，光标手型也只在它上面 */
+/* 精灵框：FRAME_PX 见方的定位容器，本身不收事件（视觉与命中分离） */
+const SpriteBox = styled.div`
+  position: relative;
+  pointer-events: none;
+`;
+
+/* 桌宠本体命中区：贴着本体最小矩形的透明覆盖层（left/top/width/height 由
+   帧带扫描结果内联），整个交互（摸头/拖窗）都在这，光标手型也只在它上面 */
 const PetHit = styled.div`
+  position: absolute;
   pointer-events: auto;
-  display: flex;
   cursor: grab;
 
   &:active {

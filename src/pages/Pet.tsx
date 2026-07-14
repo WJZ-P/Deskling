@@ -47,6 +47,8 @@ const ANIM_TESTS = [
   { key: "walking", label: "走路" },
   { key: "walkingLeft", label: "走路←" },
   { key: "walkingRight", label: "走路→" },
+  { key: "walkingUp", label: "走路↑" },
+  { key: "walkingDown", label: "走路↓" },
   { key: "typing", label: "敲电脑" },
   { key: "petted", label: "摸头" },
   { key: "sleeping", label: "睡觉" },
@@ -60,6 +62,8 @@ const ANIM_TESTS = [
   { key: "hidingRight", label: "躲→" },
   { key: "peekingLeft", label: "探头←" },
   { key: "peekingRight", label: "探头→" },
+  { key: "unhideLeft", label: "召回←" },
+  { key: "unhideRight", label: "召回→" },
 ] as const;
 
 function Pet() {

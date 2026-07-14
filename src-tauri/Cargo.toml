@@ -34,6 +34,9 @@ cpal = "0.18.1"
 # 命令输出编码回退：中文 Windows 控制台输出是 GBK(CP936)，UTF-8 解码失败时用它救乱码
 [target.'cfg(windows)'.dependencies]
 encoding_rs = "0.8"
+# 系统级鼠标键状态（GetAsyncKeyState）：OS 拖窗模态循环里网页收不到指针
+# 事件，桌宠窗靠它区分「拖到屏幕边顶住不动」和「已经松手」（版本对齐依赖树里已有的 0.59）
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
