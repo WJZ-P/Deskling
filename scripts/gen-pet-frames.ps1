@@ -110,6 +110,13 @@ function Look-Side([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(7, 8, 19, 20) 14 $DARK
 }
 
+# 右瞟眼：Look-Side 的镜像，瞳孔整体右移 1px（入场探头左右张望用）
+function Look-Right([System.Drawing.Bitmap]$bmp) {
+  Clear-Eyes $bmp
+  Set-Px $bmp @(9, 10, 21, 22) 13 $DARK
+  Set-Px $bmp @(9, 10, 21, 22) 14 $DARK
+}
+
 # 安详合眼：略宽的一字闭眼线
 function Close-Eyes([System.Drawing.Bitmap]$bmp) {
   Clear-Eyes $bmp
@@ -787,6 +794,34 @@ Build-Strip "peek-right.png" (Add-Flip $PEEK_LEFT)
 # 右前腿举起托腮（Think-Paw，地上三条腿），头顶「…」点点逐帧冒出又散去，
 # 眼神上瞟 → 侧瞟 → 眯眼轮换，配呼吸和慢速尾摆。op 顺序：眼/尾 → 托腮 →
 # 呼吸压缩 → 点点（悬浮物最后画，不随头动）
+# 整画布下沉 $px：坠出画布底的像素直接裁掉——身体大部分藏在画面下边，
+# 只露头顶（从底边探出来的入场戏用）。绝对坐标的五官/耳朵 op 先做，
+# 本 op 必须是该帧最后一个身体 op（同 Slide-Left 的约定）
+function Sink-Deep([System.Drawing.Bitmap]$bmp, [int]$px) {
+  Shift-Region $bmp 0 0 31 31 0 $px
+}
+
+# ==== enter：入场登台（play-once → greeting，召唤上桌 / 启动时播） ====
+# 三幕：底边先冒耳朵尖（S25→S22→S19 逐帧上浮）→ 眼睛探出来（S16，嘴还
+# 埋在画外）左右张望、尾巴尖跟着在右缘冒头轻摆、安心眨个眼 → 缩下去蓄力
+# （S19 只剩耳朵 + 耳尖压平）→「蹦！」一帧直上跃出画面顶点（Hop 2 开心脸），
+# 播完接 greeting 从同款腾空姿势落地挥手，整套登场一气呵成。
+# 张望/蓄力的驻留节奏由播放侧 sequence 编排（重复帧号 = 定格）
+Build-Strip "enter.png" @(
+  { param($f) Sink-Deep $f 29 },                                       # 0  全埋（空帧起手，从无到有）
+  { param($f) Sink-Deep $f 25 },                                       # 1  耳朵尖冒出来
+  { param($f) Sink-Deep $f 22 },                                       # 2  两耳全露
+  { param($f) Sink-Deep $f 19 },                                       # 3  露到眉弓（眼睛还藏着）
+  { param($f) Sink-Deep $f 16 },                                       # 4  眼睛探出！正视
+  { param($f) Look-Side $f; Sink-Deep $f 16 },                         # 5  瞟左
+  { param($f) Look-Side $f; Sway-Tail $f; Sink-Deep $f 16 },           # 6  瞟左 + 尾尖轻摆
+  { param($f) Look-Right $f; Sink-Deep $f 16 },                        # 7  瞟右
+  { param($f) Look-Right $f; Sway-Tail $f; Sink-Deep $f 16 },          # 8  瞟右 + 尾尖轻摆
+  { param($f) Half-Eyes $f; Sink-Deep $f 16 },                         # 9  确认安全，安心眨眼
+  { param($f) Flick-Ear $f; Sink-Deep $f 19 },                         # 10 缩下去蓄力（耳尖压平）
+  { param($f) Happy-Eyes $f; Open-Mouth $f; Sway-Tail2 $f; Hop $f 2 }  # 11 蹦！跃出顶点 → 接 greeting 落地挥手
+)
+
 Build-Strip "think.png" @(
   { param($f) Look-Up $f; Think-Paw $f; Think-Dots $f 1 },                               # 0  上瞟 ·   T0
   { param($f) Look-Up $f; Sway-Tail $f; Think-Paw $f; Think-Dots $f 2 },                 # 1  上瞟 ··  T1

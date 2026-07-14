@@ -53,6 +53,7 @@ const ANIM_TESTS = [
   { key: "yawning", label: "打哈欠" },
   { key: "stretching", label: "伸懒腰" },
   { key: "dangling", label: "悬空" },
+  { key: "entering", label: "入场" },
   { key: "greeting", label: "打招呼" },
   { key: "thinking", label: "思考中" },
   { key: "hidingLeft", label: "躲←" },
@@ -79,8 +80,8 @@ function Pet() {
     try {
       const shown = await invoke<boolean>("pet_toggle");
       setPetShown(shown);
-      // 召唤上桌：让小家伙落地打个招呼（收起时不发）
-      if (shown) void emitTo("pet", "pet:play", { state: "greeting" });
+      // 召唤上桌：从底边探头张望再蹦出来，接落地挥手（收起时不发）
+      if (shown) void emitTo("pet", "pet:play", { state: "entering" });
     } catch (err) {
       console.warn("pet_toggle failed:", err);
     }

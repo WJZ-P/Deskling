@@ -35,6 +35,12 @@ const SEQ_12 = Array.from({ length: 12 }, (_, i) => i);
  */
 const HIDDEN_SEQ = [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0];
 
+/**
+ * enter 入场序列：冒头段逐帧上浮，张望/眨眼/蓄力各驻留两拍（重复帧号 =
+ * 定格），最后一帧单拍「蹦！」直上——fps 8 下全程约 2.5s，播完接 greeting
+ */
+const ENTER_SEQ = [0, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11];
+
 /** 12 帧顺播条目的简写（大多数帧带都是这个形状） */
 const strip = (src: string, fps: number, extra?: Partial<AnimDef>): AnimDef => ({
   src,
@@ -78,7 +84,13 @@ export const ANIMS = {
   stretching: [strip("/pet/anim/stretch.png", 8, { loop: false })],
   // 拖拽悬空：被拎起来四腿蹬空 + 尾巴乱甩（拖窗期间循环，停稳回 idle）
   dangling: [strip("/pet/anim/dangle.png", 8)],
-  // 登场打招呼：蹦跳落地 + 举左前腿挥手（召唤到桌面时播一次，播完回 idle）
+  // 入场登台：从画面底边先冒耳朵尖 → 眼睛探出来左右张望（尾巴尖跟着在右缘
+  // 冒头轻摆）→ 安心眨眼 → 缩下去蓄力 →「蹦！」跃出画面顶点，播完接
+  // greeting 从同款腾空姿势落地挥手——召唤到桌面 / 启动时的完整登场戏
+  entering: [
+    { src: "/pet/anim/enter.png", frames: 12, sequence: ENTER_SEQ, fps: 8, loop: false, next: "greeting" },
+  ],
+  // 登场打招呼：蹦跳落地 + 举左前腿挥手（entering 蹦出后顺势接入；也可单独点播），播完回 idle
   greeting: [strip("/pet/anim/greet.png", 8, { loop: false })],
   // 思考中：右前腿托腮 + 头顶「…」逐帧冒出 + 眼神上瞟/侧瞟轮换
   // 触发源 = 对话窗事件桥，等首包/推理输出/消化工具结果期间

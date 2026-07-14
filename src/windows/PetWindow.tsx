@@ -21,9 +21,9 @@ import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
  *
  * 状态机：idle（待机眨眼）⇄ petted（点击摸头，播完自回）；久置经 yawning
  * （打哈欠趴下）入 sleeping，睡着被摸经 stretching（伸懒腰）醒回 idle；
- * 拖窗 = dangling（被拎起蹬腿），停稳回 idle；召唤上桌播一次 greeting
- * （落地挥手）；thinking/typing/talking 由对话窗事件桥驱动（等首包托腮
- * → 执行工具敲电脑 → 正文输出说话，收工回 idle）。
+ * 拖窗 = dangling（被拎起蹬腿），停稳回 idle；召唤上桌播一次 entering
+ * （底边探头张望再蹦出）接 greeting（落地挥手）；thinking/typing/talking
+ * 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 → 正文输出说话，收工回 idle）。
  * 交互：按下后原地松手 = 摸摸；移动超过阈值 = 移交系统拖窗。
  * 由 Pet 页「召唤到桌面」按钮（pet_toggle 命令，再点即收起）唤出；点 X 的
  * 全局拦截同样适用于本窗口（关闭 = 隐藏）。
@@ -89,8 +89,9 @@ function useSpriteAnim(def: AnimDef, onEnd?: () => void): number {
 }
 
 export function PetWindow() {
-  // 初始即 greeting：启动时窗口在桌面上就来一次落地问候（隐藏启动则悄悄播完落回 idle）
-  const [state, setState] = useState<PetState>("greeting");
+  // 初始即 entering：启动时从画面底边探头张望再蹦出来，接 greeting 落地挥手
+  // 完成整套登场（隐藏启动则悄悄播完落回 idle）
+  const [state, setState] = useState<PetState>("entering");
   // 交互脉冲：每次指针按下 +1，重置入睡倒计时（拖窗不改 state，靠它兜底）
   const [activity, setActivity] = useState(0);
   // 进入状态时抽定帧带变体（多变体随机），状态不变则整段咬死不换
