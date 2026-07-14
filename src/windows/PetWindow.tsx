@@ -26,7 +26,7 @@ import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
  *
  * 状态机：idle（待机眨眼）⇄ petted（点击摸头，播完自回）；久置经 yawning
  * （打哈欠趴下）入 sleeping，睡着被摸经 stretching（伸懒腰）醒回 idle；
- * 拖窗 = dangling（被拎起蹬腿），停稳回 idle；召唤上桌播一次 entering
+ * 拖窗 = 按拖动方向跟手小跑（walkingLeft/Right/Up/Down），停稳回 idle；召唤上桌播一次 entering
  * （底边探头张望再蹦出）接 greeting（落地挥手）；thinking/typing/talking
  * 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 → 正文输出说话，收工回 idle）。
  * 交互：命中区收紧到本体最小矩形（帧带非透明像素并集包围盒，运行时扫描，
@@ -70,6 +70,18 @@ const CURSOR_PATROL_MS = 60;
 /** 松手时本体出侧边超过这个比例的身位，判定为「想塞出去」→ 贴边躲藏；
     低于则吸回屏内 */
 const HIDE_OVER_RATIO = 0.2;
+
+/** 「移动态」集合：拖拽跟手的走路（按方向分四向）+ 悬空。onMoved 只在这些
+    状态里按拖动方向切向，停表也只对这些状态收步——不打断播放中的一次性动画 */
+const MOVE_STATES: PetState[] = [
+  "walking",
+  "walkingLeft",
+  "walkingRight",
+  "walkingUp",
+  "walkingDown",
+  "dangling",
+];
+const isMoveState = (s: PetState) => MOVE_STATES.includes(s);
 
 // 动画登记表（状态 → 帧带变体组）在 src/pet/animations.ts；管理器负责
 // 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
@@ -342,44 +354,36 @@ export function PetWindow() {
     return () => window.clearTimeout(t);
   }, [state]);
 
-  // 移动停表：走路/悬空状态在窗口停稳 WALK_STOP_MS 后回待机。
-  // 拖拽分支和 onMoved 共用（悬空由拖拽进入，之后靠 onMoved 续命）。
+  // 移动停表：拖拽走路等移动态在窗口停稳 WALK_STOP_MS 后回待机。
+  // onMoved 每次移动都续命，拖拽分支起手武装。
   // 坑：拖到屏幕边缘顶住时光标被物理边界挡停，窗口不再位移、onMoved 断流，
   // 但手还没松——OS 拖窗期间网页收不到指针事件，只能拿系统级键位查询兜底：
-  // 仍按着就续命保持悬空，真松手了才收步 + 落点校正（校正也因此严格发生在
+  // 仍按着就续命保持走路，真松手了才收步 + 落点校正（校正也因此严格发生在
   // 松手后，不会中途跟 OS 拖窗抢窗口）
   const stopTimerRef = useRef(0);
   const bumpMoveStop = () => {
     window.clearTimeout(stopTimerRef.current);
     stopTimerRef.current = window.setTimeout(() => {
       void (async () => {
-        if (stateRef.current === "dangling") {
+        if (isMoveState(stateRef.current)) {
           const held = await invoke<boolean>("mouse_pressed").catch(() => false);
           if (held) {
             bumpMoveStop();
             return;
           }
         }
-        setState((s) =>
-          s === "walking" ||
-          s === "walkingLeft" ||
-          s === "walkingRight" ||
-          s === "walkingUp" ||
-          s === "walkingDown" ||
-          s === "dangling"
-            ? "idle"
-            : s,
-        );
+        setState((s) => (isMoveState(s) ? "idle" : s));
         // 停稳后落位：大半出侧边贴边躲起来，其余越界吸回工作区
         void settleAfterMove();
       })();
     }, WALK_STOP_MS);
   };
 
-  // 窗口在移动：被指针拎着 = 悬空蹬腿（拖拽分支已置 dangling，这里保持）；
-  // 其余移动（将来自主散步）按主导轴选朝向——横向占优（含平手）用侧脸帧带，
-  // 纵向占优分上下：向下 = 低头看脚下，向上 = 仰头走（五官压向行进方向，
-  // 同左右走）；零位移（首个事件方向未知）兜底正面步态
+  // 窗口在移动 = 正被拖着走：按拖动的主导轴选朝向让它跟手小跑——横向占优
+  // （含平手）用侧脸帧带（往左跑 / 往右跑），纵向占优分上下（向下 = 低头看
+  // 脚下，向上 = 仰头走，五官压向行进方向）；零位移兜底正面步态。
+  // 只在「移动态」里按方向切（拖拽起手由 onPointerMove 置入），不打断播放中
+  // 的一次性动画（召回/摸头等窗口不动，本就不会走到这）
   const lastXRef = useRef<number | null>(null);
   const lastYRef = useRef<number | null>(null);
   useEffect(() => {
@@ -398,7 +402,7 @@ export function PetWindow() {
       lastXRef.current = payload.x;
       lastYRef.current = payload.y;
       setState((s) => {
-        if (s === "dangling") return s;
+        if (!isMoveState(s)) return s;
         if (dx === 0 && dy === 0) return "walking";
         if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "walkingLeft" : "walkingRight";
         return dy < 0 ? "walkingUp" : "walkingDown";
@@ -443,17 +447,7 @@ export function PetWindow() {
     let busy = false; // tick 内多次 await，防重入
     const timer = window.setInterval(() => {
       if (busy) return;
-      const s = stateRef.current;
-      if (
-        downRef.current ||
-        s === "dangling" ||
-        s === "walking" ||
-        s === "walkingLeft" ||
-        s === "walkingRight" ||
-        s === "walkingUp" ||
-        s === "walkingDown"
-      )
-        return;
+      if (downRef.current || isMoveState(stateRef.current)) return;
       busy = true;
       void (async () => {
         try {
@@ -503,10 +497,21 @@ export function PetWindow() {
     const d = downRef.current;
     if (!d) return;
     // 超阈值：判定为拖拽，移交系统拖窗（之后指针事件归 OS，松手不算摸摸）。
-    // 被拎起来 = 悬空蹬腿；窗口停稳后由移动停表收回待机
-    if (Math.abs(e.screenX - d.x) + Math.abs(e.screenY - d.y) > DRAG_THRESHOLD_PX) {
+    // 跟手小跑——按越过阈值这一下的指针方向定初始朝向（消掉首帧的方向空窗），
+    // 之后由 onMoved 随窗口位移持续校正朝向；窗口停稳后由移动停表收回待机
+    const dx = e.screenX - d.x;
+    const dy = e.screenY - d.y;
+    if (Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD_PX) {
       downRef.current = null;
-      setState("dangling");
+      setState(
+        Math.abs(dx) >= Math.abs(dy)
+          ? dx < 0
+            ? "walkingLeft"
+            : "walkingRight"
+          : dy < 0
+            ? "walkingUp"
+            : "walkingDown",
+      );
       bumpMoveStop();
       void getCurrentWindow().startDragging();
     }
