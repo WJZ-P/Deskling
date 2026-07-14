@@ -47,6 +47,11 @@ import type {
 const BEEP_TAIL_MIN_MS = 0;
 const BEEP_TAIL_MAX_MS = 1000;
 
+// web 搜索类工具名判定：命中则桌宠举放大镜端详（searching），否则敲电脑
+// （typing）。按名匹配 = 前向兼容，等 web 搜索工具接入（如 web_search）动画
+// 自动就位；目前工具集（read_file/list_dir/write_file/run_command）均不命中
+const isSearchTool = (name: string) => /search|web/i.test(name);
+
 // 消息 id：必须跨会话唯一。若只用运行内自增计数器，程序重启后计数器归零、
 // 重新发号会和上次持久化的旧消息 id 相撞——新一轮 replyId 恰好等于某条旧消息 id 时，
 // appendDelta 会误命中那条旧消息、把新回复接到它尾部（表现为「AI 回复追加在上次消息结尾」）。
@@ -367,16 +372,20 @@ export function ChatWindow() {
   }, []);
 
   // ---- 桌宠事件桥：对话进行到哪一步，桌宠就演哪一出 ----
-  // thinking = 等首包/推理中（托腮）；typing = 工具执行中（敲电脑）；
-  // talking = 正文流式输出（说话）；idle = 一轮收工回待机。
-  // 去重后 emitTo 桌宠窗（与动画测试按钮同一条 pet:play 通道；窗口隐藏时播了也无妨）。
-  // 桌宠被摸会临时插播摸头，下一次桥状态变化时自动回到对话演出
+  // thinking = 等首包/推理中（托腮）；typing = 普通工具执行中（敲电脑）；
+  // searching = web 搜索类工具执行中（举放大镜端详）；talking = 正文流式输出
+  // （说话）；idle = 一轮收工回待机。去重后 emitTo 桌宠窗（与动画测试按钮同
+  // 一条 pet:play 通道；窗口隐藏时播了也无妨）。桌宠被摸会临时插播摸头，下一
+  // 次桥状态变化时自动回到对话演出
   const petStateRef = useRef<string | null>(null);
-  const petPlay = useCallback((state: "thinking" | "talking" | "typing" | "idle") => {
-    if (petStateRef.current === state) return;
-    petStateRef.current = state;
-    void emitTo("pet", "pet:play", { state }).catch(() => {});
-  }, []);
+  const petPlay = useCallback(
+    (state: "thinking" | "talking" | "typing" | "searching" | "idle") => {
+      if (petStateRef.current === state) return;
+      petStateRef.current = state;
+      void emitTo("pet", "pet:play", { state }).catch(() => {});
+    },
+    [],
+  );
 
   // ---- 语音（TTS）：桌宠在桌面上时，AI 回复实时出声 ----
   // 两种嗓音分开做：
@@ -616,7 +625,8 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
-          petPlay("typing"); // 干活了：桌宠敲电脑
+          // 干活了：web 搜索类工具举放大镜端详，其余工具敲电脑
+          petPlay(isSearchTool(call.name) ? "searching" : "typing");
           appendToolSegment(setConversations, convId, replyId, {
             kind: "tool",
             id: call.id,

@@ -28,7 +28,8 @@ import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
  * （打哈欠趴下）入 sleeping，睡着被摸经 stretching（伸懒腰）醒回 idle；
  * 拖窗 = 按拖动方向跟手小跑（walkingLeft/Right/Up/Down），停稳回 idle；召唤上桌播一次 entering
  * （底边探头张望再蹦出）接 greeting（落地挥手）；thinking/typing/talking
- * 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 → 正文输出说话，收工回 idle）。
+ * /searching 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 / web 搜索举放大镜
+ * → 正文输出说话，收工回 idle）。
  * 交互：命中区收紧到本体最小矩形（帧带非透明像素并集包围盒，运行时扫描，
  * 工坊任意精灵图通用）；按下后原地松手 = 摸摸；移动超过阈值 = 移交系统拖窗。
  * 命中区外的一切空白（含精灵框透明边角）经光标巡逻 setIgnoreCursorEvents

@@ -50,6 +50,7 @@ const ANIM_TESTS = [
   { key: "walkingUp", label: "走路↑" },
   { key: "walkingDown", label: "走路↓" },
   { key: "typing", label: "敲电脑" },
+  { key: "searching", label: "搜索" },
   { key: "petted", label: "摸头" },
   { key: "sleeping", label: "睡觉" },
   { key: "yawning", label: "打哈欠" },

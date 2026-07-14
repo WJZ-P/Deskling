@@ -83,8 +83,17 @@ export const ANIMS = {
     strip("/pet/anim/walk-right-pant.png", 10),
   ],
   // 敲电脑：左右爪交替敲击，节奏里夹眨眼/抬眼/顿一下
-  // 触发源 = 对话窗事件桥，agent 执行工具期间
+  // 触发源 = 对话窗事件桥，agent 执行工具期间（web 搜索类工具改走 searching）
   typing: [strip("/pet/anim/typing.png", 8)],
+  // 搜索中：两套道具变体，进入状态时随机抽一套整段播——
+  //  · 放大镜：举镜端详，镜内大瞳左右扫视 + 右眼挑眉 + 问号起伏，偶尔眨眼/歪头；
+  //  · 望远镜：左爪举镜眺望，镜筒俯仰摇镜扫视远方 + 右眼睁眼挑眉 + 问号起伏，
+  //    偶尔眨眼（望远镜放左侧、指左上方，让开右侧竖尾与两耳）。
+  // 触发源 = 对话窗事件桥，agent 执行 web 搜索类工具期间
+  searching: [
+    strip("/pet/anim/search.png", 5),
+    strip("/pet/anim/search-scope.png", 5),
+  ],
   // 摸头：两轮开心蹦跶（起跳→最高→回落→落地压缩），播完自回 idle
   petted: [strip("/pet/anim/petted.png", 8, { loop: false })],
   // 睡觉：猫貌团趴姿——呼吸起伏 + Zzz 上飘 + 尾尖/耳朵偶发小动作（6s 一循环）
