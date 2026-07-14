@@ -108,6 +108,8 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
     pressAtRef.current = Date.now();
     stopOnUpRef.current = false;
     e.currentTarget.setPointerCapture(e.pointerId);
+    // 你开口它闭嘴：录音期间停掉桌宠的语音播报，免得麦克风收进它自己的声音
+    void invoke("tts_stop").catch(() => {});
     try {
       // 麦克风设备来自设置页选择（"" = 系统默认，跨窗口 onKeyChange 保证缓存新鲜）
       await invoke("stt_start", { device: getSetting("sttDevice") || null });

@@ -76,6 +76,21 @@ export interface ProviderProfile {
 
 // ==================== 桌宠档案 ====================
 
+/** 桌宠嗓音绑定：语音包 + 包内音色。packId 为空串 = 显式静音（不说话） */
+export interface PetVoice {
+  packId: string;
+  voiceId: number;
+  /** 语速倍率（缺省 1.0） */
+  speed?: number;
+}
+
+/** 默认嗓音：静音（packId 空串）——桌宠默认不出声，想让它说话的在
+    人设面板挑一个音色 */
+export const DEFAULT_PET_VOICE: PetVoice = {
+  packId: "",
+  voiceId: 0,
+};
+
 /** 单个桌宠档案：桌宠页展示栏卡片 + 人设设置面板的数据源 */
 export interface PetProfile {
   id: string;
@@ -85,6 +100,8 @@ export interface PetProfile {
   prompt: string;
   /** 精灵图路径（public 下，主窗/桌宠窗通用） */
   sprite: string;
+  /** 嗓音绑定（人设面板选择）：缺省用 DEFAULT_PET_VOICE，packId 空串 = 静音 */
+  voice?: PetVoice;
 }
 
 /** 雪豹的默认人设 prompt（首次初始化用；用户可在面板里随意改） */
@@ -130,6 +147,12 @@ export interface AppSettings {
    * 常驻对话窗按下语音按钮时读取（跨窗口 onKeyChange 同步）。
    */
   sttDevice: string;
+  /**
+   * 语音播报扬声器设备名（"" = 系统默认）：设置页「声音 · 扬声器」选择，
+   * 对话窗逐句合成 / 人设面板试听时读取（跨窗口 onKeyChange 同步），
+   * 变化时 Rust 侧播放线程热重建。
+   */
+  ttsDevice: string;
   /** 桌宠说话气泡驻留时长（秒）：一轮回复说完后气泡再停这么久才消失 */
   petBubbleSecs: number;
   /** 点击桌宠气泡拉起 AI 对话窗（默认开启） */
@@ -151,6 +174,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoApproveTools: true,
   chatThinking: false,
   sttDevice: "",
+  ttsDevice: "",
   petBubbleSecs: 5,
   petBubbleClick: true,
   petProfiles: DEFAULT_PETS,
@@ -215,6 +239,10 @@ function bindCrossWindowSync(s: Store): void {
   // 麦克风设备在主窗口设置里选、常驻聊天窗按下语音按钮时读，同样要跨窗口刷
   void s.onKeyChange<string>("sttDevice", (v) => {
     cache.sttDevice = v ?? DEFAULT_SETTINGS.sttDevice;
+  });
+  // 扬声器设备在主窗口设置里选、常驻聊天窗逐句合成时读，同样要跨窗口刷
+  void s.onKeyChange<string>("ttsDevice", (v) => {
+    cache.ttsDevice = v ?? DEFAULT_SETTINGS.ttsDevice;
   });
   // 气泡驻留/点击行为在主窗口设置里改、常驻桌宠窗气泡收尾/点击时读，同样要跨窗口刷
   void s.onKeyChange<number>("petBubbleSecs", (v) => {
@@ -377,4 +405,10 @@ export async function updatePetProfile(
 ): Promise<void> {
   const next = cache.petProfiles.map((p) => (p.id === id ? { ...p, ...patch } : p));
   await setSetting("petProfiles", next);
+}
+
+/** 取某只桌宠的有效嗓音：没设置回退默认嗓；显式静音（packId 空串）返回 null */
+export function getPetVoice(p: PetProfile): PetVoice | null {
+  const v = p.voice ?? DEFAULT_PET_VOICE;
+  return v.packId ? v : null;
 }

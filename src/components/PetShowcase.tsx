@@ -1,14 +1,22 @@
 import { useEffect, useState } from "react";
 import { styled } from "@linaria/react";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
 import { PixelFrame } from "./pixel/PixelFrame";
 import { PixelModal } from "./pixel/PixelModal";
 import { PixelButton } from "./pixel/PixelButton";
 import { PixelInput } from "./pixel/PixelInput";
+import { PixelSelect, type PixelSelectOption } from "./pixel/PixelSelect";
 import { PixelTextarea } from "./pixel/PixelTextarea";
 import { PixelTip } from "./pixel/PixelTip";
 import { PRIORITY_PAL } from "./pixel/palettes";
-import { updatePetProfile, type PetProfile } from "../settings";
+import {
+  DEFAULT_PET_VOICE,
+  getSetting,
+  updatePetProfile,
+  type PetProfile,
+  type PetVoice,
+} from "../settings";
 
 /**
  * 桌宠展示栏（桌宠页用）：一排桌宠图标卡，当前桌宠排最前。
@@ -103,7 +111,15 @@ function PetIconCard({
   );
 }
 
-/** 人设面板：编辑名字 / 人设 prompt。open 由 pet != null 驱动 */
+/** 语音包扫描结果（tts_packs 命令返回的条目，前端只关心这些字段） */
+interface TtsPack {
+  id: string;
+  name: string;
+  voices: { id: number; name: string; lang?: string }[];
+  valid: boolean;
+}
+
+/** 人设面板：编辑名字 / 人设 prompt / 嗓音。open 由 pet != null 驱动 */
 function PetEditModal({
   pet,
   onClose,
@@ -115,20 +131,49 @@ function PetEditModal({
 }) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
+  // 嗓音草稿：packId 空串 = 静音（下拉里的显式选项）
+  const [voice, setVoice] = useState<PetVoice>(DEFAULT_PET_VOICE);
+  // 语音包列表：面板打开时扫一次（工坊装了新包重开面板即可见）
+  const [packs, setPacks] = useState<TtsPack[]>([]);
 
   // 打开面板（editing 换人）时，把草稿重置成该档案当前值
   useEffect(() => {
     if (pet) {
       setName(pet.name);
       setPrompt(pet.prompt);
+      setVoice(pet.voice ?? DEFAULT_PET_VOICE);
+      void invoke<TtsPack[]>("tts_packs")
+        .then((list) => setPacks(list.filter((p) => p.valid)))
+        .catch(() => setPacks([]));
     }
   }, [pet]);
 
   const save = async () => {
     if (!pet) return;
-    await updatePetProfile(pet.id, { name: name.trim() || pet.name, prompt });
+    await updatePetProfile(pet.id, { name: name.trim() || pet.name, prompt, voice });
     onSaved();
   };
+
+  // 试听：用草稿嗓音直接念一句（不用保存；静音态按钮禁用）
+  const audition = () => {
+    if (!voice.packId) return;
+    void invoke("tts_speak", {
+      text: `你好呀主人，我是${name.trim() || pet?.name || "你的桌宠"}，以后就用这个声音陪你说话喵。`,
+      packId: voice.packId,
+      voiceId: voice.voiceId,
+      speed: voice.speed ?? 1,
+      // 扬声器走设置页「声音 · 扬声器」（"" = 系统默认）
+      device: getSetting("ttsDevice") || null,
+    }).catch((err) => console.warn("tts 试听失败:", err));
+  };
+
+  const packOptions: PixelSelectOption[] = [
+    { value: "", label: "静音（不说话）" },
+    ...packs.map((p) => ({ value: p.id, label: p.name })),
+  ];
+  const activePack = packs.find((p) => p.id === voice.packId);
+  const voiceOptions: PixelSelectOption[] =
+    activePack?.voices.map((v) => ({ value: String(v.id), label: v.name })) ?? [];
 
   return (
     <PixelModal
@@ -156,9 +201,42 @@ function PetEditModal({
         />
       </FieldBlock>
       <FieldBlock>
+        <FieldLabel>嗓音</FieldLabel>
+        <VoiceRow>
+          <PixelSelect
+            options={packOptions}
+            value={voice.packId}
+            onChange={(packId) => {
+              // 换包音色归零（各包 sid 空间不同）；选静音只清 packId 保留原音色以便切回
+              setVoice((v) =>
+                packId === "" ? { ...v, packId: "" } : { packId, voiceId: 0 },
+              );
+            }}
+            variant="normal"
+          />
+          {voice.packId !== "" && (
+            <PixelSelect
+              options={voiceOptions}
+              value={String(voice.voiceId)}
+              onChange={(id) => setVoice((v) => ({ ...v, voiceId: Number(id) }))}
+              variant="normal"
+            />
+          )}
+          <PixelButton
+            small
+            pixel={3}
+            disabled={voice.packId === ""}
+            onClick={audition}
+          >
+            试听
+          </PixelButton>
+        </VoiceRow>
+        <FieldHint>它开口说话用的声音；桌宠在桌面上时对话会实时出声</FieldHint>
+      </FieldBlock>
+      <FieldBlock>
         <FieldLabel>人设 Prompt</FieldLabel>
         <PixelTextarea
-          rows={9}
+          rows={6}
           value={prompt}
           placeholder="它是谁、什么性格、怎么说话……"
           onChange={(e) => setPrompt(e.target.value)}
@@ -206,6 +284,14 @@ const FieldBlock = styled.div`
   display: flex;
   flex-direction: column;
   gap: 6px;
+`;
+
+/* 嗓音行：语音包 + 音色两个下拉 + 试听按钮，横排随宽换行 */
+const VoiceRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 `;
 
 const FieldLabel = styled.span`

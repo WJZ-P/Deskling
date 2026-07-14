@@ -7,6 +7,7 @@ use tauri::{
 mod provider;
 mod stt;
 mod tools;
+mod tts;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -148,6 +149,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // 语音输入全局状态：录音会话 + 常驻 SenseVoice 识别器
         .manage(stt::SttState::default())
+        // 语音输出全局状态：语音包缓存 + 合成/播放运行时（首次 tts_speak 拉起）
+        .manage(tts::TtsState::default())
         .setup(|app| {
             setup_tray(app)?;
             Ok(())
@@ -175,7 +178,12 @@ pub fn run() {
             stt::stt_devices,
             stt::stt_start,
             stt::stt_stop,
-            stt::stt_cancel
+            stt::stt_cancel,
+            tts::tts_packs,
+            tts::tts_output_devices,
+            tts::tts_speak,
+            tts::tts_beep_start,
+            tts::tts_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

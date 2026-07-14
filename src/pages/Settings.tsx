@@ -113,25 +113,34 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     void setSetting("petBubbleClick", next);
   }, []);
 
-  // 语音输入麦克风：挂载时向后端枚举一次输入设备；改动即落盘
-  // （onKeyChange 广播给常驻对话窗，下次按语音按钮生效）
+  // 语音输入麦克风 / 播报扬声器：挂载时向后端各枚举一次；改动即落盘
+  // （onKeyChange 广播给常驻对话窗，下次录音/念句生效）
   const [micDevices, setMicDevices] = useState<string[]>([]);
   const [micDevice, setMicDevice] = useState<string>(() => getSetting("sttDevice"));
+  const [spkDevices, setSpkDevices] = useState<string[]>([]);
+  const [spkDevice, setSpkDevice] = useState<string>(() => getSetting("ttsDevice"));
   useEffect(() => {
     void invoke<string[]>("stt_devices").then(setMicDevices).catch(() => {});
+    void invoke<string[]>("tts_output_devices").then(setSpkDevices).catch(() => {});
   }, []);
   const handleMicDevice = useCallback((v: string) => {
     setMicDevice(v);
     void setSetting("sttDevice", v);
   }, []);
+  const handleSpkDevice = useCallback((v: string) => {
+    setSpkDevice(v);
+    void setSetting("ttsDevice", v);
+  }, []);
   // 已选设备当前不在枚举列表（被拔掉了）时仍保留为一项，下拉不至于显示错位
-  const micOptions: PixelSelectOption[] = [
+  const deviceOptions = (devices: string[], current: string): PixelSelectOption[] => [
     { value: "", label: "系统默认" },
-    ...micDevices.map((d) => ({ value: d, label: d })),
-    ...(micDevice && !micDevices.includes(micDevice)
-      ? [{ value: micDevice, label: `${micDevice}（未找到）` }]
+    ...devices.map((d) => ({ value: d, label: d })),
+    ...(current && !devices.includes(current)
+      ? [{ value: current, label: `${current}（未找到）` }]
       : []),
   ];
+  const micOptions = deviceOptions(micDevices, micDevice);
+  const spkOptions = deviceOptions(spkDevices, spkDevice);
 
   return (
     <PixelPage>
@@ -245,6 +254,19 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
               options={micOptions}
               value={micDevice}
               onChange={handleMicDevice}
+              variant="normal"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>扬声器</PixelSettingLabel>
+              <PixelSettingDesc>桌宠说话从哪个设备出声（试听没声音先查这里）</PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSelect
+              options={spkOptions}
+              value={spkDevice}
+              onChange={handleSpkDevice}
               variant="normal"
             />
           </PixelSettingRow>

@@ -124,9 +124,13 @@ const Overlay = styled.div`
   }
 `;
 
+/* 面板整体不超过 90vh：内容装不下时由 Content 内部滚动消化（头/脚常驻可见） */
 const Panel = styled.div`
   position: relative;
   max-width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   transform-origin: center;
 
   &[data-open] {
@@ -148,10 +152,12 @@ const Panel = styled.div`
   }
 `;
 
-/* 内容层：浮在 PixelFrame 面板之上 */
+/* 内容层：浮在 PixelFrame 面板之上；随 Panel 的 90vh 上限收缩 */
 const Inner = styled.div`
   position: relative;
   z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -173,10 +179,16 @@ const Title = styled.h2`
   color: ${t.colorText};
 `;
 
+/* 主体：超高时内部滚动（细滚动条与输入框风格一致），头部/底部操作区不动 */
 const Content = styled.div`
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: ${t.colorBorderStrong} transparent;
 `;
 
 const Footer = styled.div`

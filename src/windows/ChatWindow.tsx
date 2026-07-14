@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { emitTo } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
 import { useTheme } from "../hooks/useTheme";
 import Titlebar from "../components/pixel/Titlebar";
@@ -13,7 +14,15 @@ import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
-import { getActivePet, getActiveProfile, getSetting, setSetting } from "../settings";
+import { SpeechSplitter } from "../chat/speech";
+import {
+  getActivePet,
+  getActiveProfile,
+  getPetVoice,
+  getSetting,
+  setSetting,
+  type PetVoice,
+} from "../settings";
 import type {
   ChatMessage,
   Conversation,
@@ -32,6 +41,11 @@ import type {
  * 关闭按钮 = 隐藏窗口（w.hide()），配合 Pet 页 / 托盘的 chat_toggle 再唤出，
  * 这样会话状态在一次运行内保留（不销毁窗口）。
  */
+
+// 电子拟声（beep）收尾：AI 回复结束后再随机叨叨这么久才闭嘴（ms 区间）——
+// 「AI 说完过一会才收声」的那个「一会儿」，可调
+const BEEP_TAIL_MIN_MS = 0;
+const BEEP_TAIL_MAX_MS = 1000;
 
 // 消息 id：必须跨会话唯一。若只用运行内自增计数器，程序重启后计数器归零、
 // 重新发号会和上次持久化的旧消息 id 相撞——新一轮 replyId 恰好等于某条旧消息 id 时，
@@ -292,6 +306,9 @@ export function ChatWindow() {
       // 删的是在途流所属的会话（按 liveRef 判定，与当前选中无关）：
       // 先终止在途请求并收尾，避免后端白跑 / 状态悬空
       if (liveRef.current?.convId === id && streamRef.current) {
+        window.clearTimeout(beepTailRef.current);
+        void invoke("tts_stop").catch(() => {});
+        speechRef.current = null;
         streamRef.current.cancel();
         streamRef.current = null;
         liveRef.current = null;
@@ -361,6 +378,64 @@ export function ChatWindow() {
     void emitTo("pet", "pet:play", { state }).catch(() => {});
   }, []);
 
+  // ---- 语音（TTS）：桌宠在桌面上时，AI 回复实时出声 ----
+  // 两种嗓音分开做：
+  //   neural = 普通音色（Kokoro 等）：分句器逐句真合成，念出实际内容；
+  //   beep   = 电子拟声：只模拟发音，开一次 tts_beep_start 持续叨叨，回复
+  //            完毕后随机延时 1-2s 再 tts_stop（「AI 说完过一会才闭嘴」）。
+  // 发起那刻按当前桌宠嗓音 + 桌宠是否在桌面上决定；null = 本轮不发声。
+  // packId → engine 的映射挂载时扫一次缓存（beep 是内置包，必在表里）
+  // beep 的 armed = 桌宠在桌面上、已确认可发声（但要等真实正文才开叨）；
+  // started = 已开叨（首个正文 delta 触发，避免 loading/思考阶段就出声）
+  const speechRef = useRef<
+    | { mode: "neural"; splitter: SpeechSplitter; voice: PetVoice }
+    | { mode: "beep"; voice: PetVoice; armed: boolean; started: boolean }
+    | null
+  >(null);
+  const engineByPackRef = useRef<Map<string, string>>(new Map());
+  // beep 收尾定时器：回复完后延时 tts_stop；新轮/打断要取消它，别误杀新叨叨
+  const beepTailRef = useRef(0);
+  useEffect(() => {
+    void invoke<{ id: string; engine: string; valid: boolean }[]>("tts_packs")
+      .then((list) => {
+        const m = new Map<string, string>();
+        for (const p of list) if (p.valid) m.set(p.id, p.engine);
+        engineByPackRef.current = m;
+      })
+      .catch(() => {});
+    return () => window.clearTimeout(beepTailRef.current);
+  }, []);
+  const speakSentences = useCallback((sentences: string[]) => {
+    const s = speechRef.current;
+    if (s?.mode !== "neural") return;
+    for (const text of sentences) {
+      void invoke("tts_speak", {
+        text,
+        packId: s.voice.packId,
+        voiceId: s.voice.voiceId,
+        speed: s.voice.speed ?? 1,
+        // 扬声器设备来自设置页（"" = 系统默认；变化时 Rust 播放线程热重建）
+        device: getSetting("ttsDevice") || null,
+      }).catch((err) => console.warn("tts_speak failed:", err));
+    }
+  }, []);
+
+  // 桌宠嘴型跟真实声音走：tts:state 是 Rust 播放线程的广播（带 300ms 停顿
+  // 豁免）。播放中 = 说话；间歇 = 回合内托腮（下一句在合成）/ 回合外回待机。
+  // 文字流驱动的 talking 在语音开启时让位（见 onDelta），两个驱动源不打架
+  const ttsPlayingRef = useRef(false);
+  useEffect(() => {
+    const unlisten = listen<{ playing?: boolean }>("tts:state", (e) => {
+      const playing = !!e.payload?.playing;
+      ttsPlayingRef.current = playing;
+      if (playing) petPlay("talking");
+      else petPlay(liveRef.current ? "thinking" : "idle");
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [petPlay]);
+
   // 气泡桥：把当前回复的累积文本推给桌宠窗，头顶气泡逐字长出。
   // kind 区分说话（正文，白面对话泡）与思考（reasoning，想法泡：三个小圆圈
   // 升上去）。高频到达 → 节流 ~100ms 只发最新一版；清空（text=""）与收尾
@@ -424,6 +499,37 @@ export function ChatWindow() {
     replyTextRef.current = "";
     thinkTextRef.current = "";
     petSay(""); // 清掉上一轮残留的气泡
+    // 语音：清上一轮残声（清队 + 弃稿 + 取消待收尾的 beep 定时器），按当前桌宠
+    // 嗓音挂本轮。beep 走叨叨（异步等确认桌宠在桌面上再开），neural 挂分句器。
+    // 桌宠不在桌面上则本轮静音（下面异步 pet_visible 兜底撤销）
+    window.clearTimeout(beepTailRef.current);
+    void invoke("tts_stop").catch(() => {});
+    const voice = getPetVoice(getActivePet());
+    const engine = voice ? engineByPackRef.current.get(voice.packId) : undefined;
+    if (voice && engine === "beep") {
+      speechRef.current = { mode: "beep", voice, armed: false, started: false };
+    } else if (voice) {
+      speechRef.current = { mode: "neural", splitter: new SpeechSplitter(), voice };
+    } else {
+      speechRef.current = null;
+    }
+    // 只在桌宠展示在桌面上时出声：异步查一次可见性，隐藏则撤销本轮语音。
+    // 注意 beep 在此只「备好」（armed），真正开叨等首个正文 delta——loading /
+    // 思考阶段不出声（pet_visible 是本地 IPC，早于首包返回，armed 先就位）
+    if (speechRef.current) {
+      const setup = speechRef.current;
+      void invoke<boolean>("pet_visible")
+        .then((visible) => {
+          if (speechRef.current !== setup) return;
+          if (!visible) {
+            speechRef.current = null;
+            void invoke("tts_stop").catch(() => {});
+          } else if (setup.mode === "beep") {
+            setup.armed = true;
+          }
+        })
+        .catch(() => {});
+    }
 
     // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
     // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
@@ -434,7 +540,25 @@ export function ChatWindow() {
       setStreamingId(null);
       streamRef.current = null;
       liveRef.current = null;
-      petPlay("idle"); // 一轮收工：桌宠回待机
+      // 语音收尾：neural 把分句器余量念完（嘴型交给 tts:state 落回 idle）；
+      // beep 不是念完就停——随机再叨 1-2s 才 tts_stop（AI 说完过一会才闭嘴）
+      const sp = speechRef.current;
+      speechRef.current = null;
+      if (sp?.mode === "neural") {
+        speakSentences(sp.splitter.flush());
+        if (!ttsPlayingRef.current) petPlay("idle");
+      } else if (sp?.mode === "beep" && sp.started) {
+        // 叨叨已在响：随机再叨 BEEP_TAIL 区间才 tts_stop（AI 说完过一会才闭嘴）；
+        // 嘴型保持 talking，tts_stop 后 tts:state(false) 落回 idle
+        const tail = BEEP_TAIL_MIN_MS + Math.random() * (BEEP_TAIL_MAX_MS - BEEP_TAIL_MIN_MS);
+        window.clearTimeout(beepTailRef.current);
+        beepTailRef.current = window.setTimeout(
+          () => void invoke("tts_stop").catch(() => {}),
+          tail,
+        );
+      } else {
+        petPlay("idle"); // 本轮无语音（含 beep 备好却没等到正文）：直接回待机
+      }
       petSay(replyTextRef.current, "say", true); // 气泡收尾：驻留一会儿再消失（正文为空则直接清）
       updateToolSegments(setConversations, convId, replyId, null, {
         status: "error",
@@ -451,9 +575,23 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
-          petPlay("talking"); // 正文开吐：桌宠开口说话
+          // 语音开启时嘴型由 tts:state（真实声音）驱动，文字流不抢；静音才走老路
+          if (!speechRef.current) petPlay("talking");
           replyTextRef.current += chunk;
           petSay(replyTextRef.current); // 累积正文推给头顶气泡（节流发送）
+          // 只在真实正文输出时发声（loading/思考阶段不出声）：
+          //   neural 逐句真合成念出内容；beep 首个正文 delta 才开叨（自主进行）
+          const sp = speechRef.current;
+          if (sp?.mode === "neural") {
+            speakSentences(sp.splitter.push(chunk));
+          } else if (sp?.mode === "beep" && sp.armed && !sp.started) {
+            sp.started = true;
+            void invoke("tts_beep_start", {
+              packId: sp.voice.packId,
+              voiceId: sp.voice.voiceId,
+              device: getSetting("ttsDevice") || null,
+            }).catch((err) => console.warn("tts_beep_start failed:", err));
+          }
           appendDelta(setConversations, convId, replyId, chunk);
         },
         // 思考增量：推理模型先吐 reasoning 再吐正文——首个思考片段一到就撤下
@@ -518,7 +656,7 @@ export function ChatWindow() {
       getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
-  }, [petPlay, petSay]);
+  }, [petPlay, petSay, speakSentences]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -563,6 +701,9 @@ export function ChatWindow() {
       // 有在途流先取消收尾（编辑期间输入框虽被 sending 禁用，但工具栏仍可用；
       // 且被截断丢弃的消息里可能正包含流式落点，不取消会写进已删除的消息）
       if (streamRef.current) {
+        window.clearTimeout(beepTailRef.current);
+        void invoke("tts_stop").catch(() => {});
+        speechRef.current = null;
         streamRef.current.cancel();
         streamRef.current = null;
         const live = liveRef.current;
@@ -618,6 +759,11 @@ export function ChatWindow() {
   // 后端随后回推的 Done 因 streamRef 已清空 + 状态已收拢，是无害空转。
   // 没答完的审批段就地扫成「已取消」（Rust 侧 cancel 同时唤醒了阻塞等审批的 loop）。
   const handleStop = useCallback(() => {
+    // 语音同步打断：闭嘴（清队弃稿 + 取消 beep 收尾定时器），并撤下本轮语音——
+    // 随后触发的 finish 不再把余量送去合成 / 不再排 beep 尾声
+    window.clearTimeout(beepTailRef.current);
+    void invoke("tts_stop").catch(() => {});
+    speechRef.current = null;
     streamRef.current?.cancel();
     streamRef.current = null;
     const live = liveRef.current;

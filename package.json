@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri dev": "tauri dev",
-    "fetch:stt": "node scripts/fetch-stt-model.mjs"
+    "fetch:models": "node scripts/fetch-stt-model.mjs"
   },
   "dependencies": {
     "@linaria/core": "^8.0.0",

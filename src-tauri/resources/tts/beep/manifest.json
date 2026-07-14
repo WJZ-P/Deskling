@@ -1,0 +1,16 @@
+{
+  "id": "beep",
+  "name": "电子拟声",
+  "engine": "beep",
+  "version": "1.0",
+  "author": "Deskling",
+  "license": "MIT",
+  "files": {},
+  "voices": [
+    { "id": 0, "name": "喵喵", "lang": "x", "wave": "voc", "base": 190, "blipMs": 112 },
+    { "id": 1, "name": "咕哝", "lang": "x", "wave": "voc", "base": 126, "blipMs": 128 },
+    { "id": 2, "name": "咪咪", "lang": "x", "wave": "voc", "base": 250, "blipMs": 100 },
+    { "id": 3, "name": "嘟嘟", "lang": "x", "wave": "square", "base": 200, "blipMs": 112 },
+    { "id": 4, "name": "啾啾", "lang": "x", "wave": "chirp", "base": 430, "blipMs": 98 }
+  ]
+}
