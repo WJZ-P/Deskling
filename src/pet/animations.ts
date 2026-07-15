@@ -9,7 +9,7 @@
  * Build-Strip spec + 这里登记一条；加变体 = 同状态数组多推一项。
  */
 
-/** 松手后的四拍收步速度；拖动中的柔性步态参数集中在 PetWindow.tsx 顶部。 */
+/** 松手后的四拍收步速度；拖动中的固定步态仍使用各 walking 条目的 10 FPS。 */
 const WALK_SETTLE_FPS = 10;
 
 /** 一段帧动画：横向帧带 + 播放序列（序列项 = 帧带里的帧号） */
@@ -29,11 +29,16 @@ export interface AnimDef {
 }
 
 /**
- * hidden 驻留序列：躲好后近静态——大部分 tick 定格在尾巴立正帧（重复帧号 =
- * 定格，播放 hook 帧号不变不重渲），偶尔懒摆一循环、松垂歇两拍（fps 2 下
- * 约 11s 一圈）。探头不在这里，独立成 peeking 状态由定时器驱动
+ * hidden 驻留序列：躲好后近静态——大部分 tick 定格主帧（重复帧号 = 定格，
+ * 播放 hook 帧号不变不重渲），偶尔让侧边尾巴轻摆/松垂，或让上下双耳弯一下。
+ * fps 2 下约 11s 一圈；探头独立成 peeking 状态由定时器驱动。
  */
-const HIDDEN_SEQ = [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0];
+const HIDDEN_EDGE_SEQ = [
+  0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0,
+];
+
+/** 顶部藏入在完全离场的空帧多停两拍，再倒挂回来露耳。 */
+const HIDE_UP_SEQ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 9, 10, 11];
 
 /**
  * enter 入场序列：冒头段逐帧上浮，张望/眨眼/蓄力各驻留两拍（重复帧号 =
@@ -137,7 +142,7 @@ export const ANIMS = {
   // 躲好（左）：近静态只剩尾巴——6 帧姿势 + 驻留序列（大部分时间定格立正，
   // 偶尔懒摆/松垂）；探头由桌宠窗定时器随机 1-3 分钟点播一次 peekingLeft
   hiddenLeft: [
-    { src: "/pet/anim/hidden-left.png", frames: 6, sequence: HIDDEN_SEQ, fps: 2, loop: true },
+    { src: "/pet/anim/hidden-left.png", frames: 6, sequence: HIDDEN_EDGE_SEQ, fps: 2, loop: true },
   ],
   // 探头偷看（左）：蹭出画缘 → 右眼粉耳露出、眨眼张望 → 缩回去，播完接回躲好
   peekingLeft: [strip("/pet/anim/peek-left.png", 4, { loop: false, next: "hiddenLeft" })],
@@ -147,10 +152,26 @@ export const ANIMS = {
   // 躲到屏幕右缘 / 躲好（右）/ 探头（右）/ 召回（右）：左侧版的整帧镜像
   hidingRight: [strip("/pet/anim/hide-right.png", 10, { loop: false, next: "hiddenRight" })],
   hiddenRight: [
-    { src: "/pet/anim/hidden-right.png", frames: 6, sequence: HIDDEN_SEQ, fps: 2, loop: true },
+    { src: "/pet/anim/hidden-right.png", frames: 6, sequence: HIDDEN_EDGE_SEQ, fps: 2, loop: true },
   ],
   peekingRight: [strip("/pet/anim/peek-right.png", 4, { loop: false, next: "hiddenRight" })],
   unhideRight: [strip("/pet/anim/unhide-right.png", 10, { loop: false })],
+  // 躲到底边：逐步下沉，只留双耳；双耳偶尔弯一下，随机探头时露眼张望。
+  hidingDown: [strip("/pet/anim/hide-down.png", 10, { loop: false, next: "hiddenDown" })],
+  hiddenDown: [
+    { src: "/pet/anim/hidden-down.png", frames: 6, sequence: HIDDEN_EDGE_SEQ, fps: 2, loop: true },
+  ],
+  peekingDown: [strip("/pet/anim/peek-down.png", 4, { loop: false, next: "hiddenDown" })],
+  unhideDown: [strip("/pet/anim/unhide-down.png", 10, { loop: false })],
+  // 躲到顶边：正常向上完全离场，空一拍后倒挂回来露耳；待机/探头是底边版纵向镜像。
+  hidingUp: [
+    { src: "/pet/anim/hide-up.png", frames: 12, sequence: HIDE_UP_SEQ, fps: 10, loop: false, next: "hiddenUp" },
+  ],
+  hiddenUp: [
+    { src: "/pet/anim/hidden-up.png", frames: 6, sequence: HIDDEN_EDGE_SEQ, fps: 2, loop: true },
+  ],
+  peekingUp: [strip("/pet/anim/peek-up.png", 4, { loop: false, next: "hiddenUp" })],
+  unhideUp: [strip("/pet/anim/unhide-up.png", 10, { loop: false })],
 } satisfies Record<string, AnimDef[]>;
 
 /** 桌宠状态：键即登记表的键（状态 ⇄ 动画组一一对应） */

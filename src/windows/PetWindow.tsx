@@ -40,9 +40,9 @@ import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
  * 交互：命中区收紧到本体最小矩形（帧带非透明像素并集包围盒，运行时扫描，
  * 工坊任意精灵图通用）；按下后原地松手 = 摸摸；移动超过阈值 = 移交系统拖窗。
  * 命中区外的一切空白（含精灵框透明边角）经光标巡逻 setIgnoreCursorEvents
- * 整窗穿透，点击直达桌面。拖拽松手后做落位：大半拖出左/右屏缘 = 贴边播
- * 躲边动画藏起来只剩尾巴（捏尾巴可拽回）；其余越界吸回工作区——有脚的家伙
- * 最低只能站在任务栏上沿，两侧/顶部同理（以本体矩形为准，气泡位不受限）。
+ * 整窗穿透，点击直达桌面。拖拽松手后做落位：明显拖出任一屏缘 = 贴边播
+ * 躲边动画（左右留尾巴、上下留双耳，可点击/拖动召回）；其余越界吸回工作区。
+ * 小幅盖住任务栏时会自己走回安全位置（以本体矩形为准，气泡位不受限）。
  * 由 Pet 页「召唤到桌面」按钮（pet_toggle 命令，再点即收起）唤出；点 X 的
  * 全局拦截同样适用于本窗口（关闭 = 隐藏）。
  */
@@ -72,12 +72,20 @@ const PEEK_MIN_MS = 60_000;
 const PEEK_RAND_MS = 120_000;
 /** 窗口停止移动这么久后走路收步回待机（ms） */
 const WALK_STOP_MS = 300;
+/** 任务栏保护触发后，自动走回工作区的逻辑像素速度（会按 DPR 换算，缩放下体感一致） */
+const TASKBAR_WALK_SPEED_PX_PER_SEC = 480;
+/** 自动走开至少持续这么久，保证很短的校正也能看见步态（ms） */
+const TASKBAR_WALK_MIN_MS = 260;
+/** 自动走开的时长上限，避免异常越界时走太久（ms） */
+const TASKBAR_WALK_MAX_MS = 600;
 /** 光标巡逻周期 ms：读全局光标判断在不在交互区，切换整窗穿透。
     调小则光标扫上桌宠后更快恢复可点，代价是 IPC 更密 */
 const CURSOR_PATROL_MS = 60;
-/** 松手时本体出侧边超过这个比例的身位，判定为「想塞出去」→ 贴边躲藏；
+/** 松手时本体越过任一工作区边缘超过这个比例的身位，判定为「想塞出去」→ 贴边躲藏；
     低于则吸回屏内 */
 const HIDE_OVER_RATIO = 0.2;
+/** Windows 原生拖窗会约束透明窗外框；其他平台保留系统拖窗作为兼容回退。 */
+const USE_MANUAL_WINDOW_DRAG = navigator.userAgent.includes("Windows");
 
 /** 「移动态」集合：拖拽跟手的走路（按方向分四向）+ 悬空。onMoved 只在这些
     状态里按拖动方向切向，停表也只对这些状态收步——不打断播放中的一次性动画 */
@@ -110,14 +118,74 @@ function settlingStateFor(s: PetState): PetState {
   return "settling";
 }
 
+/** 窗口即将移动的方向 → 对应固定步态。 */
+function walkingStateForDelta(dx: number, dy: number): PetState {
+  if (dx === 0 && dy === 0) return "walking";
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "walkingLeft" : "walkingRight";
+  return dy < 0 ? "walkingUp" : "walkingDown";
+}
+
+/** 程序化走位使用缓入缓出，避免从静止瞬间满速或抵达时急停。 */
+function easeInOutCubic(progress: number): number {
+  return progress < 0.5
+    ? 4 * progress * progress * progress
+    : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
+
+type SettleAfterMoveResult = "none" | "hidden" | "settled" | "cancelled";
+
 /** 「对话活动态」集合：对话窗事件桥推来的演出（说话/思考/敲电脑/搜索 + 收工待机）。
     这些态会被记进 convStateRef：拖拽打断后据它恢复、从隐藏被叫来时据它接演 */
 const CONV_STATES: PetState[] = ["talking", "thinking", "typing", "searching", "idle"];
 const isConvState = (s: PetState) => CONV_STATES.includes(s);
 
-/** 「躲藏态」集合：躲好在屏幕边缘 / 探头。此态下被叫来说话要先召回（unhide）冒出来 */
-const HIDDEN_STATES: PetState[] = ["hiddenLeft", "hiddenRight", "peekingLeft", "peekingRight"];
+/** 四边完全躲好后的驻留态。 */
+const HIDDEN_IDLE_STATES: PetState[] = [
+  "hiddenLeft",
+  "hiddenRight",
+  "hiddenUp",
+  "hiddenDown",
+];
+const isHiddenIdleState = (s: PetState) => HIDDEN_IDLE_STATES.includes(s);
+
+/** 四边偶发探头态。 */
+const PEEKING_STATES: PetState[] = [
+  "peekingLeft",
+  "peekingRight",
+  "peekingUp",
+  "peekingDown",
+];
+const isPeekingState = (s: PetState) => PEEKING_STATES.includes(s);
+
+/** 躲好或正在探头：被对话叫住时都要先召回。 */
+const HIDDEN_STATES: PetState[] = [...HIDDEN_IDLE_STATES, ...PEEKING_STATES];
 const isHiddenState = (s: PetState) => HIDDEN_STATES.includes(s);
+
+/** 正在向四边藏入 / 从四边召回的一次性过渡。 */
+const HIDING_STATES: PetState[] = ["hidingLeft", "hidingRight", "hidingUp", "hidingDown"];
+const UNHIDE_STATES: PetState[] = ["unhideLeft", "unhideRight", "unhideUp", "unhideDown"];
+const isHidingState = (s: PetState) => HIDING_STATES.includes(s);
+const isUnhideState = (s: PetState) => UNHIDE_STATES.includes(s);
+
+/** 当前所在边缘 → 对应的召回动画。 */
+function unhideStateFor(s: PetState): PetState {
+  if (s === "hiddenRight" || s === "peekingRight" || s === "hidingRight") {
+    return "unhideRight";
+  }
+  if (s === "hiddenUp" || s === "peekingUp" || s === "hidingUp") return "unhideUp";
+  if (s === "hiddenDown" || s === "peekingDown" || s === "hidingDown") {
+    return "unhideDown";
+  }
+  return "unhideLeft";
+}
+
+/** 完全躲好态 → 同边缘的偶发探头动画。 */
+function peekingStateFor(s: PetState): PetState {
+  if (s === "hiddenRight") return "peekingRight";
+  if (s === "hiddenUp") return "peekingUp";
+  if (s === "hiddenDown") return "peekingDown";
+  return "peekingLeft";
+}
 
 /**
  * 状态仲裁策略：循环态通常可随时切换；一次性反应/过渡在播放期间保护，
@@ -139,12 +207,7 @@ interface StateRequestOptions {
 function statePolicy(s: PetState): StatePolicy {
   if (isMoveState(s)) return { priority: 100, interruptible: true };
   if (isSettlingState(s)) return { priority: 90, interruptible: false };
-  if (
-    s === "hidingLeft" ||
-    s === "hidingRight" ||
-    s === "unhideLeft" ||
-    s === "unhideRight"
-  ) {
+  if (isHidingState(s) || isUnhideState(s)) {
     return { priority: 80, interruptible: false };
   }
   if (s === "entering" || s === "greeting") {
@@ -153,7 +216,7 @@ function statePolicy(s: PetState): StatePolicy {
   if (s === "petted" || s === "stretching") {
     return { priority: 60, interruptible: false };
   }
-  if (s === "yawning" || s === "peekingLeft" || s === "peekingRight") {
+  if (s === "yawning" || isPeekingState(s)) {
     return { priority: 50, interruptible: false };
   }
   if (isConvState(s)) return { priority: 30, interruptible: true };
@@ -292,7 +355,7 @@ export function PetWindow() {
     anim,
     () => {
       const current = stateRef.current;
-      const isRecall = current === "unhideLeft" || current === "unhideRight";
+      const isRecall = isUnhideState(current);
 
       // 召回 / 收步是动态过渡：播完优先接缓存目标；目标已收工则回 idle。
       if (isRecall || isSettlingState(current)) {
@@ -317,10 +380,7 @@ export function PetWindow() {
 
       // 正在躲边时被对话叫住：完整播完冲出画面，再从同侧跑回来接演。
       const queued = queuedStateRef.current;
-      if (
-        (current === "hidingLeft" || current === "hidingRight") &&
-        (queued === "unhideLeft" || queued === "unhideRight")
-      ) {
+      if (isHidingState(current) && queued && isUnhideState(queued)) {
         queuedStateRef.current = null;
         requestState(queued, { force: true, queueIfBlocked: false });
         return;
@@ -440,26 +500,72 @@ export function PetWindow() {
   // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
   // 巡逻 tick 就只剩 cursorPosition 一次 IPC
   const winPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastXRef = useRef<number | null>(null);
+  const lastYRef = useRef<number | null>(null);
   // 真 = 下一次 onMoved 来自落点校正的 setPosition：只记位置，不进走路状态
   const clampMoveRef = useRef(false);
+  // 任务栏保护的程序化走位期间，onMoved 只同步坐标；run id 让用户按下时可立即取消。
+  const autoMoveRef = useRef(false);
+  const autoMoveRunRef = useRef(0);
+  // 原生 startDragging 会按整个 240×380 透明窗做屏幕边界保护：顶部为气泡
+  // 预留的空气先撞到屏幕顶，猫本体便永远塞不出去。桌宠改用全局鼠标坐标
+  // 自行跟手移动；run id 同时负责 PointerUp 与系统键位兜底之间的去重取消。
+  const manualDragRef = useRef(false);
+  const manualDragRunRef = useRef(0);
 
-  // 松手落位：按本体命中矩形（非整窗，头顶气泡展示位可以越出屏顶）三选一——
-  //  · 本体拖出左/右屏缘超过 HIDE_OVER_RATIO 个身位 = 想把它塞出去：窗口
-  //    贴到屏缘（精灵帧边对齐 workArea 边），播躲边动画冲出画面，只剩尾巴
-  //    露在外面（hiding → hidden，探头计时器接管）；
-  //  · 其余越界：吸回工作区——有脚的家伙最低站在任务栏上沿（workArea 底边），
-  //    两侧吸边、顶部兜住防拖丢；
+  /**
+   * 把整个透明窗口逐帧移动到目标物理坐标。每次 setPosition 完成后才排下一帧，
+   * 避免 IPC 堆积；返回 false 表示途中被用户按下取消。
+   */
+  const animateWindowTo = async (
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    durationMs: number,
+  ): Promise<boolean> => {
+    const run = ++autoMoveRunRef.current;
+    autoMoveRef.current = true;
+    const win = getCurrentWindow();
+    const startedAt = performance.now();
+
+    try {
+      while (true) {
+        const now = await new Promise<number>((resolve) =>
+          window.requestAnimationFrame(resolve),
+        );
+        if (autoMoveRunRef.current !== run) return false;
+
+        const progress = Math.min(1, (now - startedAt) / Math.max(1, durationMs));
+        const eased = easeInOutCubic(progress);
+        const x = Math.round(from.x + (to.x - from.x) * eased);
+        const y = Math.round(from.y + (to.y - from.y) * eased);
+        await win.setPosition(new PhysicalPosition(x, y));
+        winPosRef.current = { x, y };
+        lastXRef.current = x;
+        lastYRef.current = y;
+
+        if (progress >= 1) return true;
+      }
+    } finally {
+      if (autoMoveRunRef.current === run) autoMoveRef.current = false;
+    }
+  };
+
+  // 松手落位：按本体命中矩形（非整窗，头顶气泡展示位可以越出屏顶）四选一——
+  //  · 本体拖出任一屏缘超过 HIDE_OVER_RATIO 个身位 = 想把它塞出去：窗口
+  //    贴到对应边缘，播躲边动画；左右只留尾巴、上下只留双耳，随后探头计时器接管；
+  //  · 侵入任务栏占用的工作区边缘：切对应步态，缓入缓出走回安全位置，再收步；
+  //  · 其余越界：保持原来的瞬时吸边，顶部兜住防拖丢；
   //  · 没越界：不动。
   // OS 拖窗的模态循环里抢 setPosition 会打架，所以只挂在移动停表上，且
   // 停表靠系统键位查询保证真松手了才落位
-  // 返回是否贴边躲藏了（true = 已切 hiding 态）——供 bumpMoveStop 决定要不要恢复对话态
-  const settleAfterMove = async (): Promise<boolean> => {
+  // 返回处理结果：任务栏走位会在函数内接好收步；普通校正仍由 bumpMoveStop 收尾。
+  const settleAfterMove = async (): Promise<SettleAfterMoveResult> => {
     const pos = winPosRef.current;
     const hit = hitRef.current;
     const sprite = spriteRef.current;
-    if (!pos || !hit || !sprite) return false;
+    if (!pos || !hit || !sprite) return "none";
     const monitor = await currentMonitor();
-    if (!monitor) return false;
+    if (!monitor) return "none";
     const dpr = window.devicePixelRatio;
     const wa = monitor.workArea;
     // 本体矩形的屏幕坐标（物理 px）
@@ -468,41 +574,107 @@ export function PetWindow() {
     const top = pos.y + r.top * dpr;
     const right = pos.x + r.right * dpr;
     const bottom = pos.y + r.bottom * dpr;
-    // 纵向一律夹回（躲边时同样生效：尾巴也不许埋进任务栏）
-    let dy = 0;
-    if (top < wa.position.y) dy = wa.position.y - top;
-    else if (bottom > wa.position.y + wa.size.height) {
-      dy = wa.position.y + wa.size.height - bottom;
-    }
-    // 横向：出界超过 HIDE_OVER_RATIO 个身位 → 躲边；更小的越界 → 吸回
-    const overL = wa.position.x - left;
-    const overR = right - (wa.position.x + wa.size.width);
+    const workLeft = wa.position.x;
+    const workTop = wa.position.y;
+    const workRight = workLeft + wa.size.width;
+    const workBottom = workTop + wa.size.height;
+    const overL = Math.max(0, workLeft - left);
+    const overR = Math.max(0, right - workRight);
+    const overT = Math.max(0, workTop - top);
+    const overB = Math.max(0, bottom - workBottom);
+    const bodyWidth = Math.max(1, right - left);
+    const bodyHeight = Math.max(1, bottom - top);
     const fr = sprite.getBoundingClientRect(); // 精灵帧矩形（躲边的贴边基准）
+
+    // 四边都按“越界身位比例”竞争：超过阈值才代表用户主动塞出去；角落同时
+    // 越过两边时取比例更深的一边。小幅越界仍只是吸回/任务栏走开保护。
+    const hideCandidate = [
+      { state: "hidingLeft" as const, ratio: overL / bodyWidth },
+      { state: "hidingRight" as const, ratio: overR / bodyWidth },
+      { state: "hidingUp" as const, ratio: overT / bodyHeight },
+      { state: "hidingDown" as const, ratio: overB / bodyHeight },
+    ].reduce((best, candidate) => (candidate.ratio > best.ratio ? candidate : best));
+    const hide: PetState | null =
+      hideCandidate.ratio > HIDE_OVER_RATIO ? hideCandidate.state : null;
+
     let dx = 0;
-    let hide: "hidingLeft" | "hidingRight" | null = null;
-    if (overL > (right - left) * HIDE_OVER_RATIO) {
-      hide = "hidingLeft";
-      dx = wa.position.x - (pos.x + fr.left * dpr);
-    } else if (overR > (right - left) * HIDE_OVER_RATIO) {
-      hide = "hidingRight";
-      dx = wa.position.x + wa.size.width - (pos.x + fr.right * dpr);
-    } else if (overL > 0) {
-      dx = overL;
-    } else if (overR > 0) {
-      dx = -overR;
+    let dy = 0;
+    if (hide === "hidingLeft") {
+      dx = workLeft - (pos.x + fr.left * dpr);
+      dy = overT > 0 ? overT : overB > 0 ? -overB : 0;
+    } else if (hide === "hidingRight") {
+      dx = workRight - (pos.x + fr.right * dpr);
+      dy = overT > 0 ? overT : overB > 0 ? -overB : 0;
+    } else if (hide === "hidingUp") {
+      dy = workTop - (pos.y + fr.top * dpr);
+      dx = overL > 0 ? overL : overR > 0 ? -overR : 0;
+    } else if (hide === "hidingDown") {
+      dy = workBottom - (pos.y + fr.bottom * dpr);
+      dx = overL > 0 ? overL : overR > 0 ? -overR : 0;
+    } else {
+      dx = overL > 0 ? overL : overR > 0 ? -overR : 0;
+      dy = overT > 0 ? overT : overB > 0 ? -overB : 0;
     }
+
+    // workArea 相对完整显示器被压缩的那一侧才是任务栏；普通屏幕边缘越界不走动画。
+    const monitorLeft = monitor.position.x;
+    const monitorTop = monitor.position.y;
+    const monitorRight = monitorLeft + monitor.size.width;
+    const monitorBottom = monitorTop + monitor.size.height;
+    const overlapsTaskbar =
+      !hide &&
+      ((dx > 0 && workLeft > monitorLeft && left < workLeft) ||
+        (dx < 0 && workRight < monitorRight && right > workRight) ||
+        (dy > 0 && workTop > monitorTop && top < workTop) ||
+        (dy < 0 && workBottom < monitorBottom && bottom > workBottom));
+
     if (dx || dy) {
+      const target = {
+        x: Math.round(pos.x + dx),
+        y: Math.round(pos.y + dy),
+      };
+      if (overlapsTaskbar) {
+        const interruptedState = stateRef.current;
+        const previousPending = pendingStateRef.current;
+        const walkState = walkingStateForDelta(dx, dy);
+        requestState(walkState, { force: true, queueIfBlocked: false });
+
+        const logicalDistance = Math.hypot(dx, dy) / Math.max(1, dpr);
+        const durationMs = Math.min(
+          TASKBAR_WALK_MAX_MS,
+          Math.max(
+            TASKBAR_WALK_MIN_MS,
+            (logicalDistance * 1000) / TASKBAR_WALK_SPEED_PX_PER_SEC,
+          ),
+        );
+        const completed = await animateWindowTo(pos, target, durationMs);
+        if (!completed) return "cancelled";
+
+        // 拖拽后恢复最近对话态；启动/其他场景触发保护时恢复被插播的原状态。
+        const resumeState =
+          previousPending ??
+          (isMoveState(interruptedState)
+            ? convStateRef.current
+            : convStateRef.current !== "idle"
+              ? convStateRef.current
+              : interruptedState);
+        pendingStateRef.current = ANIM_MANAGER.has(resumeState) ? resumeState : "idle";
+        requestState(settlingStateFor(walkState), {
+          force: true,
+          queueIfBlocked: false,
+        });
+        return "settled";
+      }
+
       clampMoveRef.current = true;
-      await getCurrentWindow().setPosition(
-        new PhysicalPosition(Math.round(pos.x + dx), Math.round(pos.y + dy)),
-      );
+      await getCurrentWindow().setPosition(new PhysicalPosition(target.x, target.y));
     }
-    // 贴好边再开演：惊觉「!」→ 冲出画面 → 只剩尾巴（播完自动接 hidden）
+    // 贴好边再开演：左右最终只剩尾巴，上下最终只剩双耳（播完自动接 hidden）。
     if (hide) {
       requestState(hide, { force: true, queueIfBlocked: false });
-      return true;
+      return "hidden";
     }
-    return false;
+    return "none";
   };
 
   // 久置入睡：idle 持续 SLEEP_AFTER_MS 无交互 → 打个哈欠趴下（播完接 sleeping）
@@ -515,9 +687,9 @@ export function PetWindow() {
   // 躲好后偶尔探头：hidden 驻留随机 1-3 分钟点播一次 peeking，播完自动
   // 缩回 hidden → 本效应重挂、重新掷下一次的间隔
   useEffect(() => {
-    if (state !== "hiddenLeft" && state !== "hiddenRight") return;
+    if (!isHiddenIdleState(state)) return;
     const t = window.setTimeout(
-      () => requestState(state === "hiddenLeft" ? "peekingLeft" : "peekingRight"),
+      () => requestState(peekingStateFor(state)),
       PEEK_MIN_MS + Math.random() * PEEK_RAND_MS,
     );
     return () => window.clearTimeout(t);
@@ -541,12 +713,12 @@ export function PetWindow() {
             return;
           }
         }
-        // 先落位（大半出侧边贴边躲起来，其余越界吸回工作区）——先做它才能知道要不要躲，
+        // 先落位（明显越过任一边就藏起来，其余越界吸回工作区）——先做它才能知道要不要躲，
         // 避免「先闪一下恢复的对话动画再躲」的跳帧。
-        const hid = await settleAfterMove();
-        // 没躲藏才收步：先播放与当前方向匹配的四拍落脚/回正过渡；过渡播完
-        // 再接最近对话态（thinking/talking/…）或 idle。躲了则保持 hiding。
-        if (!hid) {
+        const result = await settleAfterMove();
+        // 普通吸边/未越界由这里收步；任务栏走位已在 settleAfterMove 内接好收步，
+        // 躲藏或被用户取消也不能再覆盖当前状态。
+        if (result === "none") {
           const current = stateRef.current;
           if (isMoveState(current)) {
             pendingStateRef.current = convStateRef.current;
@@ -565,11 +737,15 @@ export function PetWindow() {
   // 脚下，向上 = 仰头走，五官压向行进方向）；零位移兜底正面步态。
   // 只在「移动态」里按方向切（拖拽起手由 onPointerMove 置入），不打断播放中
   // 的一次性动画（召回/摸头等窗口不动，本就不会走到这）
-  const lastXRef = useRef<number | null>(null);
-  const lastYRef = useRef<number | null>(null);
   useEffect(() => {
     const unlisten = getCurrentWindow().onMoved(({ payload }) => {
       winPosRef.current = { x: payload.x, y: payload.y };
+      // 任务栏保护正在逐帧走位：动画已经主动选择步态，只同步坐标，避免停表干扰。
+      if (autoMoveRef.current) {
+        lastXRef.current = payload.x;
+        lastYRef.current = payload.y;
+        return;
+      }
       // 落点校正引发的贴靠移动：只记位置，不进走路状态也不再武装停表
       // （吸附完还播一段走路会很怪，且停表重触发会造成校正循环）
       if (clampMoveRef.current) {
@@ -584,24 +760,67 @@ export function PetWindow() {
       lastYRef.current = payload.y;
       const current = stateRef.current;
       if (isMoveState(current) && (dx !== 0 || dy !== 0)) {
-        const direction: PetState =
-          Math.abs(dx) >= Math.abs(dy)
-            ? dx < 0
-              ? "walkingLeft"
-              : "walkingRight"
-            : dy < 0
-              ? "walkingUp"
-              : "walkingDown";
+        const direction = walkingStateForDelta(dx, dy);
         requestState(direction, { force: true, queueIfBlocked: false });
       }
       bumpMoveStop();
     });
     return () => {
+      manualDragRunRef.current += 1;
+      manualDragRef.current = false;
       window.clearTimeout(stopTimerRef.current);
       void unlisten.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestState]);
+
+  /**
+   * 透明桌宠窗的自定义拖动：以按住时鼠标在窗口内的物理偏移为锚点，随后逐帧
+   * 读取全局鼠标并 setPosition。它不受原生标题栏的整窗可见性限制，因此顶部
+   * 气泡留白可以离开屏幕，真正决定吸回/躲藏的仍是 settleAfterMove 的本体矩形。
+   */
+  const startManualDragging = async () => {
+    const run = ++manualDragRunRef.current;
+    manualDragRef.current = true;
+    const win = getCurrentWindow();
+
+    try {
+      const [startPos, startCursor] = await Promise.all([
+        win.outerPosition(),
+        cursorPosition(),
+      ]);
+      if (manualDragRunRef.current !== run) return;
+
+      const grabOffset = {
+        x: startCursor.x - startPos.x,
+        y: startCursor.y - startPos.y,
+      };
+
+      while (manualDragRunRef.current === run) {
+        await new Promise<number>((resolve) => window.requestAnimationFrame(resolve));
+        const [cursor, held] = await Promise.all([
+          cursorPosition(),
+          invoke<boolean>("mouse_pressed").catch(() => false),
+        ]);
+        if (manualDragRunRef.current !== run || !held) break;
+
+        const x = Math.round(cursor.x - grabOffset.x);
+        const y = Math.round(cursor.y - grabOffset.y);
+        const current = winPosRef.current;
+        if (current?.x === x && current.y === y) continue;
+
+        await win.setPosition(new PhysicalPosition(x, y));
+        winPosRef.current = { x, y };
+      }
+    } finally {
+      // PointerUp 若先收到会递增 run 并自行武装停表；否则由系统键位查询在这里
+      // 识别松手。两条路径只允许当前 run 收尾一次。
+      if (manualDragRunRef.current === run) {
+        manualDragRef.current = false;
+        bumpMoveStop();
+      }
+    }
+  };
 
   // 状态点播通道：其他窗口 emitTo("pet", "pet:play", { state }) 直接切状态。
   // 桌宠页的动画测试按钮走这里；将来对话窗事件桥（talking/typing）也走这条
@@ -617,22 +836,20 @@ export function PetWindow() {
         if (isHiddenState(cur)) {
           if (s !== "idle") {
             pendingStateRef.current = s;
-            requestState(
-              cur === "hiddenRight" || cur === "peekingRight" ? "unhideRight" : "unhideLeft",
-            );
+            requestState(unhideStateFor(cur));
           }
           return;
         }
         // 正在冲出屏幕时不半路瞬移回来：让 hiding 完整播完，再从同侧召回。
-        if (cur === "hidingLeft" || cur === "hidingRight") {
+        if (isHidingState(cur)) {
           if (s !== "idle") {
             pendingStateRef.current = s;
-            queuedStateRef.current = cur === "hidingRight" ? "unhideRight" : "unhideLeft";
+            queuedStateRef.current = unhideStateFor(cur);
           }
           return;
         }
         // 召回还在播：只更新待接演目标，别打断召回动画（播完由 onEnd 接演）
-        if (cur === "unhideLeft" || cur === "unhideRight" || isSettlingState(cur)) {
+        if (isUnhideState(cur) || isSettlingState(cur)) {
           pendingStateRef.current = s;
           return;
         }
@@ -704,6 +921,11 @@ export function PetWindow() {
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    // 用户交互永远优先：按下即可取消尚未走完的任务栏自动避让。
+    if (autoMoveRef.current) {
+      autoMoveRunRef.current += 1;
+      autoMoveRef.current = false;
+    }
     setActivity((n) => n + 1);
     downRef.current = { x: e.screenX, y: e.screenY };
     // 捕获指针：命中矩形收紧后，贴边按住稍一滑就出区，不捕获会丢
@@ -714,7 +936,7 @@ export function PetWindow() {
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const d = downRef.current;
     if (!d) return;
-    // 超阈值：判定为拖拽，移交系统拖窗（之后指针事件归 OS，松手不算摸摸）。
+    // 超阈值：判定为拖拽，启动不受透明整窗边界限制的自定义跟手移动。
     // 跟手小跑——按越过阈值这一下的指针方向定初始朝向（消掉首帧的方向空窗），
     // 之后由 onMoved 随窗口位移持续校正朝向；窗口停稳后由移动停表收回待机
     const dx = e.screenX - d.x;
@@ -725,42 +947,41 @@ export function PetWindow() {
       // convStateRef 保留，松手收步后会恢复。
       pendingStateRef.current = null;
       queuedStateRef.current = null;
-      const direction: PetState =
-        Math.abs(dx) >= Math.abs(dy)
-          ? dx < 0
-            ? "walkingLeft"
-            : "walkingRight"
-          : dy < 0
-            ? "walkingUp"
-            : "walkingDown";
+      const direction = walkingStateForDelta(dx, dy);
       requestState(direction, { force: true, queueIfBlocked: false });
       bumpMoveStop();
-      void getCurrentWindow().startDragging();
+      if (USE_MANUAL_WINDOW_DRAG) void startManualDragging();
+      else void getCurrentWindow().startDragging();
     }
   };
 
   const onPointerUp = () => {
+    if (manualDragRef.current) {
+      manualDragRunRef.current += 1;
+      manualDragRef.current = false;
+      bumpMoveStop();
+    }
     // 原地松手（没触发拖拽）：按当前状态给不同反馈——
-    //  · 躲好/探头中点尾巴 = 召回，从边缘跑回画面（拖尾巴则仍走上面的悬空搬窝）；
+    //  · 躲好/探头中点尾巴或耳朵 = 从对应边缘召回（拖动则仍走上面的悬空搬窝）；
     //  · 睡着摸 = 伸懒腰醒来；· 其余 = 摸摸开心。
     // 躲/召回进行中（hiding/unhide）不打断，保持原状态
     if (downRef.current) {
       const current = stateRef.current;
-      if (current === "hiddenLeft" || current === "peekingLeft") {
-        requestState("unhideLeft");
-      } else if (current === "hiddenRight" || current === "peekingRight") {
-        requestState("unhideRight");
-      } else if (
-        current !== "hidingLeft" &&
-        current !== "hidingRight" &&
-        current !== "unhideLeft" &&
-        current !== "unhideRight" &&
-        !isSettlingState(current)
-      ) {
+      if (isHiddenState(current)) {
+        requestState(unhideStateFor(current));
+      } else if (!isHidingState(current) && !isUnhideState(current) && !isSettlingState(current)) {
         requestState(current === "sleeping" ? "stretching" : "petted");
       }
     }
     downRef.current = null;
+  };
+
+  const onPointerCancel = () => {
+    downRef.current = null;
+    if (!manualDragRef.current) return;
+    manualDragRunRef.current += 1;
+    manualDragRef.current = false;
+    bumpMoveStop();
   };
 
   return (
@@ -826,6 +1047,7 @@ export function PetWindow() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
         />
       </SpriteBox>
     </Stage>

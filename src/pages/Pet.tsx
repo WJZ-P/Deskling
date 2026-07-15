@@ -61,10 +61,16 @@ const ANIM_TESTS = [
   { key: "thinking", label: "思考中" },
   { key: "hidingLeft", label: "躲←" },
   { key: "hidingRight", label: "躲→" },
+  { key: "hidingUp", label: "躲↑" },
+  { key: "hidingDown", label: "躲↓" },
   { key: "peekingLeft", label: "探头←" },
   { key: "peekingRight", label: "探头→" },
+  { key: "peekingUp", label: "探头↑" },
+  { key: "peekingDown", label: "探头↓" },
   { key: "unhideLeft", label: "召回←" },
   { key: "unhideRight", label: "召回→" },
+  { key: "unhideUp", label: "召回↑" },
+  { key: "unhideDown", label: "召回↓" },
 ] as const;
 
 function Pet() {

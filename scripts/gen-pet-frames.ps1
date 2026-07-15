@@ -300,8 +300,14 @@ function Sway-Tail3([System.Drawing.Bitmap]$bmp) {
 # 呼吸压缩：头顶/双耳（x0-26 的 y0-11）下压 1px；五官在 y13 起，不受影响
 function Squash-Top([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 0 0 26 11 0 1 }
 
-# 右耳尖内抖：耳尖 y3-5（x22-24）向内平移 1px，y5/6 处折角（偶发小细节）
+# 右耳尖内抖：旧动画共用的小动作，保持原来的局部耳尖形变
 function Flick-Ear([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 21 3 25 5 -1 0 }
+
+# 纵向藏边专用的“揪耳朵”形变：耳根 y6-9 完全钉住，只把 y3-5 的耳尖向内
+# 弯 1px。横向区域包住耳尖的完整描边/耳肉，因此轮廓跟着弯，不会留黑边残影；
+# 同时又不像把整只耳朵刚性横移。
+function Bend-Ear([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 17 3 25 5 -1 0 }
+function Bend-Ear-Left([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 5 3 13 5 1 0 }
 
 # 全身上跳 $px 像素（内容最高点 y3，最多跳 2 不会顶出画布）。
 # 注意：整画布平移，必须放在该帧所有绝对坐标操作之后
@@ -313,6 +319,11 @@ function Hop([System.Drawing.Bitmap]$bmp, [int]$px = 1) {
 # 倒退），五官偏移/下盘压向/尾摆方向全部随之翻转。必须是该帧最后一个 op
 function Flip-H([System.Drawing.Bitmap]$bmp) {
   $bmp.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX)
+}
+
+# 整帧垂直镜像：顶部倒挂探头复用底部双耳/探头动画。必须是该帧最后一个 op
+function Flip-V([System.Drawing.Bitmap]$bmp) {
+  $bmp.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipY)
 }
 
 # 抬腿：腿身 y26-28 上移 1px（脚底并到 y27、y28 清空 → 缩腿离地，
@@ -624,6 +635,15 @@ function Add-Flip([scriptblock[]]$specs) {
   }
 }
 
+# 垂直镜像包装：底部藏耳/探头逐帧镜像成顶部倒挂版本
+function Add-FlipV([scriptblock[]]$specs) {
+  $flip = ${function:Flip-V}
+  $specs | ForEach-Object {
+    $orig = $_
+    { param($f) & $orig $f; & $flip $f }.GetNewClosure()
+  }
+}
+
 Build-Strip "walk-left.png" $WALK_LEFT_W
 Build-Strip "walk-left-pant.png" $WALK_LEFT_PANT
 Build-Strip "walk-right.png" (Add-Flip $WALK_LEFT_W)
@@ -876,6 +896,19 @@ function Slide-Left([System.Drawing.Bitmap]$bmp, [int]$px) {
   Shift-Region $bmp 0 0 31 31 (-$px) 0
 }
 
+# 整画布向上/下滑：纵向藏边用。与 Slide-Left 相同，须放在身体动作最后
+function Slide-Up([System.Drawing.Bitmap]$bmp, [int]$px) {
+  Shift-Region $bmp 0 0 31 31 0 (-$px)
+}
+function Slide-Down([System.Drawing.Bitmap]$bmp, [int]$px) {
+  Shift-Region $bmp 0 0 31 31 0 $px
+}
+
+# 底部只留双耳时去掉右侧竖尾，避免尾尖与耳朵一起从边缘露出来
+function Hide-Standing-Tail([System.Drawing.Bitmap]$bmp) {
+  Shift-Region $bmp 27 6 31 16 6 0
+}
+
 # 头顶惊叹号「!」：x14-15 竖条 y0-2 + 点 y4。悬浮标记——画在 Hop 之后，
 # 身体弹起时「!」原地不动（受惊定身特效）
 function Alert-Mark([System.Drawing.Bitmap]$bmp) {
@@ -999,6 +1032,107 @@ Build-Strip "hidden-right.png" (Add-Flip $HIDDEN_LEFT)
 Build-Strip "peek-right.png" (Add-Flip $PEEK_LEFT)
 # 右侧：跑回段镜像 + 站定段共用不镜像（收尾干净落回 idle）
 Build-Strip "unhide-right.png" ((Add-Flip $UNHIDE_RUN_L) + $UNHIDE_SETTLE)
+
+# ==== hide-down / hide-up：纵向藏边视觉原型（暂未接状态机） ====
+# 底部：低头确认 → 一步步下沉 → 清掉竖尾，只留下完整双耳。
+$HIDE_DOWN = @(
+  { param($f) Face-Down $f; Bend-Ear $f; Alert-Mark $f },                                                                   # 0  发现压到下边缘
+  { param($f) Face-Down $f; Open-Mouth $f; Hop $f 1; Alert-Mark $f },                                                       # 1  吓一跳
+  { param($f) Face-Down $f; Squash-Top $f },                                                                                # 2  压低准备往下走
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Slide-Down $f 4 },                       # 3  第一步 D4
+  { param($f) Face-Down $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Down $f 8 },       # 4  第二步 D8
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Slide-Down $f 12 },      # 5  半身下沉
+  { param($f) Face-Down $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Down $f 16 },      # 6  只剩上半身
+  { param($f) Face-Down $f; Half-Eyes $f; Sway-Tail2 $f; Slide-Down $f 19 },                                                # 7  眼睛沉到边缘
+  { param($f) Face-Down $f; Hide-Standing-Tail $f; Slide-Down $f 20 },                                                      # 8  额头与耳朵
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 21 },                                                                    # 9  再缩一点
+  { param($f) Bend-Ear $f; Hide-Standing-Tail $f; Slide-Down $f 22 },                                                       # 10 右耳轻动
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 22 }                                                                     # 11 双耳藏好 → hidden-down
+)
+
+# 双耳待机：主帧长驻，偶尔单耳/双耳动一下或一起压低一像素；播放节奏后续沿用 HIDDEN_SEQ。
+$HIDDEN_DOWN = @(
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 22 },                                              # 0  双耳主帧
+  { param($f) Bend-Ear $f; Hide-Standing-Tail $f; Slide-Down $f 22 },                                 # 1  右耳被轻轻揪弯
+  { param($f) Bend-Ear-Left $f; Hide-Standing-Tail $f; Slide-Down $f 22 },                            # 2  左耳被轻轻揪弯
+  { param($f) Bend-Ear $f; Bend-Ear-Left $f; Hide-Standing-Tail $f; Slide-Down $f 22 },               # 3  双耳一起弯
+  { param($f) Squash-Top $f; Hide-Standing-Tail $f; Slide-Down $f 22 },                               # 4  两耳压低
+  { param($f) Bend-Ear $f; Squash-Top $f; Hide-Standing-Tail $f; Slide-Down $f 22 }                   # 5  压低时弯右耳
+)
+
+# 底部探头：从双耳逐步露到眼睛，左右确认/眨眼后再缩回双耳。
+$PEEK_DOWN = @(
+  { param($f) Bend-Ear-Left $f; Hide-Standing-Tail $f; Slide-Down $f 22 },            # 0  左耳先弯一下再探头
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 20 },                              # 1  额头露出
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 18 },                              # 2  眉弓露出
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 16 },                              # 3  双眼探出
+  { param($f) Look-Side $f; Hide-Standing-Tail $f; Slide-Down $f 16 },                # 4  看左边
+  { param($f) Half-Eyes $f; Hide-Standing-Tail $f; Slide-Down $f 16 },                # 5  眨眼
+  { param($f) Look-Right $f; Hide-Standing-Tail $f; Slide-Down $f 16 },               # 6  看右边
+  { param($f) Bend-Ear $f; Hide-Standing-Tail $f; Slide-Down $f 16 },                 # 7  弯耳确认
+  { param($f) Half-Eyes $f; Hide-Standing-Tail $f; Slide-Down $f 17 },                # 8  开始缩回
+  { param($f) Look-Right $f; Hide-Standing-Tail $f; Slide-Down $f 18 },               # 9  边缩边看
+  { param($f) Bend-Ear $f; Hide-Standing-Tail $f; Slide-Down $f 20 },                 # 10 只剩额头
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 22 }                               # 11 回到双耳
+)
+
+# 顶部：先正常朝上完整走出画面，空一拍后倒挂回来露双耳；之后待机/探头直接
+# 垂直镜像底部版本，因此顶部探头是一只倒挂着往下看的猫。
+$HIDE_UP = @(
+  { param($f) Face-Up $f; Bend-Ear $f; Alert-Mark $f },                                                                   # 0  发现顶边
+  { param($f) Face-Up $f; Open-Mouth $f; Hop $f 1; Alert-Mark $f },                                                       # 1  吓一跳
+  { param($f) Face-Up $f; Squash-Top $f },                                                                                # 2  蓄力向上
+  { param($f) Face-Up $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Slide-Up $f 4 },                         # 3  第一步 U4
+  { param($f) Face-Up $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Up $f 8 },         # 4  第二步 U8
+  { param($f) Face-Up $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Slide-Up $f 12 },        # 5  半身离场
+  { param($f) Face-Up $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Up $f 17 },        # 6  只剩下半身
+  { param($f) Lift-Leg $f 5 8; Lift-Leg $f 16 19; Slide-Up $f 23 },                                                       # 7  脚尖离场
+  { param($f) Slide-Up $f 32 },                                                                                            # 8  完全消失（播放时驻留一拍）
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 28; Flip-V $f },                                                       # 9  倒挂耳尖回来
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 25; Flip-V $f },                                                       # 10 倒挂耳朵露出
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 22; Flip-V $f }                                                        # 11 双耳藏好 → hidden-up
+)
+
+# 底部召回：双耳先弯一下回应 → 逐步向上走回画面 → 落脚回正。
+$UNHIDE_DOWN = @(
+  { param($f) Bend-Ear-Left $f; Hide-Standing-Tail $f; Slide-Down $f 22 },                                               # 0  左耳回应
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 20 },                                                                 # 1  额头出现
+  { param($f) Look-Side $f; Hide-Standing-Tail $f; Slide-Down $f 18 },                                                   # 2  眼睛确认
+  { param($f) Face-Up $f; Hide-Standing-Tail $f; Slide-Down $f 15 },                                                     # 3  仰头准备上来
+  { param($f) Face-Up $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Slide-Down $f 12 },                     # 4  第一步
+  { param($f) Face-Up $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Down $f 8 },      # 5  第二步
+  { param($f) Face-Up $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail2 $f; Slide-Down $f 4 },     # 6  大半回来
+  { param($f) Face-Up $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Slide-Down $f 1 },      # 7  最后一步
+  { param($f) Face-Up $f; Half-Eyes $f; Sway-Tail2 $f },                                                                # 8  回到画内眨眼
+  { param($f) Squash-Top $f },                                                                                            # 9  落脚压低
+  { param($f) Sway-Tail $f },                                                                                             # 10 弹回
+  { param($f) Flick-Ear $f }                                                                                              # 11 抖耳站稳 → idle
+)
+
+# 顶部召回：倒挂双耳先缩回并完全消失，再恢复正常方向、脚先着边向下走回。
+$UNHIDE_UP = @(
+  { param($f) Bend-Ear $f; Hide-Standing-Tail $f; Slide-Down $f 22; Flip-V $f },                                         # 0  倒挂右耳回应
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 25; Flip-V $f },                                                       # 1  倒挂耳朵缩回
+  { param($f) Hide-Standing-Tail $f; Slide-Down $f 28; Flip-V $f },                                                       # 2  只剩耳尖
+  { param($f) Slide-Up $f 32 },                                                                                            # 3  完全消失、翻回正常方向
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Slide-Up $f 25 },                                       # 4  正常方向脚尖先回来
+  { param($f) Face-Down $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Slide-Up $f 20 },                    # 5  下半身出现
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Slide-Up $f 14 },      # 6  半身回来
+  { param($f) Face-Down $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail2 $f; Slide-Up $f 8 },     # 7  继续向下
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Slide-Up $f 3 },       # 8  最后一步
+  { param($f) Squash-Top $f },                                                                                            # 9  落脚压低
+  { param($f) Sway-Tail $f },                                                                                             # 10 弹回
+  { param($f) Flick-Ear $f }                                                                                              # 11 抖耳站稳 → idle
+)
+
+Build-Strip "hide-down.png" $HIDE_DOWN
+Build-Strip "hidden-down.png" $HIDDEN_DOWN
+Build-Strip "peek-down.png" $PEEK_DOWN
+Build-Strip "unhide-down.png" $UNHIDE_DOWN
+Build-Strip "hide-up.png" $HIDE_UP
+Build-Strip "hidden-up.png" (Add-FlipV $HIDDEN_DOWN)
+Build-Strip "peek-up.png" (Add-FlipV $PEEK_DOWN)
+Build-Strip "unhide-up.png" $UNHIDE_UP
 
 # ==== think：思考中（循环，将来接对话窗事件桥的深度思考等待阶段） ====
 # 右前腿举起托腮（Think-Paw，地上三条腿），头顶「…」点点逐帧冒出又散去，
