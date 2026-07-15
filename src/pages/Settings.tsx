@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   PixelPage,
@@ -18,10 +18,12 @@ import {
 } from "../components/pixel/PixelSettingRow";
 import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSelect";
 import { PixelSwitch } from "../components/pixel/PixelSwitch";
+import { PixelInput } from "../components/pixel/PixelInput";
+import { PixelSlider } from "../components/pixel/PixelSlider";
 import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
 import { ProviderSettings } from "../components/ProviderSettings";
 import type { ThemeMode } from "../styles/theme";
-import type { ProviderProfile } from "../settings";
+import type { AppSettings, ProviderProfile } from "../settings";
 import {
   getProfiles,
   getSetting,
@@ -50,6 +52,20 @@ const BUBBLE_SECS_OPTIONS: PixelSelectOption[] = [
   { value: "10", label: "10 秒" },
   { value: "20", label: "20 秒" },
 ];
+
+/** 工具并发上限可选档（1-20，默认 5） */
+const CONCURRENCY_OPTIONS: PixelSelectOption[] = [1, 2, 3, 5, 8, 10, 15, 20].map((n) => ({
+  value: String(n),
+  label: `${n} 个`,
+}));
+
+/** 代理模式候选 */
+const PROXY_MODE_OPTIONS: PixelSelectOption[] = [
+  { value: "system", label: "跟随系统代理" },
+  { value: "custom", label: "自定义" },
+  { value: "off", label: "不使用代理" },
+];
+
 
 function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
   const isLight = theme === "light";
@@ -95,6 +111,50 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
   const handleAutoApprove = useCallback((next: boolean) => {
     setAutoApprove(next);
     void setSetting("autoApproveTools", next);
+  }, []);
+
+  // 工具并发上限（1-20，默认 5）：一轮多个工具调用同时跑几个，改动即落盘（广播给聊天窗）
+  const [concurrency, setConcurrency] = useState<number>(() => getSetting("toolConcurrency"));
+  const handleConcurrency = useCallback((v: string) => {
+    const n = Math.max(1, Math.min(20, Math.round(Number(v)) || 5));
+    setConcurrency(n);
+    void setSetting("toolConcurrency", n);
+  }, []);
+
+  // 代理：模式（跟随系统/自定义/关闭）+ 自定义地址。改动即落盘并即时推给 Rust 生效
+  const [proxyMode, setProxyMode] = useState<AppSettings["proxyMode"]>(() =>
+    getSetting("proxyMode"),
+  );
+  const [proxyUrl, setProxyUrl] = useState<string>(() => getSetting("proxyUrl"));
+  const pushProxy = (mode: string, url: string) => {
+    void invoke("set_proxy", { mode, url }).catch(() => {});
+  };
+  const handleProxyMode = useCallback(
+    (v: string) => {
+      const mode = v as AppSettings["proxyMode"];
+      setProxyMode(mode);
+      void setSetting("proxyMode", mode);
+      pushProxy(mode, proxyUrl);
+    },
+    [proxyUrl],
+  );
+  const handleProxyUrl = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const url = e.target.value;
+      setProxyUrl(url);
+      void setSetting("proxyUrl", url);
+      if (proxyMode === "custom") pushProxy("custom", url);
+    },
+    [proxyMode],
+  );
+
+  // 软件音量（0~1）：拖动滑块即改，落盘并即时推给 Rust 播放线程
+  const [volume, setVolume] = useState<number>(() => getSetting("volume"));
+  const handleVolume = useCallback((vol: number) => {
+    const v = Math.max(0, Math.min(1, vol));
+    setVolume(v);
+    void setSetting("volume", v);
+    void invoke("tts_set_volume", { volume: v }).catch(() => {});
   }, []);
 
   // 桌宠说话气泡：驻留时长 + 点击拉起对话开关，改动即落盘
@@ -205,6 +265,21 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
               aria-label="agent 工具免审批执行"
             />
           </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>工具并发上限</PixelSettingLabel>
+              <PixelSettingDesc>
+                模型一轮里同时调用多个工具（含子任务 subagent）时，最多几个一起跑
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSelect
+              options={CONCURRENCY_OPTIONS}
+              value={String(concurrency)}
+              onChange={handleConcurrency}
+              variant="normal"
+            />
+          </PixelSettingRow>
         </PixelSettingList>
       </PixelSection>
 
@@ -243,8 +318,57 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
         </PixelSettingList>
       </PixelSection>
 
+      <PixelSection title="网络">
+        <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>代理</PixelSettingLabel>
+              <PixelSettingDesc>
+                联网工具（网页搜索等）走哪个代理。默认跟随 Windows 系统代理——很多机器访问外网需要它
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSelect
+              options={PROXY_MODE_OPTIONS}
+              value={proxyMode}
+              onChange={handleProxyMode}
+              variant="normal"
+            />
+          </PixelSettingRow>
+
+          {proxyMode === "custom" && (
+            <PixelSettingRow>
+              <PixelSettingInfo>
+                <PixelSettingLabel>代理地址</PixelSettingLabel>
+                <PixelSettingDesc>如 http://127.0.0.1:7890</PixelSettingDesc>
+              </PixelSettingInfo>
+              <PixelInput
+                value={proxyUrl}
+                placeholder="http://127.0.0.1:7890"
+                onChange={handleProxyUrl}
+              />
+            </PixelSettingRow>
+          )}
+        </PixelSettingList>
+      </PixelSection>
+
       <PixelSection title="声音">
         <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>音量</PixelSettingLabel>
+              <PixelSettingDesc>桌宠说话 / 音效的总音量</PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSlider
+              value={volume}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={handleVolume}
+              formatTip={(v) => `${Math.round(v * 100)}%`}
+              aria-label="软件音量"
+            />
+          </PixelSettingRow>
+
           <PixelSettingRow>
             <PixelSettingInfo>
               <PixelSettingLabel>麦克风</PixelSettingLabel>

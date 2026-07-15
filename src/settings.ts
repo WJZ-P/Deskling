@@ -1,4 +1,5 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import type { ThemeMode } from "./styles/theme";
 import type { BackdropStyleId } from "./components/pixel/backdrops";
 
@@ -143,6 +144,11 @@ export interface AppSettings {
    */
   chatThinking: boolean;
   /**
+   * 工具并发上限（设置页可调，默认 5，范围 1-20）：一轮回复里模型一次请求了多个
+   * 工具调用（含 subagent）时，最多同时并发跑几个。Rust 侧再 clamp 到 1..=20。
+   */
+  toolConcurrency: number;
+  /**
    * 语音输入麦克风设备名（"" = 系统默认）：主窗口设置页「声音 · 麦克风」选择，
    * 常驻对话窗按下语音按钮时读取（跨窗口 onKeyChange 同步）。
    */
@@ -153,6 +159,15 @@ export interface AppSettings {
    * 变化时 Rust 侧播放线程热重建。
    */
   ttsDevice: string;
+  /**
+   * 代理模式：system=跟随 Windows 系统代理（默认）/ custom=用 proxyUrl / off=不走代理。
+   * Rust 的 run_command 据此给联网脚本（web-search 等）设代理环境变量。
+   */
+  proxyMode: "system" | "custom" | "off";
+  /** 自定义代理地址（proxyMode=custom 时用），如 http://127.0.0.1:7890 */
+  proxyUrl: string;
+  /** 软件音量（0~1）：桌宠说话 / 音效输出的总音量，设置页可调，Rust 播放线程按它缩放 */
+  volume: number;
   /** 桌宠说话气泡驻留时长（秒）：一轮回复说完后气泡再停这么久才消失 */
   petBubbleSecs: number;
   /** 点击桌宠气泡拉起 AI 对话窗（默认开启） */
@@ -173,6 +188,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   activeProviderId: null,
   autoApproveTools: true,
   chatThinking: false,
+  toolConcurrency: 5,
+  proxyMode: "system",
+  proxyUrl: "",
+  volume: 1,
   sttDevice: "",
   ttsDevice: "",
   petBubbleSecs: 5,
@@ -236,6 +255,10 @@ function bindCrossWindowSync(s: Store): void {
   void s.onKeyChange<boolean>("autoApproveTools", (v) => {
     cache.autoApproveTools = v ?? DEFAULT_SETTINGS.autoApproveTools;
   });
+  // 工具并发上限在主窗口设置里改、常驻聊天窗发送时读，同样要跨窗口刷
+  void s.onKeyChange<number>("toolConcurrency", (v) => {
+    cache.toolConcurrency = v ?? DEFAULT_SETTINGS.toolConcurrency;
+  });
   // 麦克风设备在主窗口设置里选、常驻聊天窗按下语音按钮时读，同样要跨窗口刷
   void s.onKeyChange<string>("sttDevice", (v) => {
     cache.sttDevice = v ?? DEFAULT_SETTINGS.sttDevice;
@@ -276,6 +299,20 @@ export async function setSetting<K extends keyof AppSettings>(
   } catch (err) {
     console.warn(`[settings] 保存 ${String(key)} 失败:`, err);
   }
+}
+
+/**
+ * 把「需要 Rust 侧生效」的设置（代理 / 音量）推给后端。这些设置存在前端 store，
+ * 但要在 Rust 进程里生效（run_command 设代理环境、TTS 播放按音量缩放），所以启动后
+ * （bootstrap）推一次当前值；设置页改动时也各自即时推（见 Settings 的 handler）。
+ */
+export async function syncBackendConfig(): Promise<void> {
+  await invoke("set_proxy", { mode: cache.proxyMode, url: cache.proxyUrl }).catch((err) =>
+    console.warn("[settings] set_proxy 失败:", err),
+  );
+  await invoke("tts_set_volume", { volume: cache.volume }).catch((err) =>
+    console.warn("[settings] tts_set_volume 失败:", err),
+  );
 }
 
 // ==================== Provider 配置操作 ====================
