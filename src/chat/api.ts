@@ -24,6 +24,7 @@ type ChatEvent =
   | { type: "thinking"; text: string }
   | { type: "toolStart"; id: string; name: string; summary: string; args: string; needsApproval: boolean }
   | { type: "toolEnd"; id: string; status: "success" | "error"; detail: string }
+  | { type: "subagentStep"; id: string; line: string }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -53,6 +54,8 @@ export interface StreamHandlers {
   }) => void;
   /** 一个工具调用收尾：更新对应段的状态与结果 detail */
   onToolEnd: (end: { id: string; status: "success" | "error"; detail: string }) => void;
+  /** 子 agent（subagent 工具）执行中的一步进展：追加进对应工具段的子步骤日志 */
+  onSubagentStep: (step: { id: string; line: string }) => void;
   onDone: () => void;
   onError: (message: string) => void;
 }
@@ -120,6 +123,8 @@ export function streamChat(
   autoApprove: boolean,
   /** 深度思考：Anthropic/Gemini 请求思考过程下发（输入框操作栏开关决定） */
   thinking: boolean,
+  /** 并发上限：一轮内多个工具调用最多同时跑几个（设置项；Rust 侧 clamp 到 1..=20） */
+  concurrency: number,
   /** 人设/系统提示词（当前桌宠档案的 prompt）：只在对话开头注入一次；null/空白不注入 */
   system: string | null,
 ): ChatStream {
@@ -138,6 +143,8 @@ export function streamChat(
       });
     else if (ev.type === "toolEnd")
       handlers.onToolEnd({ id: ev.id, status: ev.status, detail: ev.detail });
+    else if (ev.type === "subagentStep")
+      handlers.onSubagentStep({ id: ev.id, line: ev.line });
     else if (ev.type === "done") handlers.onDone();
     else if (ev.type === "error") handlers.onError(ev.message);
   };
@@ -148,6 +155,7 @@ export function streamChat(
     history,
     autoApprove,
     thinking,
+    concurrency,
     system,
     onEvent: channel,
   }).catch((err) => handlers.onError(String(err)));

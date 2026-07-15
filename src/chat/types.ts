@@ -32,6 +32,8 @@ export interface ToolCallSegment {
   detail?: string;
   /** true 表示危险工具（写文件 / 跑命令），pending 时需人工审批放行 */
   needsApproval?: boolean;
+  /** 子步骤日志（仅 subagent 段）：子 agent 运行中每一步在干嘛，逐行累积展示 */
+  steps?: string[];
   status: ToolStatus;
 }
 

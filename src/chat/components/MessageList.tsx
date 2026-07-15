@@ -208,6 +208,21 @@ export function MessageList({
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [convId, scrollEl]);
 
+  // 用户刚发出一条消息：强制贴底（哪怕之前上滑读历史），让自己这条 + 随后的回复
+  // 都进视野。只认「列表变长且新末条是 user」——AI 流式续写不触发（那个交给下面的
+  // 贴底跟随，用户上滑读历史时不该被拽回去）。
+  const lastLenRef = useRef(messages.length);
+  useLayoutEffect(() => {
+    const grew = messages.length > lastLenRef.current;
+    lastLenRef.current = messages.length;
+    if (grew && messages[messages.length - 1]?.role === "user") {
+      atBottomRef.current = true;
+      setAway(false);
+      const el = scrollEl;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, scrollEl]);
+
   // 贴底跟随：消息增删 / typing / 流式续写都会改变总高 —— 若用户在底部就重新钉底。
   // totalSize 随 measureElement 校正而变（流式那条边生成边测高），故能逐帧跟住。
   const totalSize = virtualizer.getTotalSize();

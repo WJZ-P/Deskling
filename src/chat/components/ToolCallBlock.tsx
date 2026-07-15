@@ -86,6 +86,17 @@ export function ToolCallBlock({ seg, onApprove }: ToolCallBlockProps) {
           <Status data-status={seg.status}>{STATUS_LABEL[seg.status]}</Status>
           {hasDetail && <Chevron data-open={open || undefined} aria-hidden>▾</Chevron>}
         </Head>
+        {/* 子步骤日志（仅 subagent 段）：子 agent 每一步在干嘛，逐行累积、常显，
+            让用户看到子任务进展；最后一行是「当前」活动，色重一档 */}
+        {seg.steps && seg.steps.length > 0 && (
+          <Steps>
+            {seg.steps.map((line, i) => (
+              <StepLine key={i} data-last={i === seg.steps!.length - 1 || undefined}>
+                {line}
+              </StepLine>
+            ))}
+          </Steps>
+        )}
         {hasDetail && open && <Detail>{detailText}</Detail>}
         {awaiting && (
           <ApproveRow>
@@ -241,6 +252,35 @@ const Chevron = styled.span`
   }
 
   [data-clickable]:hover & {
+    color: ${t.colorAccent};
+  }
+`;
+
+/* 子步骤日志：子 agent 运行进展逐行累积（常显，不用展开）。每行前一个像素点，
+   最后一行（当前活动）色重一档、点用强调色，透出「正在做这个」 */
+const Steps = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 10px 8px 26px;
+  border-top: 1px solid ${t.colorBorder};
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+`;
+
+const StepLine = styled.div`
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &::before {
+    content: "· ";
+    color: ${t.colorTextMuted};
+  }
+  &[data-last] {
+    color: ${t.colorText};
+  }
+  &[data-last]::before {
     color: ${t.colorAccent};
   }
 `;

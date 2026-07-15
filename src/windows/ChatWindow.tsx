@@ -47,10 +47,41 @@ import type {
 const BEEP_TAIL_MIN_MS = 0;
 const BEEP_TAIL_MAX_MS = 1000;
 
-// web 搜索类工具名判定：命中则桌宠举放大镜端详（searching），否则敲电脑
-// （typing）。按名匹配 = 前向兼容，等 web 搜索工具接入（如 web_search）动画
-// 自动就位；目前工具集（read_file/list_dir/write_file/run_command）均不命中
+// 说话卡顿看门狗阈值：正文流式时超过这么久没有新正文，桌宠就从「说话」切回
+// 「思考」——AI 卡住时不至于一直张嘴说话对不上（有真实语音在播时不干预）
+const TALK_STALL_MS = 1000;
+
+// web 搜索类工具名判定（如将来的内置 web_search 工具）：命中则桌宠举放大镜端详
 const isSearchTool = (name: string) => /search|web/i.test(name);
+
+/**
+ * 按一次工具调用挑桌宠演出：web 搜索 → 举放大镜端详（searching），其余 → 敲电脑（typing）。
+ * web 搜索现在是技能（skill），没有专门工具名——它走 load_skill(web-search) 加载说明书
+ * 再 run_command 跑 search.js，所以除了工具名，还看 args：加载搜索类技能、或跑搜索脚本时
+ * 都演 searching。args 是 JSON 串（解析失败按敲电脑兜底）。
+ */
+function petToolState(call: { name: string; args: string }): "searching" | "typing" {
+  if (isSearchTool(call.name)) return "searching";
+  // args 是 JSON 串。注意 JSON.parse("null")/("1")/('"x"') 不抛错但返回非对象——
+  // 必须显式判「是对象且非 null」，否则后面取 .name/.command 会抛 TypeError 逃出
+  // 本函数、连累 onToolStart 吞掉整张工具卡片
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(call.args || "{}");
+  } catch {
+    parsed = null;
+  }
+  const a: { name?: unknown; command?: unknown } =
+    parsed && typeof parsed === "object" ? parsed : {};
+  if (call.name === "load_skill" && isSearchTool(String(a.name ?? ""))) return "searching";
+  if (
+    call.name === "run_command" &&
+    /search\.c?js|web-search|duckduckgo/i.test(String(a.command ?? ""))
+  ) {
+    return "searching";
+  }
+  return "typing";
+}
 
 // 消息 id：必须跨会话唯一。若只用运行内自增计数器，程序重启后计数器归零、
 // 重新发号会和上次持久化的旧消息 id 相撞——新一轮 replyId 恰好等于某条旧消息 id 时，
@@ -246,6 +277,34 @@ function updateToolSegments(
   );
 }
 
+/** 给某个工具段（按 id）追加一行子步骤日志——subagent 运行中的进展逐行累积 */
+function appendSubagentStep(
+  setConversations: SetConvs,
+  convId: string,
+  replyId: string,
+  matchId: string,
+  line: string,
+): void {
+  setConversations((prev) =>
+    prev.map((c) => {
+      if (c.id !== convId) return c;
+      const idx = c.messages.findIndex((m) => m.id === replyId);
+      if (idx === -1) return c;
+      const msg = c.messages[idx];
+      let touched = false;
+      const segments = msg.segments.map((s) => {
+        if (s.kind !== "tool" || s.id !== matchId) return s;
+        touched = true;
+        return { ...s, steps: [...(s.steps ?? []), line] };
+      });
+      if (!touched) return c;
+      const messages = [...c.messages];
+      messages[idx] = { ...msg, segments };
+      return { ...c, updatedAt: Date.now(), messages };
+    }),
+  );
+}
+
 export function ChatWindow() {
   const { theme, toggleTheme } = useTheme();
   // 初值同步读会话缓存（bootstrap 已 initConversations 填好），避免闪空
@@ -378,11 +437,36 @@ export function ChatWindow() {
   // 一条 pet:play 通道；窗口隐藏时播了也无妨）。桌宠被摸会临时插播摸头，下一
   // 次桥状态变化时自动回到对话演出
   const petStateRef = useRef<string | null>(null);
+  // 说话卡顿看门狗计时器：见 TALK_STALL_MS
+  const talkStallRef = useRef(0);
   const petPlay = useCallback(
     (state: "thinking" | "talking" | "typing" | "searching" | "idle") => {
-      if (petStateRef.current === state) return;
+      // 说话态起看门狗：TALK_STALL_MS 内没再收到正文（没续期）→ 当前还在说话且无
+      // 真实语音在播（有语音时嘴型交给 tts:state 主导，不抢）就切回思考
+      const armStall = () => {
+        window.clearTimeout(talkStallRef.current);
+        talkStallRef.current = window.setTimeout(() => {
+          // 取消/暂停/收尾后 liveRef 已被清空——此时不再误发 thinking。静音模式下
+          // talking 由正文 delta 驱动，用户在 AI 卡住时点停，看门狗还挂着，1s 后 fire
+          // 会给已收工的桌宠误播「思考」；用 liveRef 挡掉（各取消路径都会清 liveRef）
+          if (!liveRef.current) return;
+          if (petStateRef.current === "talking" && !ttsPlayingRef.current) {
+            petStateRef.current = "thinking";
+            void emitTo("pet", "pet:play", { state: "thinking" }).catch(() => {});
+          }
+        }, TALK_STALL_MS);
+      };
+      // 去重：同状态不重发。但「说话」态每个正文 delta 都会重复调进来——此时虽跳过
+      // emit，仍要续一下看门狗（有新正文 = 没卡）
+      if (petStateRef.current === state) {
+        if (state === "talking") armStall();
+        return;
+      }
       petStateRef.current = state;
       void emitTo("pet", "pet:play", { state }).catch(() => {});
+      // 进入说话就起看门狗；切到别的态就撤掉
+      if (state === "talking") armStall();
+      else window.clearTimeout(talkStallRef.current);
     },
     [],
   );
@@ -580,6 +664,10 @@ export function ChatWindow() {
       history,
       {
         onDelta: (chunk) => {
+          // 迟到事件守卫：取消/收尾后 liveRef 已被清空或指向新一轮，丢弃本轮残留事件
+          // （并发下取消瞬间可能有多达 concurrency 个任务已越过 Rust 侧取消检查、
+          //  仍会回推 ToolStart/ToolEnd/Delta——不拦会复活已取消卡、冒出新卡甚至留孤儿）
+          if (liveRef.current?.replyId !== replyId) return;
           if (!started) {
             started = true;
             setTypingConv(null);
@@ -606,6 +694,7 @@ export function ChatWindow() {
         // 思考增量：推理模型先吐 reasoning 再吐正文——首个思考片段一到就撤下
         // 「思考中」指示器，由气泡里流式展开的思考块接管展示
         onThinking: (chunk) => {
+          if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫（同 onDelta）
           if (!started) {
             started = true;
             setTypingConv(null);
@@ -621,12 +710,13 @@ export function ChatWindow() {
         // 模型要调一个工具：落成工具段。危险工具进 pending（卡上出现同意/拒绝按钮，
         // Rust 侧 loop 已阻塞等审批）；安全工具直接 running（loop 已在执行）。
         onToolStart: (call) => {
+          if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫（同 onDelta）
           if (!started) {
             started = true;
             setTypingConv(null);
           }
-          // 干活了：web 搜索类工具举放大镜端详，其余工具敲电脑
-          petPlay(isSearchTool(call.name) ? "searching" : "typing");
+          // 干活了：web 搜索（含技能化的）举放大镜端详，其余工具敲电脑
+          petPlay(petToolState(call));
           appendToolSegment(setConversations, convId, replyId, {
             kind: "tool",
             id: call.id,
@@ -639,11 +729,17 @@ export function ChatWindow() {
         },
         // 工具执行收尾：按 id 回填状态与结果预览
         onToolEnd: (end) => {
+          if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫（防复活已取消卡）
           petPlay("thinking"); // 工具跑完模型接着消化结果：回到托腮（开口时切说话）
           updateToolSegments(setConversations, convId, replyId, end.id, {
             status: end.status,
             detail: end.detail,
           });
+        },
+        // 子 agent 进展：逐行追加进那张 subagent 工具卡的子步骤日志（不驱动桌宠）
+        onSubagentStep: (s) => {
+          if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫
+          appendSubagentStep(setConversations, convId, replyId, s.id, s.line);
         },
         onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
         onError: (message) => {
@@ -661,6 +757,8 @@ export function ChatWindow() {
       getSetting("autoApproveTools"),
       // 深度思考开关：输入框操作栏切换写入，发送那一刻读取（同窗口缓存即时可见）
       getSetting("chatThinking"),
+      // 工具并发上限：一轮多个工具调用最多同时跑几个（设置页可调；Rust 侧再 clamp）
+      getSetting("toolConcurrency"),
       // 人设：当前桌宠档案的 prompt（主窗口桌宠页编辑，跨窗口 onKeyChange 同步），
       // 只注入对话开头一次；清空人设则不注入
       getActivePet().prompt.trim() || null,
