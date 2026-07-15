@@ -84,6 +84,15 @@ const MOVE_STATES: PetState[] = [
 ];
 const isMoveState = (s: PetState) => MOVE_STATES.includes(s);
 
+/** 「对话活动态」集合：对话窗事件桥推来的演出（说话/思考/敲电脑/搜索 + 收工待机）。
+    这些态会被记进 convStateRef：拖拽打断后据它恢复、从隐藏被叫来时据它接演 */
+const CONV_STATES: PetState[] = ["talking", "thinking", "typing", "searching", "idle"];
+const isConvState = (s: PetState) => CONV_STATES.includes(s);
+
+/** 「躲藏态」集合：躲好在屏幕边缘 / 探头。此态下被叫来说话要先召回（unhide）冒出来 */
+const HIDDEN_STATES: PetState[] = ["hiddenLeft", "hiddenRight", "peekingLeft", "peekingRight"];
+const isHiddenState = (s: PetState) => HIDDEN_STATES.includes(s);
+
 // 动画登记表（状态 → 帧带变体组）在 src/pet/animations.ts；管理器负责
 // 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
 const ANIM_MANAGER = new PetAnimManager();
@@ -181,8 +190,19 @@ export function PetWindow() {
   const [activity, setActivity] = useState(0);
   // 进入状态时抽定帧带变体（多变体随机），状态不变则整段咬死不换
   const anim = useMemo(() => ANIM_MANAGER.pick(state), [state]);
-  // 一次性动作播完切到 next 声明的状态（摸头/伸懒腰/打招呼回 idle，打哈欠接 sleeping）
+  // 一次性动作播完切到 next 声明的状态（摸头/伸懒腰/打招呼回 idle，打哈欠接 sleeping）。
+  // 召回（unhide）播完特判：若有待接演的对话态（从隐藏被叫来说话），接着演它——
+  // 让「隐藏 → 召回冒出 → 思考/说话」连成一气，而不是生硬跳进思考
   const frame = useSpriteAnim(anim, () => {
+    const isRecall = state === "unhideLeft" || state === "unhideRight";
+    const pending = pendingStateRef.current;
+    pendingStateRef.current = null; // 消费一次即清（无论采不采用），免得被打断的召回残留串到下次
+    // 召回播完：仅当对话仍在进行（convStateRef 非 idle）才接演缓存的对话态；否则
+    // （收工/无对话，如手点尾巴的普通召回）走 next 回待机——防止残留旧态被误接演
+    if (isRecall && pending && convStateRef.current !== "idle") {
+      setState(ANIM_MANAGER.has(pending) ? pending : "idle");
+      return;
+    }
     const n = anim.next;
     setState(n && ANIM_MANAGER.has(n) ? n : "idle");
   });
@@ -274,6 +294,11 @@ export function PetWindow() {
   // state 的 ref 镜像：巡逻计时器闭包里读最新状态，不随状态变化重建计时器
   const stateRef = useRef(state);
   stateRef.current = state;
+  // 最近的对话活动态（talking/thinking/typing/searching/idle）：拖拽打断后据它恢复演出。
+  // 对话进行中它是 thinking/talking…；一轮收工（事件桥发 idle）后它变 idle
+  const convStateRef = useRef<PetState>("idle");
+  // 待接演的对话态：从隐藏被叫来时先播召回（unhide），召回播完接着演它
+  const pendingStateRef = useRef<PetState | null>(null);
   // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
   // 巡逻 tick 就只剩 cursorPosition 一次 IPC
   const winPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -289,13 +314,14 @@ export function PetWindow() {
   //  · 没越界：不动。
   // OS 拖窗的模态循环里抢 setPosition 会打架，所以只挂在移动停表上，且
   // 停表靠系统键位查询保证真松手了才落位
-  const settleAfterMove = async () => {
+  // 返回是否贴边躲藏了（true = 已切 hiding 态）——供 bumpMoveStop 决定要不要恢复对话态
+  const settleAfterMove = async (): Promise<boolean> => {
     const pos = winPosRef.current;
     const hit = hitRef.current;
     const sprite = spriteRef.current;
-    if (!pos || !hit || !sprite) return;
+    if (!pos || !hit || !sprite) return false;
     const monitor = await currentMonitor();
-    if (!monitor) return;
+    if (!monitor) return false;
     const dpr = window.devicePixelRatio;
     const wa = monitor.workArea;
     // 本体矩形的屏幕坐标（物理 px）
@@ -334,7 +360,11 @@ export function PetWindow() {
       );
     }
     // 贴好边再开演：惊觉「!」→ 冲出画面 → 只剩尾巴（播完自动接 hidden）
-    if (hide) setState(hide);
+    if (hide) {
+      setState(hide);
+      return true;
+    }
+    return false;
   };
 
   // 久置入睡：idle 持续 SLEEP_AFTER_MS 无交互 → 打个哈欠趴下（播完接 sleeping）
@@ -373,9 +403,18 @@ export function PetWindow() {
             return;
           }
         }
-        setState((s) => (isMoveState(s) ? "idle" : s));
-        // 停稳后落位：大半出侧边贴边躲起来，其余越界吸回工作区
-        void settleAfterMove();
+        // 先落位（大半出侧边贴边躲起来，其余越界吸回工作区）——先做它才能知道要不要躲，
+        // 避免「先闪一下恢复的对话动画再躲」的跳帧。
+        const hid = await settleAfterMove();
+        // 没躲藏才收步：对话仍在进行（convStateRef 是 thinking/talking/…）→ 接着演对应动画，
+        // 不生硬回待机；否则回 idle。躲了则保持 hiding，不覆盖
+        if (!hid) {
+          setState((s) => {
+            if (!isMoveState(s)) return s;
+            const resume = convStateRef.current;
+            return resume !== "idle" ? resume : "idle";
+          });
+        }
       })();
     }, WALK_STOP_MS);
   };
@@ -422,7 +461,30 @@ export function PetWindow() {
   useEffect(() => {
     const unlisten = getCurrentWindow().listen<{ state?: string }>("pet:play", (e) => {
       const s = e.payload?.state;
-      if (s && ANIM_MANAGER.has(s)) setState(s);
+      if (!s || !ANIM_MANAGER.has(s)) return;
+      const cur = stateRef.current;
+      // 对话活动态特殊处理：记住它（供拖拽/召回后恢复），并按当前处境决定接法
+      if (isConvState(s)) {
+        convStateRef.current = s;
+        // 躲在屏幕边缘时被叫来说话：先召回冒出来再接演（idle=收工不打扰，继续躲着）
+        if (isHiddenState(cur)) {
+          if (s !== "idle") {
+            pendingStateRef.current = s;
+            setState(
+              cur === "hiddenRight" || cur === "peekingRight" ? "unhideRight" : "unhideLeft",
+            );
+          }
+          return;
+        }
+        // 召回还在播：只更新待接演目标，别打断召回动画（播完由 onEnd 接演）
+        if (cur === "unhideLeft" || cur === "unhideRight") {
+          pendingStateRef.current = s;
+          return;
+        }
+        // 拖拽/走路中：缓存对话态但不打断拖拽，拖完由移动停表据 convStateRef 恢复
+        if (isMoveState(cur)) return;
+      }
+      setState(s);
     });
     return () => {
       void unlisten.then((f) => f());
@@ -504,6 +566,8 @@ export function PetWindow() {
     const dy = e.screenY - d.y;
     if (Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD_PX) {
       downRef.current = null;
+      // 拖拽打断任何进行中的动画（含召回）：清掉待接演目标，免得残留串到下次召回
+      pendingStateRef.current = null;
       setState(
         Math.abs(dx) >= Math.abs(dy)
           ? dx < 0
