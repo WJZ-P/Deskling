@@ -1061,70 +1061,68 @@ function Draw-Magnifier([System.Drawing.Bitmap]$bmp, [int]$dy = 0, [int]$look = 
   Set-Px $bmp @(3, 4, 5) (22 + $dy) $DARK
 }
 
-# 望远镜（左侧/左眼看，镜筒指左上方——避开右侧竖尾与两耳）：眼杯(近,右端靠眼)
-# + 镜筒(3px，TGREY 芯 DARK 边 + 中箍) + 物镜(远端加宽 + 玻璃反光) + 握柄白爪
-# （左前腿 x5-8 收起托镜筒下，地上剩三条腿）。右眼闭起来瞄准。
-#   $dy   = 整体上下浮动
-#   $tilt = 远端抬/降（-1 更仰 / 0 / +1 放平，扫视远方的摇镜）
-#   $blink= 真则看镜眼（左眼）眨一下
-function Draw-Telescope([System.Drawing.Bitmap]$bmp, [int]$dy = 0, [int]$tilt = 0, [bool]$blink = $false) {
-  $ny = 13 + $dy              # 近端（眼杯）中线
-  $fy = 11 + $dy + $tilt      # 远端（物镜）中线，默认高 2px = 指左上方
-  # 看镜的左眼藏在目镜/镜筒后（不另画，随后被镜筒盖住）——擦掉即可。
-  # 表情靠睁着的右眼 + 挑眉 + 问号（看镜眼露不出来，别在这演）
-  Set-Px $bmp @(8, 9) 13 $BODY
-  Set-Px $bmp @(8, 9) 14 $BODY
-  # 眼杯（近端竖边，靠右贴眼）
-  $bmp.SetPixel(10, ($ny - 1), $DARK); $bmp.SetPixel(10, $ny, $DARK); $bmp.SetPixel(10, ($ny + 1), $DARK)
-  # 镜筒近半 x6-9（平）
-  for ($x = 6; $x -le 9; $x++) {
-    $bmp.SetPixel($x, ($ny - 1), $DARK); $bmp.SetPixel($x, $ny, $TGREY); $bmp.SetPixel($x, ($ny + 1), $DARK)
-  }
-  $bmp.SetPixel(7, ($ny - 1), $DARK); $bmp.SetPixel(7, ($ny + 1), $DARK)  # 中箍
-  # 镜筒远半 x3-5（按 tilt 抬升到 fy）
-  for ($x = 3; $x -le 5; $x++) {
-    $bmp.SetPixel($x, ($fy - 1), $DARK); $bmp.SetPixel($x, $fy, $TGREY); $bmp.SetPixel($x, ($fy + 1), $DARK)
-  }
-  # 物镜（远端加宽 + 玻璃反光）
-  $bmp.SetPixel(2, ($fy - 2), $DARK); $bmp.SetPixel(3, ($fy - 2), $DARK)
-  $bmp.SetPixel(1, ($fy - 1), $DARK); $bmp.SetPixel(2, ($fy - 1), $DARK)
-  $bmp.SetPixel(1, $fy, $TGREY); $bmp.SetPixel(1, ($fy + 1), $DARK)
-  $bmp.SetPixel(2, ($fy + 1), $DARK); $bmp.SetPixel(2, ($fy + 2), $DARK); $bmp.SetPixel(3, ($fy + 2), $DARK)
-  $bmp.SetPixel(2, ($fy - 1), $WHITE)  # 玻璃反光
-  # 握柄白爪（收起左前腿，托在镜筒近端下）
-  for ($y = 25; $y -le 28; $y++) { for ($x = 5; $x -le 8; $x++) { $bmp.SetPixel($x, $y, $CLEAR) } }
-  $bmp.SetPixel(8, ($ny + 2), $DARK)   # 爪臂接镜筒
-  Set-Px $bmp @(7, 8, 9) ($ny + 3) $DARK
-  $bmp.SetPixel(7, ($ny + 4), $DARK); $bmp.SetPixel(8, ($ny + 4), $WHITE); $bmp.SetPixel(9, ($ny + 4), $DARK)
-  Set-Px $bmp @(7, 8, 9) ($ny + 5) $DARK
-  # 右眼（睁着看 / 眨）——看镜眼藏起来了，这只 + 挑眉 + 问号承担表情
+# 挑眉（左眼版）：左眼上方一道 3px 眉线——放大镜端详右眼时，左眼这侧挑眉，
+# 凑出「一大一挑」的不对称疑惑脸（右眼版 Puzzle-Brow 的镜像）
+function Puzzle-Brow-L([System.Drawing.Bitmap]$bmp) {
+  $bmp.SetPixel(9, 10, $DARK)
+  $bmp.SetPixel(10, 11, $DARK)
+  $bmp.SetPixel(11, 11, $DARK)
+}
+
+# 放大镜·右眼版：镜框环（DARK 7x7，中心 21,13 罩住右眼）+ 镜内放大的右眼
+# （3x3 大瞳 + 高光 + 反光）+ 斜柄 + 握柄白爪（右前腿 x21-24 收起，地上剩三条
+# 腿）。举在右眼前端详——左眼版整套挪到右侧，握爪贴在竖尾前方。参数同左眼版：
+#   $dy=举镜微浮  $look=镜内大瞳左右瞟  $blink=眨大眼
+function Draw-Magnifier-R([System.Drawing.Bitmap]$bmp, [int]$dy = 0, [int]$look = 0, [bool]$blink = $false) {
+  # 镜框环（半径 3，中心 21,13）
+  Set-Px $bmp @(20, 21, 22) (10 + $dy) $DARK
+  Set-Px $bmp @(19, 23) (11 + $dy) $DARK
+  Set-Px $bmp @(18, 24) (12 + $dy) $DARK
+  Set-Px $bmp @(18, 24) (13 + $dy) $DARK
+  Set-Px $bmp @(18, 24) (14 + $dy) $DARK
+  Set-Px $bmp @(19, 23) (15 + $dy) $DARK
+  Set-Px $bmp @(20, 21, 22) (16 + $dy) $DARK
+  # 擦原右眼 2x2
   Set-Px $bmp @(20, 21) 13 $BODY
   Set-Px $bmp @(20, 21) 14 $BODY
   if ($blink) {
-    Set-Px $bmp @(19, 20, 21, 22) 14 $DARK   # 眨（下弯闭眼线）
+    Set-Px $bmp @(19, 20, 21, 22, 23) (13 + $dy) $DARK   # 镜内闭眼横线
   } else {
-    Set-Px $bmp @(20, 21) 13 $DARK           # 睁眼 2x2
-    Set-Px $bmp @(20, 21) 14 $DARK
+    # 镜内放大瞳（3x3，随 $look 左右瞟）+ 左上高光
+    $p = 20 + $look
+    Set-Px $bmp @($p, ($p + 1), ($p + 2)) (12 + $dy) $DARK
+    Set-Px $bmp @($p, ($p + 1), ($p + 2)) (13 + $dy) $DARK
+    Set-Px $bmp @($p, ($p + 1), ($p + 2)) (14 + $dy) $DARK
+    $bmp.SetPixel($p, (12 + $dy), $WHITE)
   }
+  $bmp.SetPixel(22, (11 + $dy), $WHITE)               # 玻璃反光（内壁上沿）
+  # 斜柄（镜框右下 → 握爪，2px 阶梯）
+  $bmp.SetPixel(23, (17 + $dy), $DARK); $bmp.SetPixel(24, (17 + $dy), $DARK)
+  $bmp.SetPixel(24, (18 + $dy), $DARK); $bmp.SetPixel(25, (18 + $dy), $DARK)
+  $bmp.SetPixel(25, (19 + $dy), $DARK); $bmp.SetPixel(26, (19 + $dy), $DARK)
+  # 握柄白爪（收起右前腿）
+  for ($y = 25; $y -le 28; $y++) { for ($x = 21; $x -le 24; $x++) { $bmp.SetPixel($x, $y, $CLEAR) } }
+  Set-Px $bmp @(25, 26, 27) (20 + $dy) $DARK
+  $bmp.SetPixel(25, (21 + $dy), $DARK); $bmp.SetPixel(26, (21 + $dy), $WHITE); $bmp.SetPixel(27, (21 + $dy), $DARK)
+  Set-Px $bmp @(25, 26, 27) (22 + $dy) $DARK
 }
 
-# ==== search-scope：搜索中·望远镜变体（循环，searching 状态随机抽到时播） ====
-# 举望远镜眺望：镜筒俯仰摇镜扫视远方（$tilt）+ 举镜微浮（$dy）+ 头顶问号起伏，
-# 偶尔眨看镜眼、尾巴慢摆。不用 Squash-Top（会压歪高处的物镜）。与放大镜版
-# 同 fps 同时长，进 searching 时二选一整段播（PetAnimManager 随机抽变体）
-Build-Strip "search-scope.png" @(
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 0 $false; Question-Mark $f 16 1 },                  # 0  平望正中
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 -1 $false; Sway-Tail $f; Question-Mark $f 16 1 },   # 1  抬镜望高 T1
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f -1 -1 $false; Sway-Tail2 $f; Question-Mark $f 16 0 }, # 2  凑近、问号升 T2
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 0 $false; Sway-Tail3 $f; Question-Mark $f 16 1 },   # 3  回平 T3
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 1 $false; Sway-Tail2 $f; Question-Mark $f 16 1 },   # 4  压镜望低 T2
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f -1 1 $false; Sway-Tail $f; Question-Mark $f 16 0 },   # 5  凑近、问号升 T1
-  { param($f) Draw-Telescope $f 0 0 $true; Question-Mark $f 16 1 },                                   # 6  眨右眼（放松无眉）
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 -1 $false; Sway-Tail $f; Question-Mark $f 17 2 },   # 7  抬镜、问号偏右沉 T1
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f -1 0 $false; Sway-Tail2 $f; Question-Mark $f 16 1 },  # 8  举高平望 T2
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 1 $false; Sway-Tail3 $f; Question-Mark $f 15 0 },   # 9  压镜、问号偏左升 T3
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f -1 -1 $false; Sway-Tail $f; Question-Mark $f 16 1 },  # 10 凑近抬镜 T1
-  { param($f) Puzzle-Brow $f; Draw-Telescope $f 0 0 $false; Sway-Tail2 $f; Question-Mark $f 15 1 }    # 11 回中、问号偏左 T2 → loop
+# ==== search-right：搜索中·放大镜右眼变体（循环，searching 随机抽到时播） ====
+# 与 search.png 同构，只是放大镜挪到右眼、握在右爪，挑眉挪到左眼。进 searching
+# 时与左眼版二选一整段播（PetAnimManager 随机抽变体）
+Build-Strip "search-right.png" @(
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 0 $false; Question-Mark $f 16 1 },                       # 0  端详正中
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 -1 $false; Sway-Tail $f; Question-Mark $f 16 1 },        # 1  瞟左 T1
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f -1 -1 $false; Sway-Tail2 $f; Question-Mark $f 16 0 },      # 2  凑近看左、问号升 T2
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 0 $false; Squash-Top $f; Sway-Tail3 $f; Question-Mark $f 16 1 }, # 3  回中歪头 T3
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 1 $false; Sway-Tail2 $f; Question-Mark $f 16 1 },        # 4  瞟右 T2
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f -1 1 $false; Sway-Tail $f; Question-Mark $f 16 0 },        # 5  凑近看右、问号升 T1
+  { param($f) Half-Eyes $f; Draw-Magnifier-R $f 0 0 $true; Question-Mark $f 16 1 },                            # 6  眨那只大眼（双眼半闭）
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 0 $false; Squash-Top $f; Sway-Tail $f; Question-Mark $f 16 2 }, # 7  歪头、问号沉 T1
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 -1 $false; Sway-Tail2 $f; Question-Mark $f 17 1 },       # 8  再扫左、问号偏右 T2
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f -1 0 $false; Sway-Tail3 $f; Question-Mark $f 16 0 },       # 9  举高居中、问号升 T3
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 1 $false; Squash-Top $f; Sway-Tail2 $f; Question-Mark $f 16 1 }, # 10 扫右歪头 T2
+  { param($f) Puzzle-Brow-L $f; Draw-Magnifier-R $f 0 0 $false; Sway-Tail $f; Question-Mark $f 15 1 }          # 11 回中、问号偏左 T1 → loop
 )
 
 # ==== search：网页搜索中（循环，接对话窗事件桥 web 搜索工具执行期间） ====
