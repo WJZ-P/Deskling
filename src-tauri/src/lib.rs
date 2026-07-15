@@ -5,6 +5,7 @@ use tauri::{
 };
 
 mod provider;
+mod skills;
 mod stt;
 mod tools;
 mod tts;
@@ -123,6 +124,13 @@ fn mouse_pressed() -> bool {
     false
 }
 
+/// 设置代理偏好（设置页「代理」区改动 + 启动时推来）：mode = system/custom/off，
+/// custom 时 url = 代理地址。存进 tools 全局，run_command 派生命令时按它设代理环境。
+#[tauri::command]
+fn set_proxy(mode: String, url: String) {
+    tools::set_proxy_pref(mode, url);
+}
+
 /// 查询桌宠 / 对话窗口当前可见状态（前端挂载时同步按钮文案用）。
 #[tauri::command]
 fn pet_visible(app: AppHandle) -> bool {
@@ -188,6 +196,7 @@ pub fn run() {
             pet_visible,
             chat_visible,
             mouse_pressed,
+            set_proxy,
             provider::provider_test,
             provider::provider_chat,
             provider::provider_chat_cancel,
@@ -200,7 +209,8 @@ pub fn run() {
             tts::tts_output_devices,
             tts::tts_speak,
             tts::tts_beep_start,
-            tts::tts_stop
+            tts::tts_stop,
+            tts::tts_set_volume
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

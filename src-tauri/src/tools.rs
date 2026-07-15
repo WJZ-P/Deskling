@@ -76,12 +76,45 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["command"]
             }),
         },
+        // 技能（skill）说明书加载器：只读，不执行任何东西——只把某个技能的 SKILL.md
+        // 全文取回来给模型看。系统提示词的「可用技能」清单列出有哪些技能；实际执行
+        // 由模型照说明用 run_command 跑脚本完成。执行分派在 provider loop 里拦截
+        // （需技能注册表，tools 层无上下文），故不出现在 execute() 里。
+        ToolSpec {
+            name: "load_skill",
+            description: "读取一个技能（skill）的完整说明书 SKILL.md 并返回其用法。系统提示词的「可用技能」清单里列了有哪些技能；想用某个就先用本工具按名字读它的说明，再照说明操作（通常是用 run_command 跑该技能目录下的脚本）。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "技能名（取自系统提示词的技能清单）" }
+                },
+                "required": ["name"]
+            }),
+        },
     ]
 }
 
+/// subagent 工具声明——单独出，只发给主 agent、不发给子 agent（避免无限递归）。
+/// 执行在 provider loop 里拦截（需要 profile/client 跑嵌套循环，execute() 够不着）。
+pub fn subagent_spec() -> ToolSpec {
+    ToolSpec {
+        name: "subagent",
+        description: "把一个明确、自包含的子任务交给一个独立的子 agent 去完成，只拿回它的最终结论。适合探索性、步骤较多、不必占用主线的活儿（如「查清 X 怎么用并总结」「在代码库里定位并汇总所有 Y」）。子 agent 有完整工具、会自主多步执行，但看不到当前对话——所以 task 要写全背景、目标、期望产出。",
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "task": { "type": "string", "description": "交给子 agent 的完整子任务说明（自包含：背景 + 要做什么 + 期望产出）" }
+            },
+            "required": ["task"]
+        }),
+    }
+}
+
 /// 工具是否需要人工审批（写/命令类为 true）。未知工具按需审批处理（保守）。
+/// load_skill 只读取说明书、不执行任何东西，免审批（技能脚本的实际执行走
+/// run_command，仍受审批/免审批开关约束）。
 pub fn needs_approval(name: &str) -> bool {
-    !matches!(name, "read_file" | "list_dir")
+    !matches!(name, "read_file" | "list_dir" | "load_skill")
 }
 
 /// 给用户看的一句话摘要（工具卡标题右侧）。args 解析失败时回落到工具名。
@@ -95,6 +128,11 @@ pub fn summarize(name: &str, args: &Value) -> String {
         }
         "write_file" => format!("写入 {}", str_arg(args, "path")),
         "run_command" => format!("执行 `{}`", str_arg(args, "command")),
+        "load_skill" => format!("查阅技能 {}", str_arg(args, "name")),
+        "subagent" => {
+            let head: String = str_arg(args, "task").chars().take(30).collect();
+            format!("子任务：{head}")
+        }
         other => format!("调用 {other}"),
     }
 }
@@ -212,6 +250,109 @@ fn decode_console(bytes: &[u8]) -> String {
     }
 }
 
+/// 读 Windows「系统代理」（Internet Settings 注册表；Clash/v2ray 的系统代理开关
+/// 设的就是它）。启用了固定代理就返回 "http://host:port"，否则 None。
+/// 注意：Node fetch / 我们的 CONNECT 隧道 / reqwest 都只认 HTTP(S)_PROXY 环境变量、
+/// 不会自己读注册表——所以要把这里读到的代理注入到派生进程的环境里（见 run_command）。
+/// PAC(AutoConfigURL) 自动配置脚本情形不处理（少见；Clash/v2ray 系统代理是固定地址）。
+#[cfg(target_os = "windows")]
+fn system_proxy() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    // 一次 reg query dump 整个 Internet Settings 键，同时取 ProxyEnable + ProxyServer
+    let out = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW：别闪控制台
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    // ProxyEnable    REG_DWORD    0x1  —— 末尾值非 0x0 才算开
+    let enabled = text.lines().any(|l| {
+        let toks: Vec<&str> = l.split_whitespace().collect();
+        toks.first() == Some(&"ProxyEnable") && toks.last().map(|v| *v != "0x0").unwrap_or(false)
+    });
+    if !enabled {
+        return None;
+    }
+
+    // ProxyServer    REG_SZ    127.0.0.1:7890  （或 "http=..;https=.." 形式）
+    let line = text.lines().find(|l| l.split_whitespace().next() == Some("ProxyServer"))?;
+    let val = line.split("REG_SZ").nth(1)?.trim();
+    if val.is_empty() {
+        return None;
+    }
+    let server = if val.contains('=') {
+        // 分协议指定：优先 https，其次 http
+        let pairs: Vec<(&str, &str)> = val.split(';').filter_map(|kv| kv.split_once('=')).collect();
+        pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("https"))
+            .or_else(|| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case("http")))
+            .map(|(_, v)| v.trim().to_string())?
+    } else {
+        val.to_string()
+    };
+    if server.is_empty() {
+        return None;
+    }
+    Some(if server.starts_with("http") {
+        server
+    } else {
+        format!("http://{server}")
+    })
+}
+
+/// 代理偏好（设置页可调）：(mode, url)。mode = ""/"system" 跟随系统代理、"custom"
+/// 用 url、"off" 不走代理。启动时 + 设置改动时由前端经 set_proxy 命令推进来。
+static PROXY_PREF: std::sync::Mutex<(String, String)> =
+    std::sync::Mutex::new((String::new(), String::new()));
+
+/// 更新代理偏好（set_proxy 命令调用）。跨平台存储；实际生效见 apply_proxy_env（Windows）。
+pub fn set_proxy_pref(mode: String, url: String) {
+    if let Ok(mut p) = PROXY_PREF.lock() {
+        *p = (mode, url);
+    }
+}
+
+/// 按代理偏好给派生命令设置代理环境变量：
+///  · off    → 清掉继承来的代理环境（明确不走代理）；
+///  · custom → 注入用户填的地址（缺协议头补 http://）；
+///  · system → 注入 Windows 系统代理（没配则不动，继承进程环境）。
+/// 让 web-search 等脚本（据 HTTP(S)_PROXY 走代理）默认就能联网。
+#[cfg(target_os = "windows")]
+fn apply_proxy_env(cmd: &mut tokio::process::Command) {
+    let (mode, url) = PROXY_PREF.lock().ok().map(|p| p.clone()).unwrap_or_default();
+    let proxy = match mode.as_str() {
+        "off" => {
+            for k in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+                cmd.env_remove(k);
+            }
+            return;
+        }
+        "custom" => {
+            let u = url.trim();
+            if u.is_empty() {
+                return;
+            }
+            Some(if u.starts_with("http") {
+                u.to_string()
+            } else {
+                format!("http://{u}")
+            })
+        }
+        _ => system_proxy(), // "" / "system"
+    };
+    if let Some(proxy) = proxy {
+        cmd.env("HTTPS_PROXY", &proxy);
+        cmd.env("HTTP_PROXY", &proxy);
+        // 本机地址不走代理（curl localhost 等不被误伤；search.cjs 走隧道不看它）
+        cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+    }
+}
+
 async fn run_command(args: &Value) -> Result<String, String> {
     let command = str_arg(args, "command");
     if command.trim().is_empty() {
@@ -238,6 +379,11 @@ async fn run_command(args: &Value) -> Result<String, String> {
         c.arg("-c").arg(&command);
         c
     };
+
+    // 按设置页的代理偏好给命令设代理环境（默认跟随 Windows 系统代理）——
+    // 让 web-search 等联网脚本默认就能通，无需用户手动设环境变量
+    #[cfg(target_os = "windows")]
+    apply_proxy_env(&mut cmd);
 
     match cmd.output().await {
         Ok(output) => {

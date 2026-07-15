@@ -586,7 +586,12 @@ pub struct TtsState {
     chatter: Arc<Mutex<Option<VoiceMeta>>>,
 }
 
-/// 建输出流：把样本队列（单声道、设备率）逐帧铺到所有声道；队列空则静音
+/// 软件音量（0.0~1.0）：设置页可调，播放输出按它线性缩放。用 AtomicU32 存 f32
+/// 位模式，音频回调无锁读取。默认 1.0（= 0x3F80_0000 的 f32 位模式）。
+static TTS_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// 建输出流：把样本队列（单声道、设备率）逐帧铺到所有声道；队列空则静音。
+/// 每帧按软件音量缩放（TTS_VOLUME）。
 fn build_output_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
@@ -601,9 +606,11 @@ where
         .build_output_stream(
             config,
             move |data: &mut [T], _| {
+                // 每次回调读一次音量（无锁），乘到每个样本上
+                let vol = f32::from_bits(TTS_VOLUME.load(std::sync::atomic::Ordering::Relaxed));
                 let mut q = samples.lock().unwrap();
                 for frame in data.chunks_mut(channels) {
-                    let s = q.pop_front().unwrap_or(0.0);
+                    let s = q.pop_front().unwrap_or(0.0) * vol;
                     for slot in frame {
                         *slot = T::from_sample(s);
                     }
@@ -613,6 +620,12 @@ where
             None,
         )
         .map_err(|e| format!("打开扬声器失败: {e}"))
+}
+
+/// 设置软件音量（0.0~1.0，越界自动 clamp）：设置页音量控件调用，立即对在播/后续输出生效。
+#[tauri::command]
+pub fn tts_set_volume(volume: f32) {
+    TTS_VOLUME.store(volume.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 播放线程：持有 cpal 输出流（非 Send 不进 State），经 ready 回报设备采样率；
