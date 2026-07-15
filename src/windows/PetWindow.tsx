@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+} from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -84,6 +91,25 @@ const MOVE_STATES: PetState[] = [
 ];
 const isMoveState = (s: PetState) => MOVE_STATES.includes(s);
 
+/** 拖动结束后的四拍收步过渡；播完动态恢复最近的对话态或 idle */
+const SETTLING_STATES: PetState[] = [
+  "settling",
+  "settlingLeft",
+  "settlingRight",
+  "settlingUp",
+  "settlingDown",
+];
+const isSettlingState = (s: PetState) => SETTLING_STATES.includes(s);
+
+/** 走路方向 → 对应收步过渡。悬空/正面步态走通用收步 */
+function settlingStateFor(s: PetState): PetState {
+  if (s === "walkingLeft") return "settlingLeft";
+  if (s === "walkingRight") return "settlingRight";
+  if (s === "walkingUp") return "settlingUp";
+  if (s === "walkingDown") return "settlingDown";
+  return "settling";
+}
+
 /** 「对话活动态」集合：对话窗事件桥推来的演出（说话/思考/敲电脑/搜索 + 收工待机）。
     这些态会被记进 convStateRef：拖拽打断后据它恢复、从隐藏被叫来时据它接演 */
 const CONV_STATES: PetState[] = ["talking", "thinking", "typing", "searching", "idle"];
@@ -92,6 +118,47 @@ const isConvState = (s: PetState) => CONV_STATES.includes(s);
 /** 「躲藏态」集合：躲好在屏幕边缘 / 探头。此态下被叫来说话要先召回（unhide）冒出来 */
 const HIDDEN_STATES: PetState[] = ["hiddenLeft", "hiddenRight", "peekingLeft", "peekingRight"];
 const isHiddenState = (s: PetState) => HIDDEN_STATES.includes(s);
+
+/**
+ * 状态仲裁策略：循环态通常可随时切换；一次性反应/过渡在播放期间保护，
+ * 低优先级请求排队到收尾后执行。更高优先级仍可抢占（拖动最高，用户永远
+ * 可以把桌宠拎走），避免“不可打断”变成“不可交互”。
+ */
+interface StatePolicy {
+  priority: number;
+  interruptible: boolean;
+}
+
+interface StateRequestOptions {
+  /** 用户直接拖动等强制交互可无视保护区抢占 */
+  force?: boolean;
+  /** 被保护状态拦住时是否记为“收尾后再播”（默认 true） */
+  queueIfBlocked?: boolean;
+}
+
+function statePolicy(s: PetState): StatePolicy {
+  if (isMoveState(s)) return { priority: 100, interruptible: true };
+  if (isSettlingState(s)) return { priority: 90, interruptible: false };
+  if (
+    s === "hidingLeft" ||
+    s === "hidingRight" ||
+    s === "unhideLeft" ||
+    s === "unhideRight"
+  ) {
+    return { priority: 80, interruptible: false };
+  }
+  if (s === "entering" || s === "greeting") {
+    return { priority: 70, interruptible: false };
+  }
+  if (s === "petted" || s === "stretching") {
+    return { priority: 60, interruptible: false };
+  }
+  if (s === "yawning" || s === "peekingLeft" || s === "peekingRight") {
+    return { priority: 50, interruptible: false };
+  }
+  if (isConvState(s)) return { priority: 30, interruptible: true };
+  return { priority: 0, interruptible: true };
+}
 
 // 动画登记表（状态 → 帧带变体组）在 src/pet/animations.ts；管理器负责
 // 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
@@ -186,26 +253,105 @@ export function PetWindow() {
   // 初始即 entering：启动时从画面底边探头张望再蹦出来，接 greeting 落地挥手
   // 完成整套登场（隐藏启动则悄悄播完落回 idle）
   const [state, setState] = useState<PetState>("entering");
+  // 同步镜像 + 状态仲裁队列：外部事件不再到处直接 setState，而是统一经过
+  // requestState。一次性动画保护期间来的低优先级请求只保留最新一个。
+  const stateRef = useRef<PetState>("entering");
+  const queuedStateRef = useRef<PetState | null>(null);
+  // 召回/收步这类“先播过渡、再接目标”的目标缓存。
+  const pendingStateRef = useRef<PetState | null>(null);
+  // 最近的对话活动态：摸头/拖拽等插播结束后据它恢复演出。
+  const convStateRef = useRef<PetState>("idle");
+  stateRef.current = state;
+
+  const requestState = useCallback(
+    (next: PetState, options: StateRequestOptions = {}): boolean => {
+      const current = stateRef.current;
+      if (current === next) return true;
+      const currentPolicy = statePolicy(current);
+      const nextPolicy = statePolicy(next);
+      const blocked =
+        !options.force &&
+        !currentPolicy.interruptible &&
+        nextPolicy.priority <= currentPolicy.priority;
+      if (blocked) {
+        if (options.queueIfBlocked !== false) queuedStateRef.current = next;
+        return false;
+      }
+      stateRef.current = next;
+      setState(next);
+      return true;
+    },
+    [],
+  );
+
   // 交互脉冲：每次指针按下 +1，重置入睡倒计时（拖窗不改 state，靠它兜底）
   const [activity, setActivity] = useState(0);
   // 进入状态时抽定帧带变体（多变体随机），状态不变则整段咬死不换
   const anim = useMemo(() => ANIM_MANAGER.pick(state), [state]);
-  // 一次性动作播完切到 next 声明的状态（摸头/伸懒腰/打招呼回 idle，打哈欠接 sleeping）。
-  // 召回（unhide）播完特判：若有待接演的对话态（从隐藏被叫来说话），接着演它——
-  // 让「隐藏 → 召回冒出 → 思考/说话」连成一气，而不是生硬跳进思考
-  const frame = useSpriteAnim(anim, () => {
-    const isRecall = state === "unhideLeft" || state === "unhideRight";
-    const pending = pendingStateRef.current;
-    pendingStateRef.current = null; // 消费一次即清（无论采不采用），免得被打断的召回残留串到下次
-    // 召回播完：仅当对话仍在进行（convStateRef 非 idle）才接演缓存的对话态；否则
-    // （收工/无对话，如手点尾巴的普通召回）走 next 回待机——防止残留旧态被误接演
-    if (isRecall && pending && convStateRef.current !== "idle") {
-      setState(ANIM_MANAGER.has(pending) ? pending : "idle");
-      return;
-    }
-    const n = anim.next;
-    setState(n && ANIM_MANAGER.has(n) ? n : "idle");
-  });
+  const frame = useSpriteAnim(
+    anim,
+    () => {
+      const current = stateRef.current;
+      const isRecall = current === "unhideLeft" || current === "unhideRight";
+
+      // 召回 / 收步是动态过渡：播完优先接缓存目标；目标已收工则回 idle。
+      if (isRecall || isSettlingState(current)) {
+        const pending = pendingStateRef.current;
+        pendingStateRef.current = null;
+        // 动画测试等非对话请求仍可能在保护期排队；它优先于过渡开始时缓存的
+        // resume 目标，消费后清空，不能让队列悬在循环态里永远等不到下一次 onEnd。
+        const queued = queuedStateRef.current;
+        queuedStateRef.current = null;
+        const target =
+          queued && ANIM_MANAGER.has(queued)
+            ? queued
+            : pending && ANIM_MANAGER.has(pending)
+              ? pending
+              : convStateRef.current;
+        requestState(target !== "idle" ? target : "idle", {
+          force: true,
+          queueIfBlocked: false,
+        });
+        return;
+      }
+
+      // 正在躲边时被对话叫住：完整播完冲出画面，再从同侧跑回来接演。
+      const queued = queuedStateRef.current;
+      if (
+        (current === "hidingLeft" || current === "hidingRight") &&
+        (queued === "unhideLeft" || queued === "unhideRight")
+      ) {
+        queuedStateRef.current = null;
+        requestState(queued, { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      // 打哈欠已经趴下时若对话在排队，先完整伸懒腰站起来，再接对话态。
+      if (current === "yawning" && queued && queued !== "idle") {
+        requestState("stretching", { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      // entering→greeting、yawning→sleeping、hiding→hidden 等声明式连续动作优先；
+      // idle 只是“收工”请求，不应拆断这条自然动作链。
+      const declared = anim.next;
+      if (declared && ANIM_MANAGER.has(declared)) {
+        if (queuedStateRef.current === "idle") queuedStateRef.current = null;
+        requestState(declared, { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      // 无声明后继的一次性动画：消费保护期间最后一个排队请求；没有则恢复
+      // 最近对话态（例如 thinking 中被摸头，开心蹦完继续托腮）。
+      const next = queuedStateRef.current;
+      queuedStateRef.current = null;
+      const target = next && ANIM_MANAGER.has(next) ? next : convStateRef.current;
+      requestState(target !== "idle" ? target : "idle", {
+        force: true,
+        queueIfBlocked: false,
+      });
+    },
+  );
 
   // 当前帧带的本体命中矩形：换状态重取（有缓存，仅每条帧带首次真扫）。
   // 新矩形到位前沿用旧值——比瞬间跳回整帧兜底更稳；首帧未就绪按整帧
@@ -291,14 +437,6 @@ export function PetWindow() {
   const hitRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const spriteRef = useRef<HTMLDivElement>(null);
-  // state 的 ref 镜像：巡逻计时器闭包里读最新状态，不随状态变化重建计时器
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  // 最近的对话活动态（talking/thinking/typing/searching/idle）：拖拽打断后据它恢复演出。
-  // 对话进行中它是 thinking/talking…；一轮收工（事件桥发 idle）后它变 idle
-  const convStateRef = useRef<PetState>("idle");
-  // 待接演的对话态：从隐藏被叫来时先播召回（unhide），召回播完接着演它
-  const pendingStateRef = useRef<PetState | null>(null);
   // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
   // 巡逻 tick 就只剩 cursorPosition 一次 IPC
   const winPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -361,7 +499,7 @@ export function PetWindow() {
     }
     // 贴好边再开演：惊觉「!」→ 冲出画面 → 只剩尾巴（播完自动接 hidden）
     if (hide) {
-      setState(hide);
+      requestState(hide, { force: true, queueIfBlocked: false });
       return true;
     }
     return false;
@@ -370,20 +508,20 @@ export function PetWindow() {
   // 久置入睡：idle 持续 SLEEP_AFTER_MS 无交互 → 打个哈欠趴下（播完接 sleeping）
   useEffect(() => {
     if (state !== "idle") return;
-    const t = window.setTimeout(() => setState("yawning"), SLEEP_AFTER_MS);
+    const t = window.setTimeout(() => requestState("yawning"), SLEEP_AFTER_MS);
     return () => window.clearTimeout(t);
-  }, [state, activity]);
+  }, [state, activity, requestState]);
 
   // 躲好后偶尔探头：hidden 驻留随机 1-3 分钟点播一次 peeking，播完自动
   // 缩回 hidden → 本效应重挂、重新掷下一次的间隔
   useEffect(() => {
     if (state !== "hiddenLeft" && state !== "hiddenRight") return;
     const t = window.setTimeout(
-      () => setState(state === "hiddenLeft" ? "peekingLeft" : "peekingRight"),
+      () => requestState(state === "hiddenLeft" ? "peekingLeft" : "peekingRight"),
       PEEK_MIN_MS + Math.random() * PEEK_RAND_MS,
     );
     return () => window.clearTimeout(t);
-  }, [state]);
+  }, [state, requestState]);
 
   // 移动停表：拖拽走路等移动态在窗口停稳 WALK_STOP_MS 后回待机。
   // onMoved 每次移动都续命，拖拽分支起手武装。
@@ -406,14 +544,17 @@ export function PetWindow() {
         // 先落位（大半出侧边贴边躲起来，其余越界吸回工作区）——先做它才能知道要不要躲，
         // 避免「先闪一下恢复的对话动画再躲」的跳帧。
         const hid = await settleAfterMove();
-        // 没躲藏才收步：对话仍在进行（convStateRef 是 thinking/talking/…）→ 接着演对应动画，
-        // 不生硬回待机；否则回 idle。躲了则保持 hiding，不覆盖
+        // 没躲藏才收步：先播放与当前方向匹配的四拍落脚/回正过渡；过渡播完
+        // 再接最近对话态（thinking/talking/…）或 idle。躲了则保持 hiding。
         if (!hid) {
-          setState((s) => {
-            if (!isMoveState(s)) return s;
-            const resume = convStateRef.current;
-            return resume !== "idle" ? resume : "idle";
-          });
+          const current = stateRef.current;
+          if (isMoveState(current)) {
+            pendingStateRef.current = convStateRef.current;
+            requestState(settlingStateFor(current), {
+              force: true,
+              queueIfBlocked: false,
+            });
+          }
         }
       })();
     }, WALK_STOP_MS);
@@ -441,12 +582,18 @@ export function PetWindow() {
       const dy = lastYRef.current === null ? 0 : payload.y - lastYRef.current;
       lastXRef.current = payload.x;
       lastYRef.current = payload.y;
-      setState((s) => {
-        if (!isMoveState(s)) return s;
-        if (dx === 0 && dy === 0) return "walking";
-        if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "walkingLeft" : "walkingRight";
-        return dy < 0 ? "walkingUp" : "walkingDown";
-      });
+      const current = stateRef.current;
+      if (isMoveState(current) && (dx !== 0 || dy !== 0)) {
+        const direction: PetState =
+          Math.abs(dx) >= Math.abs(dy)
+            ? dx < 0
+              ? "walkingLeft"
+              : "walkingRight"
+            : dy < 0
+              ? "walkingUp"
+              : "walkingDown";
+        requestState(direction, { force: true, queueIfBlocked: false });
+      }
       bumpMoveStop();
     });
     return () => {
@@ -454,7 +601,7 @@ export function PetWindow() {
       void unlisten.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [requestState]);
 
   // 状态点播通道：其他窗口 emitTo("pet", "pet:play", { state }) 直接切状态。
   // 桌宠页的动画测试按钮走这里；将来对话窗事件桥（talking/typing）也走这条
@@ -470,26 +617,34 @@ export function PetWindow() {
         if (isHiddenState(cur)) {
           if (s !== "idle") {
             pendingStateRef.current = s;
-            setState(
+            requestState(
               cur === "hiddenRight" || cur === "peekingRight" ? "unhideRight" : "unhideLeft",
             );
           }
           return;
         }
+        // 正在冲出屏幕时不半路瞬移回来：让 hiding 完整播完，再从同侧召回。
+        if (cur === "hidingLeft" || cur === "hidingRight") {
+          if (s !== "idle") {
+            pendingStateRef.current = s;
+            queuedStateRef.current = cur === "hidingRight" ? "unhideRight" : "unhideLeft";
+          }
+          return;
+        }
         // 召回还在播：只更新待接演目标，别打断召回动画（播完由 onEnd 接演）
-        if (cur === "unhideLeft" || cur === "unhideRight") {
+        if (cur === "unhideLeft" || cur === "unhideRight" || isSettlingState(cur)) {
           pendingStateRef.current = s;
           return;
         }
         // 拖拽/走路中：缓存对话态但不打断拖拽，拖完由移动停表据 convStateRef 恢复
         if (isMoveState(cur)) return;
       }
-      setState(s);
+      requestState(s);
     });
     return () => {
       void unlisten.then((f) => f());
     };
-  }, []);
+  }, [requestState]);
 
   // 光标巡逻：把「空白穿透」做成真的——网页里的 pointer-events 只管页内命中，
   // 窗口本身仍会吃掉整个矩形的鼠标事件（透明处点击也到不了桌面）。每 tick 读
@@ -566,17 +721,19 @@ export function PetWindow() {
     const dy = e.screenY - d.y;
     if (Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD_PX) {
       downRef.current = null;
-      // 拖拽打断任何进行中的动画（含召回）：清掉待接演目标，免得残留串到下次召回
+      // 拖拽是最高优先级的直接交互：打断当前动画，清掉旧过渡目标；对话态仍由
+      // convStateRef 保留，松手收步后会恢复。
       pendingStateRef.current = null;
-      setState(
+      queuedStateRef.current = null;
+      const direction: PetState =
         Math.abs(dx) >= Math.abs(dy)
           ? dx < 0
             ? "walkingLeft"
             : "walkingRight"
           : dy < 0
             ? "walkingUp"
-            : "walkingDown",
-      );
+            : "walkingDown";
+      requestState(direction, { force: true, queueIfBlocked: false });
       bumpMoveStop();
       void getCurrentWindow().startDragging();
     }
@@ -588,15 +745,20 @@ export function PetWindow() {
     //  · 睡着摸 = 伸懒腰醒来；· 其余 = 摸摸开心。
     // 躲/召回进行中（hiding/unhide）不打断，保持原状态
     if (downRef.current) {
-      setState((s) => {
-        if (s === "hiddenLeft" || s === "peekingLeft") return "unhideLeft";
-        if (s === "hiddenRight" || s === "peekingRight") return "unhideRight";
-        if (s === "hidingLeft" || s === "hidingRight" || s === "unhideLeft" || s === "unhideRight") {
-          return s;
-        }
-        if (s === "sleeping") return "stretching";
-        return "petted";
-      });
+      const current = stateRef.current;
+      if (current === "hiddenLeft" || current === "peekingLeft") {
+        requestState("unhideLeft");
+      } else if (current === "hiddenRight" || current === "peekingRight") {
+        requestState("unhideRight");
+      } else if (
+        current !== "hidingLeft" &&
+        current !== "hidingRight" &&
+        current !== "unhideLeft" &&
+        current !== "unhideRight" &&
+        !isSettlingState(current)
+      ) {
+        requestState(current === "sleeping" ? "stretching" : "petted");
+      }
     }
     downRef.current = null;
   };

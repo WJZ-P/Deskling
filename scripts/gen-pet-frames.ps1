@@ -614,9 +614,13 @@ $WALK_LEFT_PANT = @(
 
 # 镜像包装：原 spec 跑完后整帧水平翻转（向右走复用向左走的全部帧序）
 function Add-Flip([scriptblock[]]$specs) {
+  # GetNewClosure 会把闭包放进独立动态模块，里面看不到调用方会话里的 Flip-H
+  # 函数；先把函数体作为 scriptblock 捕获进去，保证脚本从任意 PowerShell
+  # 入口运行都能稳定生成镜像帧（而不是悄悄写出未翻转的右向资源）。
+  $flip = ${function:Flip-H}
   $specs | ForEach-Object {
     $orig = $_
-    { param($f) & $orig $f; Flip-H $f }.GetNewClosure()
+    { param($f) & $orig $f; & $flip $f }.GetNewClosure()
   }
 }
 
@@ -699,6 +703,46 @@ Build-Strip "walk-up.png" $WALK_UP_W
 Build-Strip "walk-up-pant.png" $WALK_UP_PANT
 Build-Strip "walk-down.png" $WALK_DOWN_W
 Build-Strip "walk-down-pant.png" $WALK_DOWN_PANT
+
+# ==== walk-stop：拖动松手后的落脚 / 回正过渡（play-once） ====
+# 走路本体按固定帧率一致播放；松手后不直接从任意抬腿帧硬切 idle，
+# 而是用四拍完成「最后一步落地 → 重心回中 → 五官回正」。四个方向分别
+# 保留第一拍的朝向，末帧统一回到底图，随后可无缝接 idle / 对话活动态。
+$WALK_STOP = @(
+  { param($f) Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Squash-Top $f }, # 0 最后一步仍抬着
+  { param($f) Sway-Tail2 $f; Squash-Top $f },                                                       # 1 落地压低
+  { param($f) Half-Eyes $f; Sway-Tail $f },                                                        # 2 重心回中
+  { param($f) }                                                                                     # 3 站稳回正
+)
+$WALK_STOP_LEFT = @(
+  { param($f) Face-Left $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },
+  { param($f) Face-Left $f; Sway-Tail2 $f; Squash-Top $f },
+  { param($f) Look-Side $f; Sway-Tail $f },
+  { param($f) }
+)
+$WALK_STOP_RIGHT = @(
+  { param($f) Face-Right $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f 1; Sway-Tail $f; Squash-Top $f },
+  { param($f) Face-Right $f; Sway-Tail2 $f; Squash-Top $f },
+  { param($f) Look-Right $f; Sway-Tail $f },
+  { param($f) }
+)
+$WALK_STOP_UP = @(
+  { param($f) Face-Up $f; Lift-Leg $f 10 13; Lift-Leg $f 21 24; Legs-Shift $f 1; Sway-Tail $f; Squash-Top $f },
+  { param($f) Face-Up $f; Sway-Tail2 $f; Squash-Top $f },
+  { param($f) Look-Up $f; Sway-Tail $f },
+  { param($f) }
+)
+$WALK_STOP_DOWN = @(
+  { param($f) Face-Down $f; Lift-Leg $f 5 8; Lift-Leg $f 16 19; Legs-Shift $f -1; Sway-Tail $f; Squash-Top $f },
+  { param($f) Face-Down $f; Sway-Tail2 $f; Squash-Top $f },
+  { param($f) Half-Eyes $f; Sway-Tail $f },
+  { param($f) }
+)
+Build-Strip "walk-stop.png" $WALK_STOP
+Build-Strip "walk-stop-left.png" $WALK_STOP_LEFT
+Build-Strip "walk-stop-right.png" $WALK_STOP_RIGHT
+Build-Strip "walk-stop-up.png" $WALK_STOP_UP
+Build-Strip "walk-stop-down.png" $WALK_STOP_DOWN
 
 # ==== typing：左右爪敲击 + 双爪齐拍 + 眨眼/抬眼/顿一下（每帧爪位或眼神在变） ====
 Build-Strip "typing.png" @(

@@ -9,6 +9,9 @@
  * Build-Strip spec + 这里登记一条；加变体 = 同状态数组多推一项。
  */
 
+/** 松手后的四拍收步速度；拖动中的柔性步态参数集中在 PetWindow.tsx 顶部。 */
+const WALK_SETTLE_FPS = 10;
+
 /** 一段帧动画：横向帧带 + 播放序列（序列项 = 帧带里的帧号） */
 export interface AnimDef {
   /** 帧带路径（public 下） */
@@ -25,9 +28,6 @@ export interface AnimDef {
   next?: string;
 }
 
-/** 0..11 线性序列：12 帧逐帧微差的帧带直接顺播 */
-const SEQ_12 = Array.from({ length: 12 }, (_, i) => i);
-
 /**
  * hidden 驻留序列：躲好后近静态——大部分 tick 定格在尾巴立正帧（重复帧号 =
  * 定格，播放 hook 帧号不变不重渲），偶尔懒摆一循环、松垂歇两拍（fps 2 下
@@ -41,15 +41,24 @@ const HIDDEN_SEQ = [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 
  */
 const ENTER_SEQ = [0, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11];
 
-/** 12 帧顺播条目的简写（大多数帧带都是这个形状） */
-const strip = (src: string, fps: number, extra?: Partial<AnimDef>): AnimDef => ({
+/** 任意帧数顺播条目的简写（过渡帧带会短于常规 12 帧） */
+const clip = (
+  src: string,
+  frames: number,
+  fps: number,
+  extra?: Partial<AnimDef>,
+): AnimDef => ({
   src,
-  frames: 12,
-  sequence: SEQ_12,
+  frames,
+  sequence: Array.from({ length: frames }, (_, i) => i),
   fps,
   loop: true,
   ...extra,
 });
+
+/** 12 帧顺播条目的简写（大多数帧带都是这个形状） */
+const strip = (src: string, fps: number, extra?: Partial<AnimDef>): AnimDef =>
+  clip(src, 12, fps, extra);
 
 /** 动画登记表：状态 → 帧带变体组（进入状态时抽一套） */
 export const ANIMS = {
@@ -82,6 +91,13 @@ export const ANIMS = {
     strip("/pet/anim/walk-right.png", 10),
     strip("/pet/anim/walk-right-pant.png", 10),
   ],
+  // 拖动松手的四拍收步：最后一步落地、重心回中、五官回正。
+  // 目标态不是静态 next：桌宠窗会据最新对话状态动态接 idle/thinking/talking…
+  settling: [clip("/pet/anim/walk-stop.png", 4, WALK_SETTLE_FPS, { loop: false })],
+  settlingLeft: [clip("/pet/anim/walk-stop-left.png", 4, WALK_SETTLE_FPS, { loop: false })],
+  settlingRight: [clip("/pet/anim/walk-stop-right.png", 4, WALK_SETTLE_FPS, { loop: false })],
+  settlingUp: [clip("/pet/anim/walk-stop-up.png", 4, WALK_SETTLE_FPS, { loop: false })],
+  settlingDown: [clip("/pet/anim/walk-stop-down.png", 4, WALK_SETTLE_FPS, { loop: false })],
   // 敲电脑：左右爪交替敲击，节奏里夹眨眼/抬眼/顿一下
   // 触发源 = 对话窗事件桥，agent 执行工具期间（web 搜索类工具改走 searching）
   typing: [strip("/pet/anim/typing.png", 8)],
