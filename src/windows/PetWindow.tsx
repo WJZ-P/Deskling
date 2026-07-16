@@ -271,49 +271,6 @@ function statePolicy(s: PetState): StatePolicy {
 // 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
 const ANIM_MANAGER = new PetAnimManager();
 
-/**
- * 按清单播放一段帧动画，返回当前该显示的帧号（帧号不变时不触发重渲）。
- * 非循环动画播到序列末尾停住并回调 onEnd（状态机用它切回 idle）。
- */
-function useSpriteAnim(def: AnimDef, onEnd?: () => void): number {
-  const safeFrame = (index: number) => {
-    const candidate = def.sequence[index] ?? 0;
-    return candidate >= 0 && candidate < def.frames ? candidate : 0;
-  };
-  // 把帧号和它所属的帧带绑在一起。def 切换后的首个 render 若仍握着旧值，
-  // 立即显示新帧带第 0 帧，不能拿 12 帧动画的 frame=11 去索引 4 帧帧带。
-  const [playback, setPlayback] = useState(() => ({ def, frame: safeFrame(0) }));
-  const frame = playback.def === def ? playback.frame : safeFrame(0);
-  // onEnd 走 ref：回调身份变化不重启动画
-  const onEndRef = useRef(onEnd);
-  onEndRef.current = onEnd;
-  useEffect(() => {
-    let i = 0;
-    const show = (next: number) => {
-      setPlayback((previous) =>
-        previous.def === def && previous.frame === next
-          ? previous
-          : { def, frame: next },
-      );
-    };
-    show(safeFrame(0));
-    const timer = window.setInterval(() => {
-      i += 1;
-      if (i >= def.sequence.length) {
-        if (!def.loop) {
-          window.clearInterval(timer);
-          onEndRef.current?.();
-          return;
-        }
-        i = 0;
-      }
-      show(safeFrame(i));
-    }, 1000 / def.fps);
-    return () => window.clearInterval(timer);
-  }, [def]);
-  return frame;
-}
-
 /** 桌宠本体命中矩形（32×32 帧内坐标，w/h 含端点） */
 interface BodyRect {
   x: number;
@@ -351,6 +308,102 @@ function decodeSprite(src: string): Promise<HTMLImageElement> {
     spriteDecodeCache.set(src, ready);
   }
   return ready;
+}
+
+/**
+ * 帧动画直接画进持久 Canvas：requestAnimationFrame 与浏览器绘制周期同步，
+ * React 只在业务状态变化时重渲染，不再为每一帧重跑整个 PetWindow。
+ */
+function useCanvasSpriteAnim(
+  def: AnimDef,
+  canvasRef: { readonly current: HTMLCanvasElement | null },
+  onEnd?: () => void,
+): void {
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
+
+  useLayoutEffect(() => {
+    let alive = true;
+    let raf = 0;
+    let wakeTimer = 0;
+    let lastFrame = -1;
+    let finished = false;
+
+    const start = (image: HTMLImageElement) => {
+      if (!alive) return;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !ctx) return;
+
+      const sequenceLength = Math.max(1, def.sequence.length);
+      const frameMs = 1000 / Math.max(0.001, def.fps);
+      const startedAt = performance.now();
+      ctx.imageSmoothingEnabled = false;
+
+      const drawSequenceIndex = (sequenceIndex: number) => {
+        const candidate = def.sequence[sequenceIndex] ?? 0;
+        const frame = candidate >= 0 && candidate < def.frames ? candidate : 0;
+        // 驻留序列会重复同一帧；时间照走，但 Canvas 无需上传相同像素。
+        if (frame === lastFrame) return;
+        ctx.globalCompositeOperation = "copy";
+        ctx.drawImage(
+          image,
+          frame * SPRITE_SIZE,
+          0,
+          SPRITE_SIZE,
+          SPRITE_SIZE,
+          0,
+          0,
+          SPRITE_SIZE,
+          SPRITE_SIZE,
+        );
+        ctx.globalCompositeOperation = "source-over";
+        lastFrame = frame;
+      };
+
+      // layout effect 内同步落首帧：状态切换后的第一次浏览器 paint 已是新画面。
+      drawSequenceIndex(0);
+      const scheduleNext = () => {
+        if (!alive) return;
+        const now = performance.now();
+        const nextIndex = Math.floor((now - startedAt) / frameMs) + 1;
+        const nextAt = startedAt + nextIndex * frameMs;
+        // 大部分间隔让 timeout 休眠，只在目标时刻前 2ms 交给 rAF 对齐浏览器 paint。
+        const delay = Math.max(0, nextAt - now - 2);
+        wakeTimer = window.setTimeout(() => {
+          if (alive) raf = window.requestAnimationFrame(tick);
+        }, delay);
+      };
+      const tick = (now: number) => {
+        if (!alive) return;
+        const elapsedIndex = Math.floor((now - startedAt) / frameMs);
+        if (!def.loop && elapsedIndex >= sequenceLength) {
+          drawSequenceIndex(sequenceLength - 1);
+          if (!finished) {
+            finished = true;
+            onEndRef.current?.();
+          }
+          return;
+        }
+
+        const sequenceIndex = def.loop
+          ? elapsedIndex % sequenceLength
+          : elapsedIndex;
+        drawSequenceIndex(sequenceIndex);
+        scheduleNext();
+      };
+      scheduleNext();
+    };
+
+    const image = spriteImageCache.get(def.src);
+    if (image) start(image);
+    else void decodeSprite(def.src).then(start).catch((error) => console.warn(error));
+    return () => {
+      alive = false;
+      window.clearTimeout(wakeTimer);
+      window.cancelAnimationFrame(raf);
+    };
+  }, [canvasRef, def]);
 }
 
 /**
@@ -460,8 +513,11 @@ export function PetWindow() {
     }
   }, []);
 
-  const frame = useSpriteAnim(
+  // Canvas 节点永久复用；动画 hook 直接写它，不通过 React state 逐帧重渲染。
+  const spriteRef = useRef<HTMLCanvasElement>(null);
+  useCanvasSpriteAnim(
     rendered.def,
+    spriteRef,
     () => {
       // 新状态图片尚在解码时，旧的一次性动画可能先走到末尾；它已经不是逻辑
       // 当前态，不能替尚未显示的新动画执行 onEnd。
@@ -524,41 +580,6 @@ export function PetWindow() {
       });
     },
   );
-
-  // CSS background-image 在透明 WebView2 的合成层换图时仍可能短暂露出透明底；
-  // decode 只保证图片可用，并不让“CSS 背景纹理上传 + 样式切换”成为同一原子操作。
-  // 改用一块永久挂载的 32×32 Canvas：globalCompositeOperation=copy 的单次
-  // drawImage 会连透明像素一起覆盖整帧，浏览器绘制前后都至少保留一张完整画面。
-  useLayoutEffect(() => {
-    let alive = true;
-    const paint = (image: HTMLImageElement) => {
-      if (!alive) return;
-      const canvas = spriteRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) return;
-      ctx.imageSmoothingEnabled = false;
-      ctx.globalCompositeOperation = "copy";
-      ctx.drawImage(
-        image,
-        frame * SPRITE_SIZE,
-        0,
-        SPRITE_SIZE,
-        SPRITE_SIZE,
-        0,
-        0,
-        SPRITE_SIZE,
-        SPRITE_SIZE,
-      );
-      ctx.globalCompositeOperation = "source-over";
-    };
-
-    const image = spriteImageCache.get(rendered.def.src);
-    if (image) paint(image);
-    else void decodeSprite(rendered.def.src).then(paint).catch((error) => console.warn(error));
-    return () => {
-      alive = false;
-    };
-  }, [frame, rendered.def]);
 
   // 当前帧带的本体命中矩形：换状态重取（有缓存，仅每条帧带首次真扫）。
   // 新矩形到位前沿用旧值——比瞬间跳回整帧兜底更稳；首帧未就绪按整帧
@@ -639,11 +660,9 @@ export function PetWindow() {
 
   // 按下起点：null = 本次按下已移交拖窗或已结束
   const downRef = useRef<{ x: number; y: number } | null>(null);
-  // 本体命中区 / 气泡的 DOM 引用（光标巡逻逐 tick 量矩形用）；
-  // 精灵帧引用（松手落位躲边时量帧矩形做贴边基准）
+  // 本体命中区 / 气泡的 DOM 引用（光标巡逻逐 tick 量矩形用）。
   const hitRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
-  const spriteRef = useRef<HTMLCanvasElement>(null);
   // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
   // 巡逻 tick 就只剩 cursorPosition 一次 IPC
   const winPosRef = useRef<{ x: number; y: number } | null>(null);

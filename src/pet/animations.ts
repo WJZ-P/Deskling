@@ -16,7 +16,7 @@ const WALK_SETTLE_FPS = 10;
 export interface AnimDef {
   /** 帧带路径（public 下） */
   src: string;
-  /** 帧带里的帧数（算 background-size 用） */
+  /** 帧带里的帧数（Canvas 从横向帧带裁取源矩形时校验边界） */
   frames: number;
   /** 播放序列：每 tick 前进一项 */
   sequence: number[];
