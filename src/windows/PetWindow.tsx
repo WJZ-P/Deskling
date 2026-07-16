@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,7 +20,7 @@ import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
 import { StreamingText } from "../chat/components/StreamingText";
 import { getSetting } from "../settings";
-import { PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
+import { ANIMS, PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
 
 /**
  * 桌宠窗口（label="pet"）：透明 / 无边框 / 置顶 / 不上任务栏，按住可拖动。
@@ -54,8 +55,6 @@ const PET_OPACITY = 1;
 const SPRITE_SIZE = 32;
 /** 整数放大倍数：32×6=192，在 240 窗口里给浮动留出余量 */
 const SPRITE_SCALE = 6;
-/** 放大后的帧边长 px（背景尺寸/步进都用它） */
-const FRAME_PX = SPRITE_SIZE * SPRITE_SCALE;
 /** 按下后移动超过这个曼哈顿距离（px）判定为拖窗，原地松手判定为摸摸 */
 const DRAG_THRESHOLD_PX = 4;
 /** idle 持续无交互这么久后入睡（ms） */
@@ -96,6 +95,11 @@ const TASKBAR_WALK_SPEED_PX_PER_SEC = 480;
 const TASKBAR_WALK_MIN_MS = 260;
 /** 自动走开的时长上限，避免异常越界时走太久（ms） */
 const TASKBAR_WALK_MAX_MS = 600;
+/** 正常站姿脚底的源图边界：腿画到 y=28，像素边界因此是 y=29。完整帧底 y=32
+    还留了 3px 透明区，底边召回时必须把这段空白沉进任务栏，否则猫会浮空。 */
+const STANDING_FOOT_BOTTOM_PX = 29;
+/** 底部召回共约 1.2s；窗口基线在前 1s 随冒头动作平滑落到脚底位置。 */
+const UNHIDE_DOWN_DOCK_MS = 1_000;
 /** 光标巡逻周期 ms：读全局光标判断在不在交互区，切换整窗穿透。
     调小则光标扫上桌宠后更快恢复可点，代价是 IPC 更密 */
 const CURSOR_PATROL_MS = 60;
@@ -156,10 +160,24 @@ function easeInOutCubic(progress: number): number {
 
 type SettleAfterMoveResult = "none" | "hidden" | "settled" | "cancelled";
 
-/** 「对话活动态」集合：对话窗事件桥推来的演出（说话/思考/敲电脑/搜索 + 收工待机）。
+/** 「对话活动态」集合：对话窗事件桥推来的循环演出（说话/思考/敲电脑/搜索/
+    聆听/待批准 + 收工待机）。
     这些态会被记进 convStateRef：拖拽打断后据它恢复、从隐藏被叫来时据它接演 */
-const CONV_STATES: PetState[] = ["talking", "thinking", "typing", "searching", "idle"];
+const CONV_STATES: PetState[] = [
+  "talking",
+  "thinking",
+  "typing",
+  "searching",
+  "listening",
+  "waitingApproval",
+  "idle",
+];
 const isConvState = (s: PetState) => CONV_STATES.includes(s);
+
+/** 成功/错误是一次性业务反馈；不写进 convStateRef，播完恢复 payload.resume 指定的循环态。 */
+const FEEDBACK_STATES: PetState[] = ["success", "error"];
+const isFeedbackState = (s: PetState) => FEEDBACK_STATES.includes(s);
+const isAssistantState = (s: PetState) => isConvState(s) || isFeedbackState(s);
 
 /** 四边完全躲好后的驻留态。 */
 const HIDDEN_IDLE_STATES: PetState[] = [
@@ -241,6 +259,8 @@ function statePolicy(s: PetState): StatePolicy {
   if (s === "yawning" || isPeekingState(s)) {
     return { priority: 50, interruptible: false };
   }
+  // 业务反馈必须完整读完；后续 thinking/talking 会排到收尾后恢复，拖动仍可抢占。
+  if (isFeedbackState(s)) return { priority: 45, interruptible: false };
   if (isConvState(s)) return { priority: 30, interruptible: true };
   // 自主待机动作只是低优先级点缀：说话、摸头、拖动等都能即时接管。
   if (isIdleActionState(s)) return { priority: 20, interruptible: true };
@@ -256,13 +276,27 @@ const ANIM_MANAGER = new PetAnimManager();
  * 非循环动画播到序列末尾停住并回调 onEnd（状态机用它切回 idle）。
  */
 function useSpriteAnim(def: AnimDef, onEnd?: () => void): number {
-  const [frame, setFrame] = useState(def.sequence[0] ?? 0);
+  const safeFrame = (index: number) => {
+    const candidate = def.sequence[index] ?? 0;
+    return candidate >= 0 && candidate < def.frames ? candidate : 0;
+  };
+  // 把帧号和它所属的帧带绑在一起。def 切换后的首个 render 若仍握着旧值，
+  // 立即显示新帧带第 0 帧，不能拿 12 帧动画的 frame=11 去索引 4 帧帧带。
+  const [playback, setPlayback] = useState(() => ({ def, frame: safeFrame(0) }));
+  const frame = playback.def === def ? playback.frame : safeFrame(0);
   // onEnd 走 ref：回调身份变化不重启动画
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
   useEffect(() => {
     let i = 0;
-    setFrame(def.sequence[0] ?? 0);
+    const show = (next: number) => {
+      setPlayback((previous) =>
+        previous.def === def && previous.frame === next
+          ? previous
+          : { def, frame: next },
+      );
+    };
+    show(safeFrame(0));
     const timer = window.setInterval(() => {
       i += 1;
       if (i >= def.sequence.length) {
@@ -273,7 +307,7 @@ function useSpriteAnim(def: AnimDef, onEnd?: () => void): number {
         }
         i = 0;
       }
-      setFrame(def.sequence[i]);
+      show(safeFrame(i));
     }, 1000 / def.fps);
     return () => window.clearInterval(timer);
   }, [def]);
@@ -290,6 +324,34 @@ interface BodyRect {
 
 // 帧带 src → 本体矩形缓存（帧带静态不变，整个会话每条只真扫一次）
 const bodyRectCache = new Map<string, Promise<BodyRect>>();
+
+// 解码后的 HTMLImageElement 本身也常驻缓存，既避免重复解码，也保证 Canvas
+// drawImage 时拿到的是仍有强引用的、可以同步绘制的图像源。
+const spriteImageCache = new Map<string, HTMLImageElement>();
+const spriteDecodeCache = new Map<string, Promise<HTMLImageElement>>();
+function decodeSprite(src: string): Promise<HTMLImageElement> {
+  const cached = spriteImageCache.get(src);
+  if (cached) return Promise.resolve(cached);
+  let ready = spriteDecodeCache.get(src);
+  if (!ready) {
+    ready = new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.decoding = "sync";
+      img.onload = () => {
+        const finish = () => {
+          spriteImageCache.set(src, img);
+          resolve(img);
+        };
+        if (typeof img.decode === "function") img.decode().then(finish, finish);
+        else finish();
+      };
+      img.onerror = () => reject(new Error(`桌宠帧带加载失败：${src}`));
+      img.src = src;
+    });
+    spriteDecodeCache.set(src, ready);
+  }
+  return ready;
+}
 
 /**
  * 扫帧带全帧非透明像素的并集包围盒 = 该状态下桌宠本体的最小命中矩形。
@@ -375,10 +437,36 @@ export function PetWindow() {
   const [activity, setActivity] = useState(0);
   // 进入状态时抽定帧带变体（多变体随机），状态不变则整段咬死不换
   const anim = useMemo(() => ANIM_MANAGER.pick(state), [state]);
+  // 逻辑状态可以立即仲裁；视觉帧带只在新图片解码完成后原子替换。加载期间沿用
+  // 上一条动画（一次性动画播完则停在末帧），桌面上始终至少有一帧猫。
+  const [rendered, setRendered] = useState(() => ({ state, def: anim }));
+  useEffect(() => {
+    if (rendered.state === state && rendered.def === anim) return;
+    let alive = true;
+    void decodeSprite(anim.src)
+      .then(() => {
+        if (alive) setRendered({ state, def: anim });
+      })
+      .catch((error) => console.warn(error));
+    return () => {
+      alive = false;
+    };
+  }, [anim, rendered, state]);
+
+  // 小帧带总量很小，窗口挂载后一次性预解码。上面的原子替换仍保留作首次加载兜底。
+  useEffect(() => {
+    for (const defs of Object.values(ANIMS)) {
+      for (const def of defs) void decodeSprite(def.src).catch((error) => console.warn(error));
+    }
+  }, []);
+
   const frame = useSpriteAnim(
-    anim,
+    rendered.def,
     () => {
-      const current = stateRef.current;
+      // 新状态图片尚在解码时，旧的一次性动画可能先走到末尾；它已经不是逻辑
+      // 当前态，不能替尚未显示的新动画执行 onEnd。
+      if (stateRef.current !== rendered.state) return;
+      const current = rendered.state;
       const isRecall = isUnhideState(current);
 
       // 召回 / 收步是动态过渡：播完优先接缓存目标；目标已收工则回 idle。
@@ -418,7 +506,7 @@ export function PetWindow() {
 
       // entering→greeting、yawning→sleeping、hiding→hidden 等声明式连续动作优先；
       // idle 只是“收工”请求，不应拆断这条自然动作链。
-      const declared = anim.next;
+      const declared = rendered.def.next;
       if (declared && ANIM_MANAGER.has(declared)) {
         if (queuedStateRef.current === "idle") queuedStateRef.current = null;
         requestState(declared, { force: true, queueIfBlocked: false });
@@ -437,18 +525,53 @@ export function PetWindow() {
     },
   );
 
+  // CSS background-image 在透明 WebView2 的合成层换图时仍可能短暂露出透明底；
+  // decode 只保证图片可用，并不让“CSS 背景纹理上传 + 样式切换”成为同一原子操作。
+  // 改用一块永久挂载的 32×32 Canvas：globalCompositeOperation=copy 的单次
+  // drawImage 会连透明像素一起覆盖整帧，浏览器绘制前后都至少保留一张完整画面。
+  useLayoutEffect(() => {
+    let alive = true;
+    const paint = (image: HTMLImageElement) => {
+      if (!alive) return;
+      const canvas = spriteRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !ctx) return;
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalCompositeOperation = "copy";
+      ctx.drawImage(
+        image,
+        frame * SPRITE_SIZE,
+        0,
+        SPRITE_SIZE,
+        SPRITE_SIZE,
+        0,
+        0,
+        SPRITE_SIZE,
+        SPRITE_SIZE,
+      );
+      ctx.globalCompositeOperation = "source-over";
+    };
+
+    const image = spriteImageCache.get(rendered.def.src);
+    if (image) paint(image);
+    else void decodeSprite(rendered.def.src).then(paint).catch((error) => console.warn(error));
+    return () => {
+      alive = false;
+    };
+  }, [frame, rendered.def]);
+
   // 当前帧带的本体命中矩形：换状态重取（有缓存，仅每条帧带首次真扫）。
   // 新矩形到位前沿用旧值——比瞬间跳回整帧兜底更稳；首帧未就绪按整帧
   const [bodyRect, setBodyRect] = useState<BodyRect | null>(null);
   useEffect(() => {
     let alive = true;
-    void stripBodyRect(anim.src).then((r) => {
+    void stripBodyRect(rendered.def.src).then((r) => {
       if (alive) setBodyRect(r);
     });
     return () => {
       alive = false;
     };
-  }, [anim]);
+  }, [rendered.def]);
 
   // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。两种形态——
   // say = 正文说话（白面对话泡 + 三角尾巴）；think = 思考中（浅青想法泡 +
@@ -520,7 +643,7 @@ export function PetWindow() {
   // 精灵帧引用（松手落位躲边时量帧矩形做贴边基准）
   const hitRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
-  const spriteRef = useRef<HTMLDivElement>(null);
+  const spriteRef = useRef<HTMLCanvasElement>(null);
   // 窗口位置缓存（物理 px）：挂载时查一次，之后靠 onMoved 增量维护，
   // 巡逻 tick 就只剩 cursorPosition 一次 IPC
   const winPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -573,6 +696,36 @@ export function PetWindow() {
       if (autoMoveRunRef.current === run) autoMoveRef.current = false;
     }
   };
+
+  // 底部隐藏时按完整 32px 帧框贴边，才能把 y25-31 的两只耳朵完整留在工作区；
+  // 召回后站姿脚底却在 y29。随 unhideDown 同步把窗口向下移动 3 个源像素，
+  // 既不让藏好时的耳朵少露一截，也让最后一拍准确站到任务栏上。
+  useEffect(() => {
+    if (rendered.state !== "unhideDown") return;
+    void (async () => {
+      const pos = winPosRef.current;
+      const sprite = spriteRef.current;
+      const monitor = await currentMonitor();
+      if (!pos || !sprite || !monitor || stateRef.current !== "unhideDown") return;
+
+      const dpr = window.devicePixelRatio;
+      const frameRect = sprite.getBoundingClientRect();
+      const footBottom =
+        pos.y +
+        (frameRect.top + STANDING_FOOT_BOTTOM_PX * SPRITE_SCALE) * dpr;
+      const workBottom = monitor.workArea.position.y + monitor.workArea.size.height;
+      const targetY = Math.round(pos.y + workBottom - footBottom);
+      if (targetY === pos.y) return;
+
+      await animateWindowTo(
+        pos,
+        { x: pos.x, y: targetY },
+        UNHIDE_DOWN_DOCK_MS,
+      );
+    })();
+    // animateWindowTo 只使用本次进入 unhideDown 时的坐标快照；帧更新不应重启动画。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rendered.state]);
 
   // 松手落位：按本体命中矩形（非整窗，头顶气泡展示位可以越出屏顶）四选一——
   //  · 本体拖出任一屏缘超过 HIDE_OVER_RATIO 个身位 = 想把它塞出去：窗口
@@ -885,13 +1038,19 @@ export function PetWindow() {
   // 状态点播通道：其他窗口 emitTo("pet", "pet:play", { state }) 直接切状态。
   // 桌宠页的动画测试按钮走这里；将来对话窗事件桥（talking/typing）也走这条
   useEffect(() => {
-    const unlisten = getCurrentWindow().listen<{ state?: string }>("pet:play", (e) => {
+    const unlisten = getCurrentWindow().listen<{ state?: string; resume?: string }>("pet:play", (e) => {
       const s = e.payload?.state;
       if (!s || !ANIM_MANAGER.has(s)) return;
       const cur = stateRef.current;
-      // 对话活动态特殊处理：记住它（供拖拽/召回后恢复），并按当前处境决定接法
-      if (isConvState(s)) {
-        convStateRef.current = s;
+      // 一次性成功/错误由发送方附上播完后的循环态；普通对话态则自身就是恢复目标。
+      const resume = e.payload?.resume;
+      if (resume && ANIM_MANAGER.has(resume) && isConvState(resume)) {
+        convStateRef.current = resume;
+      }
+      if (isConvState(s)) convStateRef.current = s;
+
+      // AI 活动态特殊处理：躲边时先召回，拖动中缓存，过渡播完再接演。
+      if (isAssistantState(s)) {
         // 躲在屏幕边缘时被叫来说话：先召回冒出来再接演（idle=收工不打扰，继续躲着）
         if (isHiddenState(cur)) {
           if (s !== "idle") {
@@ -913,8 +1072,11 @@ export function PetWindow() {
           pendingStateRef.current = s;
           return;
         }
-        // 拖拽/走路中：缓存对话态但不打断拖拽，拖完由移动停表据 convStateRef 恢复
-        if (isMoveState(cur)) return;
+        // 拖拽/走路中不抢控制权；一次性反馈排到收步后，循环态已记在 convStateRef。
+        if (isMoveState(cur)) {
+          if (isFeedbackState(s)) queuedStateRef.current = s;
+          return;
+        }
       }
       requestState(s);
     });
@@ -1088,13 +1250,10 @@ export function PetWindow() {
       <SpriteBox>
         <SpriteView
           ref={spriteRef}
+          width={SPRITE_SIZE}
+          height={SPRITE_SIZE}
           role="img"
           aria-label="雪豹"
-          style={{
-            backgroundImage: `url(${anim.src})`,
-            backgroundSize: `${anim.frames * FRAME_PX}px ${FRAME_PX}px`,
-            backgroundPosition: `${-frame * FRAME_PX}px 0`,
-          }}
         />
         <PetHit
           ref={hitRef}
@@ -1130,7 +1289,7 @@ const Stage = styled.div`
   pointer-events: none;
 `;
 
-/* 精灵框：FRAME_PX 见方的定位容器，本身不收事件（视觉与命中分离） */
+/* 精灵框：放大帧见方的定位容器，本身不收事件（视觉与命中分离） */
 const SpriteBox = styled.div`
   position: relative;
   pointer-events: none;
@@ -1264,9 +1423,9 @@ const ThinkDot = styled.div`
   }
 `;
 
-/* 雪豹本体：帧带做背景图，按帧号步进 background-position 切帧；
-   pixelated 保住整数倍放大的方块硬边不糊 */
-const SpriteView = styled.div`
+/* 雪豹本体：持久 32×32 Canvas 保存当前帧，CSS 只负责整数放大；
+   pixelated 保住方块硬边不糊，换动画时不再替换透明 WebView 的背景合成层。 */
+const SpriteView = styled.canvas`
   width: ${SPRITE_SIZE * SPRITE_SCALE}px;
   height: ${SPRITE_SIZE * SPRITE_SCALE}px;
   image-rendering: pixelated;

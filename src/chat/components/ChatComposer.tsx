@@ -54,6 +54,8 @@ const CHIP_TUNE: Partial<SurfaceTune> = {
 
 interface ChatComposerProps {
   onSend: (text: string) => void;
+  /** 录音真正开始/结束时通知对话窗，让桌宠切换聆听动画并在结束后恢复。 */
+  onVoiceActiveChange?: (active: boolean) => void;
   /** 点暂停：终止当前在途回复。sending=true 时发送按钮变暂停按钮 */
   onStop?: () => void;
   /** 是否有回复正在生成中（决定按钮是「发送」还是「暂停」） */
@@ -76,7 +78,7 @@ const TAP_MS = 300;
 const VOICE_PARTIAL_FIRST_MS = 450;
 const VOICE_PARTIAL_INTERVAL_MS = 650;
 
-export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
+export function ChatComposer({ onSend, onVoiceActiveChange, onStop, sending }: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -138,6 +140,7 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
       voiceStartingRef.current = false;
       // 开麦完成即进录音态：快速点按（哪怕开麦完成前就松了手）= 切换式开启
       setVoice("rec");
+      onVoiceActiveChange?.(true);
     } catch (err) {
       if (voiceRunRef.current === run) {
         voiceStartingRef.current = false;
@@ -184,6 +187,7 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
     if (!stopOnUpRef.current && heldMs < TAP_MS) return; // 点按开启：保持录音
     ++voiceRunRef.current; // 立即作废尚在途的临时识别结果
     setVoice("busy");
+    onVoiceActiveChange?.(false);
     const partialFallback = voiceDraftRef.current;
     try {
       const text = await invoke<string>("stt_stop");
@@ -205,6 +209,7 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
     stopOnUpRef.current = false;
     if (voice !== "rec" && !voiceStartingRef.current) return;
     const run = ++voiceRunRef.current;
+    onVoiceActiveChange?.(false);
     void invoke("stt_cancel")
       .catch(() => {})
       .finally(() => {

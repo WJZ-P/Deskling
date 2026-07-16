@@ -122,6 +122,13 @@ export const ANIMS = {
     strip("/pet/anim/search.png", 5),
     strip("/pet/anim/search-right.png", 5),
   ],
+  // 正在聆听：录音期间竖耳追声，声波由近到远扩散。
+  listening: [strip("/pet/anim/listening.png", 6)],
+  // 等待危险工具批准：举着问号牌看主人，循环到用户同意或拒绝。
+  waitingApproval: [strip("/pet/anim/waiting-approval.png", 5)],
+  // 工具/任务反馈：一次性反应，由桌宠窗在播完后恢复最新对话态。
+  success: [strip("/pet/anim/success.png", 8, { loop: false })],
+  error: [strip("/pet/anim/error.png", 7, { loop: false })],
   // 摸头：两轮开心蹦跶（起跳→最高→回落→落地压缩），播完自回 idle
   petted: [strip("/pet/anim/petted.png", 8, { loop: false })],
   // 睡觉：猫貌团趴姿——呼吸起伏 + Zzz 上飘 + 尾尖/耳朵偶发小动作（6s 一循环）

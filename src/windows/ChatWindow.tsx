@@ -51,6 +51,20 @@ const BEEP_TAIL_MAX_MS = 1000;
 // 「思考」——AI 卡住时不至于一直张嘴说话对不上（有真实语音在播时不干预）
 const TALK_STALL_MS = 1000;
 
+type PetWorkState = "searching" | "typing";
+type PetLoopState =
+  | "thinking"
+  | "talking"
+  | PetWorkState
+  | "listening"
+  | "waitingApproval"
+  | "idle";
+type PetFeedbackState = "success" | "error";
+interface PetToolActivity {
+  workState: PetWorkState;
+  pendingApproval: boolean;
+}
+
 // web 搜索类工具名判定（如将来的内置 web_search 工具）：命中则桌宠举放大镜端详
 const isSearchTool = (name: string) => /search|web/i.test(name);
 
@@ -60,7 +74,7 @@ const isSearchTool = (name: string) => /search|web/i.test(name);
  * 再 run_command 跑 search.js，所以除了工具名，还看 args：加载搜索类技能、或跑搜索脚本时
  * 都演 searching。args 是 JSON 串（解析失败按敲电脑兜底）。
  */
-function petToolState(call: { name: string; args: string }): "searching" | "typing" {
+function petToolState(call: { name: string; args: string }): PetWorkState {
   if (isSearchTool(call.name)) return "searching";
   // args 是 JSON 串。注意 JSON.parse("null")/("1")/('"x"') 不抛错但返回非对象——
   // 必须显式判「是对象且非 null」，否则后面取 .name/.command 会抛 TypeError 逃出
@@ -432,15 +446,18 @@ export function ChatWindow() {
 
   // ---- 桌宠事件桥：对话进行到哪一步，桌宠就演哪一出 ----
   // thinking = 等首包/推理中（托腮）；typing = 普通工具执行中（敲电脑）；
-  // searching = web 搜索类工具执行中（举放大镜端详）；talking = 正文流式输出
-  // （说话）；idle = 一轮收工回待机。去重后 emitTo 桌宠窗（与动画测试按钮同
+  // searching = web 搜索类工具执行中（举放大镜端详）；talking = 正文流式输出；
+  // listening = 用户录音；waitingApproval = 工具等主人点头；idle = 一轮收工。
+  // 去重后 emitTo 桌宠窗（与动画测试按钮同
   // 一条 pet:play 通道；窗口隐藏时播了也无妨）。桌宠被摸会临时插播摸头，下一
   // 次桥状态变化时自动回到对话演出
   const petStateRef = useRef<string | null>(null);
+  // 记住每张在途工具卡的工作动画与审批状态；并发工具收尾时据剩余卡恢复正确演出。
+  const toolPetStateRef = useRef(new Map<string, PetToolActivity>());
   // 说话卡顿看门狗计时器：见 TALK_STALL_MS
   const talkStallRef = useRef(0);
   const petPlay = useCallback(
-    (state: "thinking" | "talking" | "typing" | "searching" | "idle") => {
+    (state: PetLoopState) => {
       // 说话态起看门狗：TALK_STALL_MS 内没再收到正文（没续期）→ 当前还在说话且无
       // 真实语音在播（有语音时嘴型交给 tts:state 主导，不抢）就切回思考
       const armStall = () => {
@@ -469,6 +486,22 @@ export function ChatWindow() {
       else window.clearTimeout(talkStallRef.current);
     },
     [],
+  );
+
+  // 成功/错误是一次性反馈，不覆盖桌宠窗记住的循环态。resume 告诉它完整播完后
+  // 应回到哪里；期间到达的新 talking/thinking 会由动画优先级排队接管。
+  const petFeedback = useCallback((state: PetFeedbackState, resume: PetLoopState) => {
+    petStateRef.current = state;
+    window.clearTimeout(talkStallRef.current);
+    void emitTo("pet", "pet:play", { state, resume }).catch(() => {});
+  }, []);
+
+  const handleVoiceActiveChange = useCallback(
+    (active: boolean) => {
+      if (active) petPlay("listening");
+      else petPlay(liveRef.current ? "thinking" : "idle");
+    },
+    [petPlay],
   );
 
   // ---- 语音（TTS）：桌宠在桌面上时，AI 回复实时出声 ----
@@ -633,6 +666,7 @@ export function ChatWindow() {
       setStreamingId(null);
       streamRef.current = null;
       liveRef.current = null;
+      toolPetStateRef.current.clear();
       // 语音收尾：neural 把分句器余量念完（嘴型交给 tts:state 落回 idle）；
       // beep 不是念完就停——随机再叨 1-2s 才 tts_stop（AI 说完过一会才闭嘴）
       const sp = speechRef.current;
@@ -715,8 +749,13 @@ export function ChatWindow() {
             started = true;
             setTypingConv(null);
           }
-          // 干活了：web 搜索（含技能化的）举放大镜端详，其余工具敲电脑
-          petPlay(petToolState(call));
+          // 危险工具先举问号牌等主人批准；安全工具立即按类型干活。
+          const workState = petToolState(call);
+          toolPetStateRef.current.set(call.id, {
+            workState,
+            pendingApproval: call.needsApproval,
+          });
+          petPlay(call.needsApproval ? "waitingApproval" : workState);
           appendToolSegment(setConversations, convId, replyId, {
             kind: "tool",
             id: call.id,
@@ -730,7 +769,13 @@ export function ChatWindow() {
         // 工具执行收尾：按 id 回填状态与结果预览
         onToolEnd: (end) => {
           if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫（防复活已取消卡）
-          petPlay("thinking"); // 工具跑完模型接着消化结果：回到托腮（开口时切说话）
+          toolPetStateRef.current.delete(end.id);
+          const remaining = [...toolPetStateRef.current.values()];
+          const resume = remaining.some((tool) => tool.pendingApproval)
+            ? "waitingApproval"
+            : (remaining[remaining.length - 1]?.workState ?? "thinking");
+          // 工具结果先完整反馈一次；若仍有并发工具，就恢复待批准/工作动画，否则托腮消化。
+          petFeedback(end.status === "success" ? "success" : "error", resume);
           updateToolSegments(setConversations, convId, replyId, end.id, {
             status: end.status,
             detail: end.detail,
@@ -744,6 +789,7 @@ export function ChatWindow() {
         onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
         onError: (message) => {
           finish();
+          petFeedback("error", "idle");
           // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
           appendDelta(
             setConversations,
@@ -764,7 +810,7 @@ export function ChatWindow() {
       getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
-  }, [petPlay, petSay, speakSentences]);
+  }, [petFeedback, petPlay, petSay, speakSentences]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -876,6 +922,7 @@ export function ChatWindow() {
     streamRef.current = null;
     const live = liveRef.current;
     liveRef.current = null;
+    toolPetStateRef.current.clear();
     if (live) {
       updateToolSegments(setConversations, live.convId, live.replyId, null, {
         status: "error",
@@ -885,7 +932,8 @@ export function ChatWindow() {
     setTypingConv(null);
     setSending(false);
     setStreamingId(null);
-  }, []);
+    petPlay("idle");
+  }, [petPlay]);
 
   // 审批作答：放行/拒绝一次 pending 的工具调用，唤醒 Rust 侧阻塞等待的 agent loop。
   // 放行做乐观更新 pending → running（Rust 对「开始执行」不再发事件，不更 UI 会一直显示待审批）；
@@ -896,11 +944,18 @@ export function ChatWindow() {
     if (!stream || !live) return;
     stream.approve(toolCallId, approved);
     if (approved) {
+      const activity = toolPetStateRef.current.get(toolCallId);
+      if (activity) activity.pendingApproval = false;
+      const remaining = [...toolPetStateRef.current.values()];
+      const next = remaining.some((tool) => tool.pendingApproval)
+        ? "waitingApproval"
+        : (activity?.workState ?? "typing");
+      petPlay(next);
       updateToolSegments(setConversations, live.convId, live.replyId, toolCallId, {
         status: "running",
       });
     }
-  }, []);
+  }, [petPlay]);
 
   return (
     <Shell>
@@ -945,7 +1000,12 @@ export function ChatWindow() {
                     onDeleteMessage={handleDeleteMessage}
                   />
                 </ListArea>
-                <ChatComposer onSend={handleSend} onStop={handleStop} sending={sending} />
+                <ChatComposer
+                  onSend={handleSend}
+                  onVoiceActiveChange={handleVoiceActiveChange}
+                  onStop={handleStop}
+                  sending={sending}
+                />
               </>
             ) : (
               <NoConv>
