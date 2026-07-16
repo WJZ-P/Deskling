@@ -69,6 +69,13 @@ const strip = (src: string, fps: number, extra?: Partial<AnimDef>): AnimDef =>
 export const ANIMS = {
   // 待机：尾巴慢波浪 + 慢呼吸（一循环只沉浮各一次）+ 眨眼弧 + 耳尖抖
   idle: [strip("/pet/anim/idle.png", 5)],
+  // 随机待机动作：仅由 PetWindow 的带权重/冷却调度器在 idle 中低概率点播。
+  // 全部一次性播放，结束后回 idle；AI 活动态或用户交互可以随时打断。
+  idleLook: [strip("/pet/anim/idle-look.png", 5, { loop: false })],
+  idleGroom: [strip("/pet/anim/idle-groom.png", 6, { loop: false })],
+  idleScratch: [strip("/pet/anim/idle-scratch.png", 8, { loop: false })],
+  idleSneeze: [strip("/pet/anim/idle-sneeze.png", 8, { loop: false })],
+  idleAlert: [strip("/pet/anim/idle-alert.png", 7, { loop: false })],
   // 说话：嘴部开合打拍子 + 点头 + 尾巴伴奏（触发源 = 对话窗事件桥，正文流式输出时）
   talking: [strip("/pet/anim/talk.png", 6)],
   // 走路（正面）：对角步态 + 下盘横摆 + 尾巴打拍子

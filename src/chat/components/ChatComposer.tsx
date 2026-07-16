@@ -24,8 +24,9 @@ import { getActiveProfile, getSetting, setSetting } from "../../settings";
  *  - 空白内容不发送；
  *  - textarea 随内容增高，到上限后内部滚动（不撑爆窗口）。
  *  - 麦克风双模式：点按 = 切换式开录（再点一下结束）；按住 = 说完松手即停。
- *    停止后离线识别（SenseVoice，stt_stop 返回文本）追加进输入框——
- *    落框不直发，识别错了还能改。设备由设置页「麦克风」项指定。
+ *    录音中用 SenseVoice 滚动识别当前整句，临时结果实时替换输入框里的语音
+ *    草稿；停止后 stt_stop 最终定稿。落框不直发，识别错了还能改。设备由
+ *    设置页「麦克风」项指定。
  * 输入面用 PixelSurface（同 PixelInput 引擎）：静态低噪常驻，
  * 聚焦时外描边逐像素点亮、低噪动起来，和主面板输入框手感一致。
  * 纯 UI：把内容交给 onSend，清空由本组件负责。
@@ -71,6 +72,9 @@ type VoiceState = "idle" | "rec" | "busy" | "err";
 const VOICE_ERR_MS = 2400;
 /** 短于此时长（ms）的按下视为「点按」= 切换式开录；按得更久则是长按 = 松手即停 */
 const TAP_MS = 300;
+/** 开麦后先攒一点上下文再请求首个临时结果；之后上一轮完成才延迟下一轮，不堆请求。 */
+const VOICE_PARTIAL_FIRST_MS = 450;
+const VOICE_PARTIAL_INTERVAL_MS = 650;
 
 export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   const [value, setValue] = useState("");
@@ -83,6 +87,17 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   // ---- 语音输入：点按 = 切换式开/关，长按 = 说完松手即停 ----
   const [voice, setVoice] = useState<VoiceState>("idle");
   const [voiceErr, setVoiceErr] = useState("");
+  // value 只存已经定稿/手打的内容；录音中的临时全文单独放 voiceDraft，渲染时
+  // 拼在后面。每轮 partial 直接替换它，避免“你好你好吗”式重复追加。
+  const [voiceDraft, setVoiceDraft] = useState("");
+  const voiceDraftRef = useRef("");
+  voiceDraftRef.current = voiceDraft;
+  const composedValue = value + voiceDraft;
+  // 每次开始/停止/取消都换 run id；迟到的上一轮 partial 结果据此静默丢弃。
+  const voiceRunRef = useRef(0);
+  // stt_start 在采集设备就绪前会短暂等待；这期间 pointercancel 也必须能取消，
+  // 并阻止第二次按下并发启动另一条录音会话。
+  const voiceStartingRef = useRef(false);
   // 本次按下的时刻：松手时用时长区分「点按（切换式开启）」与「长按（松手停）」
   const pressAtRef = useRef(0);
   // 录音中再次按下 = 切换式关闭：这一下的松手直接停止识别
@@ -100,25 +115,66 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   // 按下：待命则开麦；录音中则标记「松手即停」（切换式的第二次点按）。
   // setPointerCapture 把后续指针事件锁给按钮：拖出按钮再松手也能正常收尾
   const voiceDown = async (e: ReactPointerEvent<HTMLButtonElement>) => {
-    if (voice === "busy") return;
+    if (voice === "busy" || voiceStartingRef.current) return;
     if (voice === "rec") {
       stopOnUpRef.current = true;
       return;
     }
     pressAtRef.current = Date.now();
     stopOnUpRef.current = false;
+    const run = ++voiceRunRef.current;
+    voiceStartingRef.current = true;
+    setVoiceDraft("");
     e.currentTarget.setPointerCapture(e.pointerId);
     // 你开口它闭嘴：录音期间停掉桌宠的语音播报，免得麦克风收进它自己的声音
     void invoke("tts_stop").catch(() => {});
     try {
       // 麦克风设备来自设置页选择（"" = 系统默认，跨窗口 onKeyChange 保证缓存新鲜）
       await invoke("stt_start", { device: getSetting("sttDevice") || null });
+      if (voiceRunRef.current !== run) {
+        void invoke("stt_cancel").catch(() => {});
+        return;
+      }
+      voiceStartingRef.current = false;
       // 开麦完成即进录音态：快速点按（哪怕开麦完成前就松了手）= 切换式开启
       setVoice("rec");
     } catch (err) {
-      flashVoiceErr(String(err));
+      if (voiceRunRef.current === run) {
+        voiceStartingRef.current = false;
+        flashVoiceErr(String(err));
+      }
     }
   };
+
+  // 录音中滚动转写：SenseVoice 是离线整句模型，因此每轮拿“截至当前的全文”并
+  // 替换 voiceDraft。严格串行 await + setTimeout，识别变慢时只会降低刷新率，
+  // 不会堆积一串过时任务占满 CPU。
+  useEffect(() => {
+    if (voice !== "rec") return;
+    const run = voiceRunRef.current;
+    let disposed = false;
+    let timer = 0;
+
+    const poll = async () => {
+      try {
+        const text = await invoke<string | null>("stt_partial");
+        if (!disposed && voiceRunRef.current === run && text != null) {
+          setVoiceDraft(text);
+        }
+      } catch {
+        // 临时识别失败不终止录音：松手后的最终识别仍可能成功。
+      }
+      if (!disposed && voiceRunRef.current === run) {
+        timer = window.setTimeout(() => void poll(), VOICE_PARTIAL_INTERVAL_MS);
+      }
+    };
+
+    timer = window.setTimeout(() => void poll(), VOICE_PARTIAL_FIRST_MS);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [voice]);
 
   // 松手：短按 = 切换式开启，保持录音等下一次点按；长按或切换式第二次点按 =
   // 停止识别，文本追加进输入框（不直发，识别错了还能改）
@@ -126,13 +182,20 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
     const heldMs = Date.now() - pressAtRef.current;
     if (voice !== "rec") return; // 开麦尚未完成的松手：完成后按切换式保持录音
     if (!stopOnUpRef.current && heldMs < TAP_MS) return; // 点按开启：保持录音
+    ++voiceRunRef.current; // 立即作废尚在途的临时识别结果
     setVoice("busy");
+    const partialFallback = voiceDraftRef.current;
     try {
       const text = await invoke<string>("stt_stop");
-      if (text) setValue((v) => (v ? v + text : text));
+      const finalText = text || partialFallback;
+      if (finalText) setValue((v) => v + finalText);
+      setVoiceDraft("");
       setVoice("idle");
       taRef.current?.focus();
     } catch (err) {
+      // 最终解码失败时保住用户已经看见的临时文本，转成可编辑定稿再报错。
+      if (partialFallback) setValue((v) => v + partialFallback);
+      setVoiceDraft("");
       flashVoiceErr(String(err));
     }
   };
@@ -140,8 +203,14 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
   // 系统级中断（指针被拖拽劫走等）：丢弃本次录音
   const voiceCancel = () => {
     stopOnUpRef.current = false;
-    if (voice !== "rec") return;
-    void invoke("stt_cancel").catch(() => {});
+    if (voice !== "rec" && !voiceStartingRef.current) return;
+    const run = ++voiceRunRef.current;
+    void invoke("stt_cancel")
+      .catch(() => {})
+      .finally(() => {
+        if (voiceRunRef.current === run) voiceStartingRef.current = false;
+      });
+    setVoiceDraft("");
     setVoice("idle");
   };
 
@@ -151,15 +220,16 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
     if (!ta) return;
     ta.style.height = "auto";
     ta.style.height = `${Math.min(MAX_H, Math.max(MIN_H, ta.scrollHeight))}px`;
-  }, [value]);
+  }, [composedValue]);
 
   const submit = () => {
     // 生成中不发送（此时按钮是暂停）；输入框仍可继续打字预输入
-    if (sending) return;
-    const text = value.trim();
+    if (sending || voice === "rec" || voice === "busy") return;
+    const text = composedValue.trim();
     if (!text) return;
     onSend(text);
     setValue("");
+    setVoiceDraft("");
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -229,10 +299,11 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
           )}
           <Textarea
             ref={taRef}
-            value={value}
+            value={composedValue}
             rows={1}
             placeholder="和 Deskling 说点什么喵～（Enter 发送 · Shift+Enter 换行）"
             onChange={(e) => setValue(e.target.value)}
+            readOnly={voice === "rec" || voice === "busy"}
             onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
@@ -240,7 +311,11 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
           <SendRow>
             <VoiceGroup>
               {/* 状态提示在左、麦克风贴着发送按钮 */}
-              {voice === "rec" && <VoiceHint data-rec>录音中…点按/松手结束</VoiceHint>}
+              {voice === "rec" && (
+                <VoiceHint data-rec>
+                  {voiceDraft ? "实时识别中…点按/松手结束" : "正在听…点按/松手结束"}
+                </VoiceHint>
+              )}
               {voice === "busy" && <VoiceHint>识别中…</VoiceHint>}
               {voice === "err" && <VoiceHint data-err>{voiceErr}</VoiceHint>}
               {/* 语音按钮：与发送同规格（图标 24px + 上下 8px = 40px 齐高），
@@ -279,7 +354,7 @@ export function ChatComposer({ onSend, onStop, sending }: ChatComposerProps) {
             ) : (
               <PixelButton
                 variant="primary"
-                disabled={value.trim().length === 0}
+                disabled={composedValue.trim().length === 0 || voice === "rec" || voice === "busy"}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={submit}
               >

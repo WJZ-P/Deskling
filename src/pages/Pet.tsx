@@ -43,6 +43,11 @@ const STATS = [
 /** 动画测试项：key 与桌宠窗 ANIMS 的状态键一一对应 */
 const ANIM_TESTS = [
   { key: "idle", label: "待机" },
+  { key: "idleLook", label: "张望" },
+  { key: "idleGroom", label: "洗脸" },
+  { key: "idleScratch", label: "挠耳" },
+  { key: "idleSneeze", label: "喷嚏" },
+  { key: "idleAlert", label: "警觉" },
   { key: "talking", label: "说话" },
   { key: "walking", label: "走路" },
   { key: "walkingLeft", label: "走路←" },

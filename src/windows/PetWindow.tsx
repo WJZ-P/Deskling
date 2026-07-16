@@ -60,6 +60,24 @@ const FRAME_PX = SPRITE_SIZE * SPRITE_SCALE;
 const DRAG_THRESHOLD_PX = 4;
 /** idle 持续无交互这么久后入睡（ms） */
 const SLEEP_AFTER_MS = 20_000;
+/** idle 站稳后，第一次考虑自主小动作的等待区间（基础 + 随机幅度）。 */
+const IDLE_ACTION_MIN_MS = 6_000;
+const IDLE_ACTION_RAND_MS = 6_000;
+/** 到达抽选时刻后真正表演的概率；落空则继续普通呼吸，随后按原逻辑入睡。 */
+const IDLE_ACTION_CHANCE = 0.62;
+interface IdleActionConfig {
+  state: PetState;
+  weight: number;
+  cooldownMs: number;
+}
+/** 五种自主动作的相对权重与独立冷却；喷嚏最稀有，张望最常见。 */
+const IDLE_ACTIONS: readonly IdleActionConfig[] = [
+  { state: "idleLook", weight: 34, cooldownMs: 25_000 },
+  { state: "idleGroom", weight: 24, cooldownMs: 45_000 },
+  { state: "idleScratch", weight: 18, cooldownMs: 45_000 },
+  { state: "idleAlert", weight: 16, cooldownMs: 35_000 },
+  { state: "idleSneeze", weight: 8, cooldownMs: 90_000 },
+];
 /** 说话气泡兜底自消：这么久没收到新文本也没收尾（如中途暂停）就自行隐去（ms）。
     收尾（done）后的驻留时长走设置项 petBubbleSecs（设置面板可调） */
 const BUBBLE_IDLE_MS = 10_000;
@@ -86,6 +104,10 @@ const CURSOR_PATROL_MS = 60;
 const HIDE_OVER_RATIO = 0.2;
 /** Windows 原生拖窗会约束透明窗外框；其他平台保留系统拖窗作为兼容回退。 */
 const USE_MANUAL_WINDOW_DRAG = navigator.userAgent.includes("Windows");
+
+/** idle 中低概率点播的一次性自主小动作。 */
+const IDLE_ACTION_STATES = IDLE_ACTIONS.map(({ state }) => state);
+const isIdleActionState = (s: PetState) => IDLE_ACTION_STATES.includes(s);
 
 /** 「移动态」集合：拖拽跟手的走路（按方向分四向）+ 悬空。onMoved 只在这些
     状态里按拖动方向切向，停表也只对这些状态收步——不打断播放中的一次性动画 */
@@ -220,6 +242,8 @@ function statePolicy(s: PetState): StatePolicy {
     return { priority: 50, interruptible: false };
   }
   if (isConvState(s)) return { priority: 30, interruptible: true };
+  // 自主待机动作只是低优先级点缀：说话、摸头、拖动等都能即时接管。
+  if (isIdleActionState(s)) return { priority: 20, interruptible: true };
   return { priority: 0, interruptible: true };
 }
 
@@ -682,6 +706,42 @@ export function PetWindow() {
     if (state !== "idle") return;
     const t = window.setTimeout(() => requestState("yawning"), SLEEP_AFTER_MS);
     return () => window.clearTimeout(t);
+  }, [state, activity, requestState]);
+
+  // 自主待机行为：idle 站稳 6-12 秒后进行一次概率抽选。每种动作有独立冷却，
+  // 候选内按权重抽取；概率落空后本轮不再重掷，让普通呼吸和原有入睡仍占主导。
+  // 动作播完走通用 onEnd 回 idle；任何 AI 活动态或用户交互都可直接打断。
+  const idleActionCooldownRef = useRef(new Map<PetState, number>());
+  useEffect(() => {
+    if (state !== "idle") return;
+    const timer = window.setTimeout(
+      () => {
+        if (stateRef.current !== "idle" || Math.random() > IDLE_ACTION_CHANCE) return;
+
+        const now = performance.now();
+        const candidates = IDLE_ACTIONS.filter(
+          ({ state: action }) => (idleActionCooldownRef.current.get(action) ?? 0) <= now,
+        );
+        if (candidates.length === 0) return;
+
+        const totalWeight = candidates.reduce((sum, action) => sum + action.weight, 0);
+        let roll = Math.random() * totalWeight;
+        let selected = candidates[candidates.length - 1];
+        for (const candidate of candidates) {
+          roll -= candidate.weight;
+          if (roll <= 0) {
+            selected = candidate;
+            break;
+          }
+        }
+
+        if (requestState(selected.state)) {
+          idleActionCooldownRef.current.set(selected.state, now + selected.cooldownMs);
+        }
+      },
+      IDLE_ACTION_MIN_MS + Math.random() * IDLE_ACTION_RAND_MS,
+    );
+    return () => window.clearTimeout(timer);
   }, [state, activity, requestState]);
 
   // 躲好后偶尔探头：hidden 驻留随机 1-3 分钟点播一次 peeking，播完自动

@@ -203,6 +203,7 @@ pub fn run() {
             provider::provider_tool_approve,
             stt::stt_devices,
             stt::stt_start,
+            stt::stt_partial,
             stt::stt_stop,
             stt::stt_cancel,
             tts::tts_packs,

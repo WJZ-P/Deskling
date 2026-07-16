@@ -117,6 +117,12 @@ function Look-Right([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(9, 10, 21, 22) 14 $DARK
 }
 
+# 警觉瞪圆眼：瞳孔纵向拉长 1px，比普通 2x2 眼更醒目但仍保持像素风。
+function Wide-Eyes([System.Drawing.Bitmap]$bmp) {
+  Clear-Eyes $bmp
+  foreach ($y in 12, 13, 14) { Set-Px $bmp @(8, 9, 20, 21) $y $DARK }
+}
+
 # 面朝上：瞳孔 + w 嘴整体上移 1px——五官压向行进方向（仰着头往上走），
 # 与 Face-Left 同一套动势语言；只动五官，头身轮廓不动避免破边
 function Face-Up([System.Drawing.Bitmap]$bmp) {
@@ -253,6 +259,15 @@ function Add-Z([System.Drawing.Bitmap]$bmp, [int]$x0, [int]$y0) {
   Set-Px $bmp @($x0, ($x0 + 1), ($x0 + 2)) ($y0 + 2) $DARK
 }
 
+# 头顶惊叹号「!」：x14-15 竖条 y0-2 + 点 y4。悬浮标记要在 Hop 之后画，
+# 身体弹起时它留在原地；躲边受惊和随机警觉动作共用。
+function Alert-Mark([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(14, 15) 0 $DARK
+  Set-Px $bmp @(14, 15) 1 $DARK
+  Set-Px $bmp @(14, 15) 2 $DARK
+  Set-Px $bmp @(14, 15) 4 $DARK
+}
+
 # ---- 身体动作（区域平移引擎） ----
 # 矩形区域整体平移 (dx,dy)：抓快照 → 清空区域 → 非透明像素回填到偏移处
 # （透明像素不落笔：目标处原有内容保留，区域边界拼接自然）
@@ -308,6 +323,13 @@ function Flick-Ear([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 21 3 25 5 -1
 # 同时又不像把整只耳朵刚性横移。
 function Bend-Ear([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 17 3 25 5 -1 0 }
 function Bend-Ear-Left([System.Drawing.Bitmap]$bmp) { Shift-Region $bmp 5 3 13 5 1 0 }
+
+# 警觉竖耳：耳根 y6-9 固定，只把两边完整耳尖各向外撑 1px，形成突然捕捉到
+# 动静的展开姿态；描边和耳肉一起移动，不留悬空黑边。
+function Flare-Ears([System.Drawing.Bitmap]$bmp) {
+  Shift-Region $bmp 5 3 13 5 -1 0
+  Shift-Region $bmp 17 3 25 5 1 0
+}
 
 # 全身上跳 $px 像素（内容最高点 y3，最多跳 2 不会顶出画布）。
 # 注意：整画布平移，必须放在该帧所有绝对坐标操作之后
@@ -397,6 +419,69 @@ function Wave-Leg([System.Drawing.Bitmap]$bmp, [int]$top) {
     $bmp.SetPixel(2, $y, $WHITE)
   }
   Set-Px $bmp @(0, 1, 2) ($top + 3) $DARK
+}
+
+# 洗脸用右前爪：右外侧腿收起，在脸颊上画一只 4x4 白爪。
+# $top=14 是嘴边舔爪，12 是脸颊，10 是擦到眼睛/额头。
+function Groom-Paw([System.Drawing.Bitmap]$bmp, [int]$top) {
+  for ($y = 25; $y -le 28; $y++) {
+    for ($x = 21; $x -le 24; $x++) { $bmp.SetPixel($x, $y, $CLEAR) }
+  }
+  Set-Px $bmp @(21, 22, 23, 24) $top $DARK
+  foreach ($y in ($top + 1), ($top + 2)) {
+    $bmp.SetPixel(21, $y, $DARK)
+    $bmp.SetPixel(22, $y, $WHITE)
+    $bmp.SetPixel(23, $y, $WHITE)
+    $bmp.SetPixel(24, $y, $DARK)
+  }
+  Set-Px $bmp @(21, 22, 23, 24) ($top + 3) $DARK
+}
+
+# 舔右爪的小舌头：嘴向右侧伸出两格，刚好朝向嘴边的 Groom-Paw。
+function Lick-Right([System.Drawing.Bitmap]$bmp) {
+  Clear-Mouth $bmp
+  Set-Px $bmp @(14, 15, 16, 17) 16 $DARK
+  Set-Px $bmp @(16, 17, 18) 17 $PINK
+  $bmp.SetPixel(19, 17, $DARK)
+}
+
+# 挠左耳用后爪：左外侧腿收起，在左耳外侧画一只 4x4 白爪；top 在 5/7 间
+# 交替即形成快速挠动，top=9 是抬腿靠近/放下的过渡。
+function Scratch-Paw([System.Drawing.Bitmap]$bmp, [int]$top) {
+  for ($y = 25; $y -le 28; $y++) {
+    for ($x = 5; $x -le 8; $x++) { $bmp.SetPixel($x, $y, $CLEAR) }
+  }
+  Set-Px $bmp @(1, 2, 3, 4) $top $DARK
+  foreach ($y in ($top + 1), ($top + 2)) {
+    $bmp.SetPixel(1, $y, $DARK)
+    $bmp.SetPixel(2, $y, $WHITE)
+    $bmp.SetPixel(3, $y, $WHITE)
+    $bmp.SetPixel(4, $y, $DARK)
+  }
+  Set-Px $bmp @(1, 2, 3, 4) ($top + 3) $DARK
+}
+
+# 挠耳速度短线：两相交错，避免每拍只做爪子刚性上下平移。
+function Scratch-Lines([System.Drawing.Bitmap]$bmp, [int]$phase) {
+  if ($phase -eq 1) {
+    Set-Px $bmp @(0, 1) 5 $TGREY
+    Set-Px $bmp @(0) 8 $TGREY
+  } else {
+    Set-Px $bmp @(0) 4 $TGREY
+    Set-Px $bmp @(0, 1) 9 $TGREY
+  }
+}
+
+# 喷嚏飞沫：向左侧散开的两档小灰点，落在身体轮廓外的空气区。
+function Sneeze-Specks([System.Drawing.Bitmap]$bmp, [int]$phase) {
+  if ($phase -eq 1) {
+    $bmp.SetPixel(0, 13, $TGREY)
+    $bmp.SetPixel(2, 15, $TGREY)
+    $bmp.SetPixel(0, 18, $TGREY)
+  } else {
+    $bmp.SetPixel(1, 12, $TGREY)
+    $bmp.SetPixel(0, 16, $TGREY)
+  }
 }
 
 # ---- 敲电脑道具 ----
@@ -548,6 +633,90 @@ Build-Strip "idle.png" @(
   { param($f) Squash-Top $f },                            # 9  T0 B1
   { param($f) Flick-Ear $f; Squash-Top $f },              # 10 耳尖抖一下（先抖后压）
   { param($f) Half-Eyes $f }                              # 11 吸气回浮 + 轻眨 → 接回帧 0
+)
+
+# ==== 随机待机动作：idle 驻留时由行为调度低概率点播，全部 play-once → idle ====
+# 这五条不是 idle 的等价换皮：每条都有清楚的起势—主体—收势，且首尾保留普通
+# 站姿，插入/退出时不会跳轮廓。权重与冷却在 PetWindow.tsx 顶层配置。
+
+# 左右张望：先眯眼听一听，目光从左扫到右，再抬眼确认头顶动静并回正。
+Build-Strip "idle-look.png" @(
+  { param($f) Half-Eyes $f },                                             # 0  收神
+  { param($f) Look-Side $f; Sway-Tail $f },                              # 1  左瞟 T1
+  { param($f) Look-Side $f; Sway-Tail2 $f },                             # 2  左瞟 T2
+  { param($f) Face-Left $f; Sway-Tail3 $f },                             # 3  整张脸偏左 T3
+  { param($f) Close-Eyes $f; Sway-Tail3 $f },                            # 4  转向间眨眼
+  { param($f) Look-Right $f; Sway-Tail3 $f; Squash-Top $f },             # 5  右瞟 T3 B1
+  { param($f) Look-Right $f; Sway-Tail2 $f; Squash-Top $f },             # 6  右瞟 T2 B1
+  { param($f) Face-Right $f; Sway-Tail $f },                             # 7  整张脸偏右 T1
+  { param($f) Half-Eyes $f; Sway-Tail2 $f },                             # 8  回中
+  { param($f) Look-Up $f; Flick-Ear $f; Sway-Tail $f },                  # 9  抬眼听声
+  { param($f) Half-Eyes $f; Squash-Top $f },                             # 10 放松呼气
+  { param($f) Sway-Tail $f }                                             # 11 回普通站姿
+)
+
+# 舔爪洗脸：右爪抬到嘴边舔湿，沿脸颊擦到额头，来回两次后放回地面。
+Build-Strip "idle-groom.png" @(
+  { param($f) Half-Eyes $f; Lift-Leg $f 21 24; Sway-Tail $f },           # 0  抬右爪
+  { param($f) Half-Eyes $f; Groom-Paw $f 14; Sway-Tail2 $f },            # 1  爪到嘴边
+  { param($f) Half-Eyes $f; Lick-Right $f; Groom-Paw $f 14; Sway-Tail3 $f }, # 2 舔爪
+  { param($f) Close-Eyes $f; Groom-Paw $f 12; Sway-Tail3 $f },           # 3  擦脸颊
+  { param($f) Close-Eyes $f; Groom-Paw $f 10; Sway-Tail2 $f },           # 4  擦到额头
+  { param($f) Happy-Eyes $f; Groom-Paw $f 12; Sway-Tail $f },            # 5  擦下来
+  { param($f) Close-Eyes $f; Groom-Paw $f 10; Squash-Top $f },           # 6  第二次上擦
+  { param($f) Half-Eyes $f; Lick-Right $f; Groom-Paw $f 12; Sway-Tail $f }, # 7 再舔一下
+  { param($f) Half-Eyes $f; Groom-Paw $f 14; Sway-Tail2 $f; Squash-Top $f }, # 8 爪回嘴边
+  { param($f) Half-Eyes $f; Think-Paw $f; Sway-Tail3 $f },               # 9  沿脸放下
+  { param($f) Lift-Leg $f 21 24; Sway-Tail2 $f },                        # 10 爪将落地
+  { param($f) Half-Eyes $f; Sway-Tail $f }                               # 11 洗完回神
+)
+
+# 挠左耳：左后爪抬到耳边，在两个高度间快速交替，耳尖配合弯动，最后抖耳收势。
+Build-Strip "idle-scratch.png" @(
+  { param($f) Look-Side $f; Lift-Leg $f 5 8; Sway-Tail $f },             # 0  察觉耳痒
+  { param($f) Half-Eyes $f; Scratch-Paw $f 9; Sway-Tail2 $f },           # 1  爪靠近
+  { param($f) Close-Eyes $f; Scratch-Paw $f 7; Sway-Tail3 $f },          # 2  起挠
+  { param($f) Close-Eyes $f; Scratch-Paw $f 5; Scratch-Lines $f 1; Bend-Ear-Left $f; Sway-Tail2 $f }, # 3
+  { param($f) Happy-Eyes $f; Scratch-Paw $f 7; Scratch-Lines $f 2; Sway-Tail3 $f; Squash-Top $f },     # 4
+  { param($f) Close-Eyes $f; Scratch-Paw $f 5; Scratch-Lines $f 1; Bend-Ear-Left $f; Sway-Tail $f },   # 5
+  { param($f) Happy-Eyes $f; Scratch-Paw $f 7; Scratch-Lines $f 2; Sway-Tail2 $f },                    # 6
+  { param($f) Close-Eyes $f; Scratch-Paw $f 5; Scratch-Lines $f 1; Bend-Ear-Left $f },                 # 7
+  { param($f) Half-Eyes $f; Scratch-Paw $f 7; Scratch-Lines $f 2; Squash-Top $f },                     # 8
+  { param($f) Half-Eyes $f; Scratch-Paw $f 9; Sway-Tail $f },           # 9  爪离耳
+  { param($f) Lift-Leg $f 5 8; Bend-Ear-Left $f; Sway-Tail2 $f },       # 10 放腿、耳朵还歪
+  { param($f) Half-Eyes $f; Flick-Ear $f; Sway-Tail $f }                 # 11 抖耳回正
+)
+
+# 打喷嚏：鼻痒蓄力、闭眼缩成一团、弹起喷出飞沫，再迷糊地抖耳恢复。
+Build-Strip "idle-sneeze.png" @(
+  { param($f) Half-Eyes $f; Sway-Tail $f },                              # 0  鼻子发痒
+  { param($f) Look-Up $f; Sway-Tail2 $f },                               # 1  吸气
+  { param($f) Half-Eyes $f; Half-Mouth $f; Sway-Tail3 $f },              # 2  蓄力
+  { param($f) Close-Eyes $f; Open-Mouth $f; Sway-Tail3 $f; Squash-Top $f }, # 3 缩起来
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail2 $f; Hop $f 1; Sneeze-Specks $f 1 }, # 4 哈啾！
+  { param($f) Close-Eyes $f; Open-Mouth $f; Squash-Top $f; Sneeze-Specks $f 2 },            # 5 飞沫散去
+  { param($f) Half-Eyes $f; Open-Mouth $f; Sway-Tail2 $f },              # 6  喘口气
+  { param($f) Close-Eyes $f; Sway-Tail $f },                             # 7  余震眨眼
+  { param($f) Half-Eyes $f; Squash-Top $f },                             # 8  迷糊下沉
+  { param($f) Half-Eyes $f; Flick-Ear $f; Sway-Tail $f },                # 9  抖耳清醒
+  { param($f) Look-Up $f; Sway-Tail2 $f; Squash-Top $f },                # 10 确认不会再来
+  { param($f) Sway-Tail $f }                                             # 11 回正
+)
+
+# 突然警觉：左右捕捉声音、双耳外撑、瞪眼弹起冒「!」，观察片刻后解除警报。
+Build-Strip "idle-alert.png" @(
+  { param($f) Look-Side $f; Sway-Tail $f },                              # 0  左边有声音？
+  { param($f) Look-Right $f; Sway-Tail2 $f },                            # 1  又看右边
+  { param($f) Half-Eyes $f; Flare-Ears $f; Sway-Tail3 $f },              # 2  双耳展开
+  { param($f) Wide-Eyes $f; Flare-Ears $f; Sway-Tail3 $f; Hop $f 1; Alert-Mark $f }, # 3 惊起！
+  { param($f) Wide-Eyes $f; Flare-Ears $f; Sway-Tail2 $f; Alert-Mark $f },            # 4 定睛
+  { param($f) Look-Side $f; Flare-Ears $f; Sway-Tail3 $f },              # 5  警觉左看
+  { param($f) Look-Right $f; Flare-Ears $f; Sway-Tail2 $f },             # 6  警觉右看
+  { param($f) Wide-Eyes $f; Bend-Ear $f; Sway-Tail $f },                 # 7  单耳追声
+  { param($f) Half-Eyes $f; Bend-Ear-Left $f; Sway-Tail2 $f; Squash-Top $f }, # 8 放松
+  { param($f) Look-Up $f; Flick-Ear $f; Sway-Tail3 $f },                 # 9  最后确认
+  { param($f) Half-Eyes $f; Sway-Tail2 $f },                             # 10 警报解除
+  { param($f) Sway-Tail $f }                                             # 11 回正
 )
 
 # ==== talk：三态口型不停换 + 尾巴波浪 + 点头 + 一次眨眼 ====
@@ -907,15 +1076,6 @@ function Slide-Down([System.Drawing.Bitmap]$bmp, [int]$px) {
 # 底部只留双耳时去掉右侧竖尾，避免尾尖与耳朵一起从边缘露出来
 function Hide-Standing-Tail([System.Drawing.Bitmap]$bmp) {
   Shift-Region $bmp 27 6 31 16 6 0
-}
-
-# 头顶惊叹号「!」：x14-15 竖条 y0-2 + 点 y4。悬浮标记——画在 Hop 之后，
-# 身体弹起时「!」原地不动（受惊定身特效）
-function Alert-Mark([System.Drawing.Bitmap]$bmp) {
-  Set-Px $bmp @(14, 15) 0 $DARK
-  Set-Px $bmp @(14, 15) 1 $DARK
-  Set-Px $bmp @(14, 15) 2 $DARK
-  Set-Px $bmp @(14, 15) 4 $DARK
 }
 
 # 冲刺速度线：身后三条 3px 灰短线（y12/17/22 交错），$x0 = 三条线的最左列。

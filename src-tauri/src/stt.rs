@@ -4,6 +4,7 @@
 //!   stt_start  按下开麦：起独立采集线程（cpal Stream 不是 Send，进不了
 //!              State，由线程独占持有），同时后台预热识别器——首次加载
 //!              约 1s，正好藏进用户说话的时长里
+//!   stt_partial 录音中快照识别：不停止采集，返回当前整段临时文本供输入框替换
 //!   stt_stop   松手识别：停采集 → 重采样 16k → SenseVoice 解码 → 返回文本
 //!   stt_cancel 放弃本次录音（不识别直接丢弃）
 //!
@@ -30,6 +31,8 @@ const TARGET_RATE: u32 = 16_000;
 const MAX_RECORD_SECS: usize = 60;
 /// 短于这个时长（秒）不送识别：手滑误触直接打回
 const MIN_RECORD_SECS: f32 = 0.25;
+/// 临时结果至少攒够这么长再解码；太短既不稳定，也会白耗一次离线推理
+const MIN_PARTIAL_SECS: f32 = 0.45;
 
 /// 一次进行中的录音会话。cpal 流由采集线程独占，
 /// 这里只握共享样本缓冲、停止旗和 join 句柄。
@@ -260,6 +263,38 @@ pub fn stt_start(
         }
     });
     Ok(())
+}
+
+/// 录音中临时识别：在不停止 cpal 采集流的前提下复制当前样本快照，交给常驻
+/// SenseVoice 解码。前端严格等上一轮完成后才请求下一轮，因此识别器锁不会积压
+/// 队列；结果是“当前整句草稿”，前端应替换旧草稿而不是追加。
+#[tauri::command]
+pub async fn stt_partial(
+    app: AppHandle,
+    state: State<'_, SttState>,
+) -> Result<Option<String>, String> {
+    let (samples, sample_rate) = {
+        let session = state.session.lock().unwrap();
+        let sess = session.as_ref().ok_or("当前没有在录音")?;
+        let sample_rate = sess.sample_rate;
+        let samples = sess.buffer.lock().unwrap().clone();
+        (samples, sample_rate)
+    };
+    if (samples.len() as f32) < sample_rate as f32 * MIN_PARTIAL_SECS {
+        return Ok(None);
+    }
+
+    let dir = model_dir(&app)?;
+    let slot = state.recognizer.clone();
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        ensure_recognizer(&slot, &dir)?;
+        let guard = slot.lock().unwrap();
+        recognize(guard.as_ref().unwrap(), &samples, sample_rate)
+    })
+    .await
+    .map_err(|e| format!("临时识别任务失败: {e}"))??;
+
+    Ok((!text.is_empty()).then_some(text))
 }
 
 /// 松手识别：停采集拿走缓冲 → blocking 线程里重采样 + 解码（CPU 活不堵
