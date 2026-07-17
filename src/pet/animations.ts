@@ -137,6 +137,9 @@ export const ANIMS = {
   yawning: [strip("/pet/anim/yawn.png", 6, { loop: false, next: "sleeping" })],
   // 伸懒腰醒来：趴着睁眼 → 撑起站直 → 踮脚大伸展，播完回 idle
   stretching: [strip("/pet/anim/stretch.png", 8, { loop: false })],
+  // 自然睡醒的两种随机剧情：受惊弹起 / 做完美梦开心醒来，均从趴睡姿起手并回 idle。
+  wakingStartled: [strip("/pet/anim/wake-startled.png", 8, { loop: false })],
+  wakingDream: [strip("/pet/anim/wake-dream.png", 7, { loop: false })],
   // 拖拽悬空：被拎起来四腿蹬空 + 尾巴乱甩（拖窗期间循环，停稳回 idle）
   dangling: [strip("/pet/anim/dangle.png", 8)],
   // 入场登台：从画面底边先冒耳朵尖 → 眼睛探出来左右张望（尾巴尖跟着在右缘

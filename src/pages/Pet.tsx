@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
@@ -64,6 +64,8 @@ const ANIM_TESTS = [
   { key: "sleeping", label: "睡觉" },
   { key: "yawning", label: "打哈欠" },
   { key: "stretching", label: "伸懒腰" },
+  { key: "wakingStartled", label: "吓醒" },
+  { key: "wakingDream", label: "美梦醒" },
   { key: "dangling", label: "悬空" },
   { key: "entering", label: "入场" },
   { key: "greeting", label: "打招呼" },
@@ -82,11 +84,22 @@ const ANIM_TESTS = [
   { key: "unhideDown", label: "召回↓" },
 ] as const;
 
+/** 正式提示音一对（软木确认定稿）：唤醒 = 上行「在听」，结束 = 镜像下行「收到」 */
+const WAKE_SOUNDS = [
+  { key: "start", label: "唤醒音 · 在听", src: "/audio/wake-start.wav" },
+  { key: "end", label: "结束音 · 收到", src: "/audio/wake-end.wav" },
+] as const;
+
+type WakeSound = (typeof WAKE_SOUNDS)[number];
+
 function Pet() {
   // 桌宠 / 对话窗的可见状态：挂载时向后端查一次，之后每次 toggle 用返回值更新，
   // 让按钮文案（召唤/收起 · 打开/关闭）跟真实窗口状态一致。
   const [petShown, setPetShown] = useState(false);
   const [chatShown, setChatShown] = useState(false);
+  const [playingWakeSound, setPlayingWakeSound] = useState<string | null>(null);
+  const wakeSoundRef = useRef<HTMLAudioElement | null>(null);
+  const wakeSoundTokenRef = useRef(0);
   // 桌宠档案：本页持有一份（展示栏 + 大卡片共用），面板保存后重读缓存刷新
   const [pets, setPets] = useState(getPetProfiles);
   const activePet = pets.find((p) => p.id === getSetting("activePetId")) ?? pets[0];
@@ -94,7 +107,36 @@ function Pet() {
   useEffect(() => {
     void invoke<boolean>("pet_visible").then(setPetShown).catch(() => {});
     void invoke<boolean>("chat_visible").then(setChatShown).catch(() => {});
+
+    return () => {
+      wakeSoundTokenRef.current += 1;
+      wakeSoundRef.current?.pause();
+      wakeSoundRef.current = null;
+    };
   }, []);
+
+  const previewWakeSound = (sound: WakeSound) => {
+    const token = ++wakeSoundTokenRef.current;
+    wakeSoundRef.current?.pause();
+
+    const audio = new Audio(sound.src);
+    audio.preload = "auto";
+    audio.volume = Math.max(0, Math.min(1, getSetting("volume")));
+    wakeSoundRef.current = audio;
+    setPlayingWakeSound(sound.key);
+
+    const finish = () => {
+      if (wakeSoundTokenRef.current !== token) return;
+      wakeSoundRef.current = null;
+      setPlayingWakeSound(null);
+    };
+    audio.addEventListener("ended", finish, { once: true });
+    audio.addEventListener("error", finish, { once: true });
+    void audio.play().catch((err) => {
+      finish();
+      console.warn("wake sound preview failed:", err);
+    });
+  };
 
   const togglePet = async () => {
     try {
@@ -168,6 +210,33 @@ function Pet() {
         </Actions>
       </PixelSection>
 
+      <PixelSection
+        title="唤醒提示音"
+        trailing={<Tag>{playingWakeSound ? "试听中" : "软木确认"}</Tag>}
+      >
+        <TestRow>
+          {WAKE_SOUNDS.map((sound) => {
+            const playing = playingWakeSound === sound.key;
+            return (
+              <PixelButton
+                key={sound.key}
+                small
+                pixel={3}
+                variant={playing ? "primary" : "normal"}
+                aria-pressed={playing}
+                onClick={() => previewWakeSound(sound)}
+              >
+                {playing ? "♪" : "▶"} {sound.label}
+              </PixelButton>
+            );
+          })}
+        </TestRow>
+        <TestHint>
+          喊出唤醒词时响「在听」，一句话说完响「收到」；默认不响，去设置页
+          「语音唤醒 · 唤醒提示音」打开；音量跟随软件音量设置。
+        </TestHint>
+      </PixelSection>
+
       <PixelSection title="动画测试">
         <TestRow>
           {ANIM_TESTS.map((t) => (
@@ -180,11 +249,19 @@ function Pet() {
               {t.label}
             </PixelButton>
           ))}
+          <PixelButton
+            small
+            pixel={3}
+            onClick={() => void emitTo("pet", "pet:wander")}
+          >
+            自主散步
+          </PixelButton>
         </TestRow>
         <TestHint>
           桌宠在桌面上时点按切换动画；摸头/伸懒腰/打招呼播完自动回待机，
           打哈欠播完顺势入睡，躲←/躲→播完只剩尾巴近乎静止、随机 1-3 分钟
-          自己探头一次（探头按钮可直接看），循环类动画点「待机」收场
+          自己探头一次（探头按钮可直接看）；点「自主散步」前先切到待机，循环类
+          动画点「待机」收场
         </TestHint>
       </PixelSection>
     </Page>

@@ -703,6 +703,24 @@ function Loaf-Eyes-Open([System.Drawing.Bitmap]$bmp) {
   Set-Px $bmp @(8, 9, 20, 21) 18 $DARK
 }
 
+# 趴姿开心眼：把睡觉横线改成两道上拱弧；配合 Loaf-Blush 表示做了美梦。
+function Loaf-Eyes-Happy([System.Drawing.Bitmap]$bmp) {
+  Set-Px $bmp @(7, 8, 9, 10, 19, 20, 21, 22) 18 $BODY
+  Set-Px $bmp @(8, 9, 20, 21) 17 $DARK
+  Set-Px $bmp @(7, 10, 19, 22) 18 $DARK
+}
+
+# 趴姿脸比站姿整体低 4px，腮红也随之落到 y19。
+function Loaf-Blush([System.Drawing.Bitmap]$bmp) { Set-Px $bmp @(5, 6, 23, 24) 19 $PINK }
+
+# 5x4 粉色梦境爱心，逐帧向左上漂；放在头顶空气区，不随身体平移。
+function Dream-Heart([System.Drawing.Bitmap]$bmp, [int]$x0, [int]$y0) {
+  Set-Px $bmp @($x0, ($x0 + 1), ($x0 + 3), ($x0 + 4)) $y0 $PINK
+  Set-Px $bmp @(($x0 + 0)..($x0 + 4)) ($y0 + 1) $PINK
+  Set-Px $bmp @(($x0 + 1), ($x0 + 2), ($x0 + 3)) ($y0 + 2) $PINK
+  $bmp.SetPixel(($x0 + 2), ($y0 + 3), $PINK)
+}
+
 # ---- 组帧器：每个动画一组逐帧 spec（scriptblock 收到一张底图副本随意改） ----
 function Build-Strip([string]$name, [scriptblock[]]$specs) {
   $frames = @()
@@ -1187,6 +1205,40 @@ Build-Strip "stretch.png" @(
   { param($f) Half-Eyes $f; Sway-Tail $f; Stretch-Up $f 1 },                  # 9  落下来 T1
   { param($f) Squash-Top $f },                                                # 10 落地一沉
   { param($f) Sway-Tail $f; Flick-Ear $f }                                    # 11 抖耳回神 → idle
+)
+
+# ==== wake-startled：睡梦中受惊弹醒（play-once → idle） ====
+# 趴睡耳动 → 半睁/瞪圆确认 → 带「!」整只弹起 → 落地压低 → 左右确认后回神。
+Build-Strip "wake-startled.png" @(
+  { param($f) Make-Loaf $f },                                                                            # 0  正在熟睡
+  { param($f) Make-Loaf $f; Loaf-FlickEar $f },                                                          # 1  耳朵先听见动静
+  { param($f) Make-Loaf $f; Loaf-Eyes-Half $f; Loaf-FlickEar $f },                                      # 2  迷糊半睁
+  { param($f) Make-Loaf $f; Loaf-Eyes-Open $f; Alert-Mark $f },                                         # 3  突然看清「!」
+  { param($f) Wide-Eyes $f; Open-Mouth $f; Flare-Ears $f; Sway-Tail3 $f; Hop $f 2; Alert-Mark $f },     # 4  整只弹起 H2
+  { param($f) Wide-Eyes $f; Open-Mouth $f; Flare-Ears $f; Sway-Tail2 $f; Hop $f 1; Alert-Mark $f },     # 5  回落 H1
+  { param($f) Wide-Eyes $f; Half-Mouth $f; Sway-Tail $f; Squash-Top $f; Alert-Mark $f },                 # 6  落地一沉
+  { param($f) Wide-Eyes $f; Half-Mouth $f; Sway-Tail2 $f },                                             # 7  站直仍发愣
+  { param($f) Half-Eyes $f; Look-Side $f; Sway-Tail3 $f },                                              # 8  往左确认
+  { param($f) Look-Right $f; Sway-Tail2 $f },                                                            # 9  往右确认
+  { param($f) Half-Eyes $f; Sway-Tail $f; Flick-Ear $f },                                               # 10 放松眨眼
+  { param($f) Sway-Tail2 $f }                                                                            # 11 尾巴收住 → idle
+)
+
+# ==== wake-dream：做了美梦自然醒（play-once → idle） ====
+# 爱心从梦里上飘 → 笑着睁眼 → 慢慢撑起 → 开心小跳一下再站稳。
+Build-Strip "wake-dream.png" @(
+  { param($f) Make-Loaf $f; Dream-Heart $f 24 3 },                                      # 0  梦里冒出爱心
+  { param($f) Make-Loaf $f; Loaf-Eyes-Happy $f; Loaf-Blush $f; Dream-Heart $f 23 2 },   # 1  笑着睡
+  { param($f) Make-Loaf $f; Loaf-Eyes-Happy $f; Loaf-Blush $f; Loaf-TipUp $f; Dream-Heart $f 22 1 }, # 2  爱心上飘
+  { param($f) Make-Loaf $f; Loaf-Eyes-Half $f; Loaf-Blush $f; Dream-Heart $f 21 0 },     # 3  开心半睁
+  { param($f) Half-Eyes $f; Add-Blush $f; Sway-Tail3 $f; Sink $f 3 },                    # 4  慢慢撑起 T3
+  { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail2 $f; Sink $f 2 },                   # 5  撑起 T2
+  { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail $f; Sink $f 1 },                    # 6  快站直 T1
+  { param($f) Happy-Eyes $f; Add-Blush $f; Half-Mouth $f },                              # 7  醒来偷笑
+  { param($f) Happy-Eyes $f; Add-Blush $f; Open-Mouth $f; Sway-Tail $f; Hop $f 1 },      # 8  开心小跳 H1
+  { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail2 $f; Squash-Top $f },               # 9  落地一沉
+  { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail $f },                               # 10 余韵
+  { param($f) Add-Blush $f; Flick-Ear $f }                                               # 11 睁眼抖耳 → idle
 )
 
 # ==== dangle：拖拽悬空（循环，拖窗时播放） ====

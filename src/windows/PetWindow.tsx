@@ -10,6 +10,7 @@ import {
 import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  availableMonitors,
   currentMonitor,
   cursorPosition,
   getCurrentWindow,
@@ -19,7 +20,7 @@ import { t } from "../styles/theme";
 import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
 import { StreamingText } from "../chat/components/StreamingText";
-import { getSetting } from "../settings";
+import { getSetting, setSetting } from "../settings";
 import { ANIMS, PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
 
 /**
@@ -33,7 +34,8 @@ import { ANIMS, PetAnimManager, type AnimDef, type PetState } from "../pet/anima
  * src/pet/animations.ts（PetAnimManager），本窗口只管按抽到的帧带顺播。
  *
  * 状态机：idle（待机眨眼）⇄ petted（点击摸头，播完自回）；久置经 yawning
- * （打哈欠趴下）入 sleeping，睡着被摸经 stretching（伸懒腰）醒回 idle；
+ * （打哈欠趴下）入 sleeping，睡眠中每半分钟低概率随机吓醒/美梦醒，睡着被摸
+ * 则经 stretching（伸懒腰）醒回 idle；
  * 拖窗 = 按拖动方向跟手小跑（walkingLeft/Right/Up/Down），停稳回 idle；召唤上桌播一次 entering
  * （底边探头张望再蹦出）接 greeting（落地挥手）；thinking/typing/talking
  * /searching 由对话窗事件桥驱动（等首包托腮 → 执行工具敲电脑 / web 搜索举放大镜
@@ -57,8 +59,14 @@ const SPRITE_SIZE = 32;
 const SPRITE_SCALE = 6;
 /** 按下后移动超过这个曼哈顿距离（px）判定为拖窗，原地松手判定为摸摸 */
 const DRAG_THRESHOLD_PX = 4;
-/** idle 持续无交互这么久后入睡（ms） */
-const SLEEP_AFTER_MS = 20_000;
+/** 长时间 idle 后统一决定“出去散步”还是“打哈欠睡觉”，避免两个计时器互相抢状态。 */
+const IDLE_LONG_BEHAVIOR_MIN_MS = 18_000;
+const IDLE_LONG_BEHAVIOR_RAND_MS = 6_000;
+/** 长待机决策中选择散步的概率；其余概率进入打哈欠 → 睡觉。 */
+const IDLE_LONG_WALK_CHANCE = 0.42;
+/** 睡着后每半分钟抽一次；五分之一概率自然醒来，其余继续睡到下轮。 */
+const SLEEP_WAKE_CHECK_MS = 30_000;
+const SLEEP_WAKE_CHANCE = 0.2;
 /** idle 站稳后，第一次考虑自主小动作的等待区间（基础 + 随机幅度）。 */
 const IDLE_ACTION_MIN_MS = 6_000;
 const IDLE_ACTION_RAND_MS = 6_000;
@@ -95,6 +103,16 @@ const TASKBAR_WALK_SPEED_PX_PER_SEC = 480;
 const TASKBAR_WALK_MIN_MS = 260;
 /** 自动走开的时长上限，避免异常越界时走太久（ms） */
 const TASKBAR_WALK_MAX_MS = 600;
+/** 自主散步会在当前屏幕整条水平安全区随机抽目的地；小于此距离就不算一次散步。 */
+const AUTONOMOUS_WALK_SPEED_PX_PER_SEC = 90;
+const AUTONOMOUS_WALK_MIN_DISTANCE_PX = 72;
+const AUTONOMOUS_WALK_EDGE_MARGIN_PX = 24;
+/** 缓起/缓停各占路程时间的比例，中段保持匀速，避免整段“橡皮筋”式变速。 */
+const AUTONOMOUS_WALK_RAMP_RATIO = 0.18;
+/** 完成一次后至少隔这么久才允许下一次，防止桌宠满屏乱逛。 */
+const AUTONOMOUS_WALK_COOLDOWN_MS = 45_000;
+/** 普通状态稳定这么久后保存位置；过滤动画落位和连续拖动产生的中间坐标。 */
+const POSITION_SAVE_DELAY_MS = 900;
 /** 正常站姿脚底的源图边界：腿画到 y=28，像素边界因此是 y=29。完整帧底 y=32
     还留了 3px 透明区，底边召回时必须把这段空白沉进任务栏，否则猫会浮空。 */
 const STANDING_FOOT_BOTTOM_PX = 29;
@@ -112,6 +130,10 @@ const USE_MANUAL_WINDOW_DRAG = navigator.userAgent.includes("Windows");
 /** idle 中低概率点播的一次性自主小动作。 */
 const IDLE_ACTION_STATES = IDLE_ACTIONS.map(({ state }) => state);
 const isIdleActionState = (s: PetState) => IDLE_ACTION_STATES.includes(s);
+
+/** 睡眠自然结束的两种剧情，抽中醒来后等概率选择。 */
+const WAKE_STATES: readonly PetState[] = ["wakingStartled", "wakingDream"];
+const isWakeState = (s: PetState) => WAKE_STATES.includes(s);
 
 /** 「移动态」集合：拖拽跟手的走路（按方向分四向）+ 悬空。onMoved 只在这些
     状态里按拖动方向切向，停表也只对这些状态收步——不打断播放中的一次性动画 */
@@ -156,6 +178,18 @@ function easeInOutCubic(progress: number): number {
   return progress < 0.5
     ? 4 * progress * progress * progress
     : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+}
+
+/** 自主散步位移曲线：短促柔和起步 → 大段匀速 → 短促柔和停步。 */
+function autonomousWalkProgress(progress: number): number {
+  const ramp = AUTONOMOUS_WALK_RAMP_RATIO;
+  const cruise = 1 - ramp;
+  if (progress < ramp) return (progress * progress) / (2 * ramp * cruise);
+  if (progress > 1 - ramp) {
+    const remaining = 1 - progress;
+    return 1 - (remaining * remaining) / (2 * ramp * cruise);
+  }
+  return (progress - ramp / 2) / cruise;
 }
 
 type SettleAfterMoveResult = "none" | "hidden" | "settled" | "cancelled";
@@ -253,7 +287,7 @@ function statePolicy(s: PetState): StatePolicy {
   if (s === "entering" || s === "greeting") {
     return { priority: 70, interruptible: false };
   }
-  if (s === "petted" || s === "stretching") {
+  if (s === "petted" || s === "stretching" || isWakeState(s)) {
     return { priority: 60, interruptible: false };
   }
   if (s === "yawning" || isPeekingState(s)) {
@@ -513,6 +547,24 @@ export function PetWindow() {
     }
   }, []);
 
+  // 默认允许其他窗口盖住桌宠；设置页切换后通过事件即时更新窗口层级。挂载时
+  // 仍主动应用一次持久化值，覆盖 tauri.conf / 旧版本窗口配置的初始状态。
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const apply = (enabled: boolean) => {
+      void win.setAlwaysOnTop(enabled).catch((error) =>
+        console.warn("pet setAlwaysOnTop failed:", error),
+      );
+    };
+    apply(getSetting("petAlwaysOnTop"));
+    const unlisten = win.listen<{ enabled?: boolean }>("pet:always-on-top", (event) => {
+      apply(event.payload?.enabled ?? false);
+    });
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
+
   // Canvas 节点永久复用；动画 hook 直接写它，不通过 React state 逐帧重渲染。
   const spriteRef = useRef<HTMLCanvasElement>(null);
   useCanvasSpriteAnim(
@@ -594,13 +646,15 @@ export function PetWindow() {
     };
   }, [rendered.def]);
 
-  // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。两种形态——
+  // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。三种形态——
   // say = 正文说话（白面对话泡 + 三角尾巴）；think = 思考中（浅青想法泡 +
-  // 三个小圆圈从头顶升上去，漫画式心理活动）。收尾（done）后按设置的驻留
-  // 时长消失；中途没了下文（暂停）由兜底计时器自隐
+  // 三个小圆圈从头顶升上去，漫画式心理活动）；listen = 语音唤醒倾听中（浅青
+  // 泡 + 跳动的像素声波条，正文是「听到的草稿」，没草稿时先亮占位提示——
+  // 它是唯一允许空文本展示的形态）。收尾（done）后按设置的驻留时长消失；
+  // 中途没了下文（暂停）由兜底计时器自隐
   const [bubble, setBubble] = useState<{
     text: string;
-    kind: "say" | "think";
+    kind: "say" | "think" | "listen";
     live: boolean;
   } | null>(null);
   // 退场两拍：closing 置真先播退场动画（下沉缩小淡出），播完才真正卸载
@@ -623,8 +677,16 @@ export function PetWindow() {
       done?: boolean;
     }>("pet:say", (e) => {
       const text = e.payload?.text ?? "";
+      const kind =
+        e.payload?.kind === "think"
+          ? ("think" as const)
+          : e.payload?.kind === "listen"
+            ? ("listen" as const)
+            : ("say" as const);
       window.clearTimeout(bubbleTimerRef.current);
-      if (!text) {
+      // 空文本 = 清场收泡；唯独倾听泡例外——命中唤醒词那刻草稿还没影，
+      // 先顶着声波条和占位提示亮出来，表示「我在听」
+      if (!text && kind !== "listen") {
         closeBubble(); // 新一轮开场清残留：同样体面退场，不瞬间消失
         return;
       }
@@ -633,7 +695,7 @@ export function PetWindow() {
       setClosing(false);
       const done = !!e.payload?.done;
       // live 驱动逐字蹦入（StreamingText）：流入中弹簧入场，收尾塌成纯文本
-      setBubble({ text, kind: e.payload?.kind === "think" ? "think" : "say", live: !done });
+      setBubble({ text, kind, live: !done });
       // done = 本轮说完：按设置驻留让人读完；否则兜底自隐（防暂停后气泡卡住）
       bubbleTimerRef.current = window.setTimeout(
         closeBubble,
@@ -673,6 +735,12 @@ export function PetWindow() {
   // 任务栏保护的程序化走位期间，onMoved 只同步坐标；run id 让用户按下时可立即取消。
   const autoMoveRef = useRef(false);
   const autoMoveRunRef = useRef(0);
+  // 自主散步复用 autoMove，但 AI 开始工作时要立刻让路；任务栏保护则必须走完校正。
+  const autonomousWalkRef = useRef(false);
+  const autonomousWalkCooldownRef = useRef(0);
+  const positionRestoreStartedRef = useRef(false);
+  const positionRestoredRef = useRef(false);
+  const positionSaveTimerRef = useRef(0);
   // 原生 startDragging 会按整个 240×380 透明窗做屏幕边界保护：顶部为气泡
   // 预留的空气先撞到屏幕顶，猫本体便永远塞不出去。桌宠改用全局鼠标坐标
   // 自行跟手移动；run id 同时负责 PointerUp 与系统键位兜底之间的去重取消。
@@ -680,41 +748,257 @@ export function PetWindow() {
   const manualDragRunRef = useRef(0);
 
   /**
+   * 保存最后的普通落脚点。延迟结束时若仍在拖动/程序化走位就继续等；躲边相关
+   * 状态一律不写，避免把只露尾巴/耳朵的特殊锚点当成下次启动位置。
+   */
+  const schedulePositionSave = useCallback(() => {
+    window.clearTimeout(positionSaveTimerRef.current);
+    const saveWhenStable = () => {
+      if (!positionRestoredRef.current) return;
+      if (downRef.current || manualDragRef.current || autoMoveRef.current) {
+        positionSaveTimerRef.current = window.setTimeout(
+          saveWhenStable,
+          POSITION_SAVE_DELAY_MS,
+        );
+        return;
+      }
+      const current = stateRef.current;
+      if (isHidingState(current) || isHiddenState(current) || isUnhideState(current)) return;
+      const pos = winPosRef.current;
+      if (!pos) return;
+      const previous = getSetting("petPosition");
+      if (previous?.x === pos.x && previous.y === pos.y) return;
+      void setSetting("petPosition", { x: pos.x, y: pos.y });
+    };
+    positionSaveTimerRef.current = window.setTimeout(
+      saveWhenStable,
+      POSITION_SAVE_DELAY_MS,
+    );
+  }, []);
+
+  // 首次拿到本体命中矩形后恢复位置。旧显示器已移除时，以本体中心到各工作区
+  // 的距离选最近屏幕，再把本体完整夹入工作区；气泡预留空气不参与判断。
+  useEffect(() => {
+    if (positionRestoreStartedRef.current || !bodyRect || !hitRef.current) return;
+    positionRestoreStartedRef.current = true;
+    void (async () => {
+      try {
+        const saved = getSetting("petPosition");
+        if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return;
+        const monitors = await availableMonitors();
+        const hit = hitRef.current;
+        if (!hit || monitors.length === 0) return;
+
+        const dpr = Math.max(1, window.devicePixelRatio);
+        const rect = hit.getBoundingClientRect();
+        const body = {
+          left: saved.x + rect.left * dpr,
+          top: saved.y + rect.top * dpr,
+          right: saved.x + rect.right * dpr,
+          bottom: saved.y + rect.bottom * dpr,
+        };
+        const center = {
+          x: (body.left + body.right) / 2,
+          y: (body.top + body.bottom) / 2,
+        };
+        const distanceToWorkArea = (monitor: (typeof monitors)[number]) => {
+          const wa = monitor.workArea;
+          const left = wa.position.x;
+          const top = wa.position.y;
+          const right = left + wa.size.width;
+          const bottom = top + wa.size.height;
+          const dx = center.x < left ? left - center.x : center.x > right ? center.x - right : 0;
+          const dy = center.y < top ? top - center.y : center.y > bottom ? center.y - bottom : 0;
+          return dx * dx + dy * dy;
+        };
+        const monitor = monitors.reduce((best, candidate) =>
+          distanceToWorkArea(candidate) < distanceToWorkArea(best) ? candidate : best,
+        );
+        const wa = monitor.workArea;
+        const workLeft = wa.position.x;
+        const workTop = wa.position.y;
+        const workRight = workLeft + wa.size.width;
+        const workBottom = workTop + wa.size.height;
+        const dx =
+          body.left < workLeft
+            ? workLeft - body.left
+            : body.right > workRight
+              ? workRight - body.right
+              : 0;
+        const dy =
+          body.top < workTop
+            ? workTop - body.top
+            : body.bottom > workBottom
+              ? workBottom - body.bottom
+              : 0;
+        const target = { x: Math.round(saved.x + dx), y: Math.round(saved.y + dy) };
+        clampMoveRef.current = true;
+        await getCurrentWindow().setPosition(new PhysicalPosition(target.x, target.y));
+        winPosRef.current = target;
+        lastXRef.current = target.x;
+        lastYRef.current = target.y;
+        if (target.x !== saved.x || target.y !== saved.y) {
+          void setSetting("petPosition", target);
+        }
+      } catch (error) {
+        console.warn("pet position restore failed:", error);
+      } finally {
+        positionRestoredRef.current = true;
+      }
+    })();
+  }, [bodyRect]);
+
+  // 任意普通状态稳定后都可落盘：覆盖拖拽后恢复 thinking/talking、不经过 idle 的路径。
+  useEffect(() => {
+    if (isMoveState(state) || isHidingState(state) || isHiddenState(state) || isUnhideState(state)) {
+      return;
+    }
+    schedulePositionSave();
+    return () => window.clearTimeout(positionSaveTimerRef.current);
+  }, [state, schedulePositionSave]);
+
+  /**
    * 把整个透明窗口逐帧移动到目标物理坐标。每次 setPosition 完成后才排下一帧，
    * 避免 IPC 堆积；返回 false 表示途中被用户按下取消。
    */
-  const animateWindowTo = async (
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-    durationMs: number,
-  ): Promise<boolean> => {
-    const run = ++autoMoveRunRef.current;
-    autoMoveRef.current = true;
-    const win = getCurrentWindow();
-    const startedAt = performance.now();
+  const animateWindowTo = useCallback(
+    async (
+      from: { x: number; y: number },
+      to: { x: number; y: number },
+      durationMs: number,
+      options: {
+        easing?: (progress: number) => number;
+        shouldContinue?: () => boolean;
+      } = {},
+    ): Promise<boolean> => {
+      const run = ++autoMoveRunRef.current;
+      autoMoveRef.current = true;
+      const win = getCurrentWindow();
+      const startedAt = performance.now();
+      const easing = options.easing ?? easeInOutCubic;
 
-    try {
-      while (true) {
-        const now = await new Promise<number>((resolve) =>
-          window.requestAnimationFrame(resolve),
-        );
-        if (autoMoveRunRef.current !== run) return false;
+      try {
+        while (true) {
+          const now = await new Promise<number>((resolve) =>
+            window.requestAnimationFrame(resolve),
+          );
+          if (
+            autoMoveRunRef.current !== run ||
+            (options.shouldContinue && !options.shouldContinue())
+          ) {
+            return false;
+          }
 
-        const progress = Math.min(1, (now - startedAt) / Math.max(1, durationMs));
-        const eased = easeInOutCubic(progress);
-        const x = Math.round(from.x + (to.x - from.x) * eased);
-        const y = Math.round(from.y + (to.y - from.y) * eased);
-        await win.setPosition(new PhysicalPosition(x, y));
-        winPosRef.current = { x, y };
-        lastXRef.current = x;
-        lastYRef.current = y;
+          const progress = Math.min(1, (now - startedAt) / Math.max(1, durationMs));
+          const eased = easing(progress);
+          const x = Math.round(from.x + (to.x - from.x) * eased);
+          const y = Math.round(from.y + (to.y - from.y) * eased);
+          await win.setPosition(new PhysicalPosition(x, y));
+          winPosRef.current = { x, y };
+          lastXRef.current = x;
+          lastYRef.current = y;
 
-        if (progress >= 1) return true;
+          if (progress >= 1) return true;
+        }
+      } finally {
+        if (autoMoveRunRef.current === run) autoMoveRef.current = false;
       }
-    } finally {
-      if (autoMoveRunRef.current === run) autoMoveRef.current = false;
-    }
-  };
+    },
+    [],
+  );
+
+  /**
+   * idle 时从当前屏幕整条水平安全区随机抽目的地，不改变纵向站位；可用
+   * pet:wander 强制点播。返回 false 表示当前不适合走或中途被交互打断。
+   */
+  const startAutonomousWalk = useCallback(
+    async (force = false): Promise<boolean> => {
+      if (
+        stateRef.current !== "idle" ||
+        downRef.current ||
+        manualDragRef.current ||
+        autoMoveRef.current ||
+        (!force && !getSetting("petAutoWalk")) ||
+        (!force && bubbleRef.current)
+      ) {
+        return false;
+      }
+
+      const win = getCurrentWindow();
+      const [monitor, visible] = await Promise.all([currentMonitor(), win.isVisible()]);
+      const pos = winPosRef.current;
+      const hit = hitRef.current;
+      if (!visible || !monitor || !pos || !hit || stateRef.current !== "idle") return false;
+
+      const dpr = Math.max(1, window.devicePixelRatio);
+      const body = hit.getBoundingClientRect();
+      const bodyLeft = pos.x + body.left * dpr;
+      const bodyRight = pos.x + body.right * dpr;
+      const workLeft = monitor.workArea.position.x;
+      const workRight = workLeft + monitor.workArea.size.width;
+      const margin = AUTONOMOUS_WALK_EDGE_MARGIN_PX * dpr;
+      const minimum = AUTONOMOUS_WALK_MIN_DISTANCE_PX * dpr;
+      // 先把“本体不能越过工作区边缘”换算成窗口 x 的安全区，再从整条水平线
+      // 均匀抽一个目的地。排除当前位置左右 72px，避免随机到原地只挪一小步。
+      const safeMinX = Math.ceil(pos.x + workLeft + margin - bodyLeft);
+      const safeMaxX = Math.floor(pos.x + workRight - margin - bodyRight);
+      const ranges = [
+        { from: safeMinX, to: Math.min(safeMaxX, Math.floor(pos.x - minimum)) },
+        { from: Math.max(safeMinX, Math.ceil(pos.x + minimum)), to: safeMaxX },
+      ].filter((range) => range.to >= range.from);
+      if (ranges.length === 0) return false;
+
+      const totalPositions = ranges.reduce(
+        (sum, range) => sum + range.to - range.from + 1,
+        0,
+      );
+      let roll = Math.floor(Math.random() * totalPositions);
+      let targetX = ranges[ranges.length - 1].to;
+      for (const range of ranges) {
+        const positions = range.to - range.from + 1;
+        if (roll < positions) {
+          targetX = range.from + roll;
+          break;
+        }
+        roll -= positions;
+      }
+
+      const dx = targetX - pos.x;
+      const distance = Math.abs(dx);
+      const walkState = walkingStateForDelta(dx, 0);
+      autonomousWalkRef.current = true;
+      if (!requestState(walkState, { queueIfBlocked: false })) {
+        autonomousWalkRef.current = false;
+        return false;
+      }
+
+      const logicalDistance = distance / dpr;
+      // 曲线中段导数为 1/(1-ramp)；时长同步修正，令中段速度正好等于顶部参数。
+      const durationMs =
+        (logicalDistance * 1000) /
+        (AUTONOMOUS_WALK_SPEED_PX_PER_SEC * (1 - AUTONOMOUS_WALK_RAMP_RATIO));
+      const completed = await animateWindowTo(
+        pos,
+        { x: pos.x + dx, y: pos.y },
+        durationMs,
+        {
+          easing: autonomousWalkProgress,
+          shouldContinue: () => stateRef.current === walkState && autonomousWalkRef.current,
+        },
+      );
+      autonomousWalkRef.current = false;
+      if (!completed || stateRef.current !== walkState) return false;
+
+      autonomousWalkCooldownRef.current = performance.now() + AUTONOMOUS_WALK_COOLDOWN_MS;
+      pendingStateRef.current = convStateRef.current;
+      requestState(settlingStateFor(walkState), {
+        force: true,
+        queueIfBlocked: false,
+      });
+      return true;
+    },
+    [animateWindowTo, requestState],
+  );
 
   // 底部隐藏时按完整 32px 帧框贴边，才能把 y25-31 的两只耳朵完整留在工作区；
   // 召回后站姿脚底却在 y29。随 unhideDown 同步把窗口向下移动 3 个源像素，
@@ -873,12 +1157,54 @@ export function PetWindow() {
     return "none";
   };
 
-  // 久置入睡：idle 持续 SLEEP_AFTER_MS 无交互 → 打个哈欠趴下（播完接 sleeping）
+  // 长待机只挂一只计时器：18-24 秒后统一在“散步”和“睡觉”间抽选，不能再
+  // 出现散步计时器还没轮到、固定睡眠计时器就先把状态抢走的情况。散步走完回
+  // idle 后开启下一轮；散步被关闭、仍在冷却或没有安全空间时，本轮自然改为睡觉。
   useEffect(() => {
-    if (state !== "idle") return;
-    const t = window.setTimeout(() => requestState("yawning"), SLEEP_AFTER_MS);
-    return () => window.clearTimeout(t);
-  }, [state, activity, requestState]);
+    if (state !== "idle" || bubble) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (stateRef.current !== "idle") return;
+        const canWalk =
+          getSetting("petAutoWalk") &&
+          performance.now() >= autonomousWalkCooldownRef.current;
+        const chooseWalk = canWalk && Math.random() < IDLE_LONG_WALK_CHANCE;
+        if (chooseWalk && (await startAutonomousWalk())) return;
+        if (stateRef.current === "idle") requestState("yawning");
+      })();
+    }, IDLE_LONG_BEHAVIOR_MIN_MS + Math.random() * IDLE_LONG_BEHAVIOR_RAND_MS);
+    return () => window.clearTimeout(timer);
+  }, [state, activity, bubble, requestState, startAutonomousWalk]);
+
+  // 睡眠不是永久状态：入睡满 30 秒第一次抽取，之后每 30 秒重抽。命中 20%
+  // 后等概率选择“受惊弹醒”或“美梦醒来”；没中只续下一只 timer，不触发重渲染。
+  useEffect(() => {
+    if (state !== "sleeping") return;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        if (stateRef.current !== "sleeping") return;
+        if (!downRef.current && Math.random() < SLEEP_WAKE_CHANCE) {
+          const wake = WAKE_STATES[Math.floor(Math.random() * WAKE_STATES.length)];
+          requestState(wake);
+          return;
+        }
+        schedule();
+      }, SLEEP_WAKE_CHECK_MS);
+    };
+    schedule();
+    return () => window.clearTimeout(timer);
+  }, [state, requestState]);
+
+  // 销毁桌宠窗口时终止所有在途程序化走位，避免残留异步任务继续改窗口坐标。
+  useEffect(
+    () => () => {
+      autoMoveRunRef.current += 1;
+      autoMoveRef.current = false;
+      autonomousWalkRef.current = false;
+    },
+    [],
+  );
 
   // 自主待机行为：idle 站稳 6-12 秒后进行一次概率抽选。每种动作有独立冷却，
   // 候选内按权重抽取；概率落空后本轮不再重掷，让普通呼吸和原有入睡仍占主导。
@@ -1057,7 +1383,8 @@ export function PetWindow() {
   // 状态点播通道：其他窗口 emitTo("pet", "pet:play", { state }) 直接切状态。
   // 桌宠页的动画测试按钮走这里；将来对话窗事件桥（talking/typing）也走这条
   useEffect(() => {
-    const unlisten = getCurrentWindow().listen<{ state?: string; resume?: string }>("pet:play", (e) => {
+    const win = getCurrentWindow();
+    const unlisten = win.listen<{ state?: string; resume?: string }>("pet:play", (e) => {
       const s = e.payload?.state;
       if (!s || !ANIM_MANAGER.has(s)) return;
       const cur = stateRef.current;
@@ -1093,16 +1420,30 @@ export function PetWindow() {
         }
         // 拖拽/走路中不抢控制权；一次性反馈排到收步后，循环态已记在 convStateRef。
         if (isMoveState(cur)) {
+          // 自主散步只是待机点缀：AI 一开工立即停下并直接接演；用户拖拽的步态
+          // 仍按原逻辑完整收步，避免远程事件抢掉手里的猫。
+          if (autonomousWalkRef.current) {
+            autoMoveRunRef.current += 1;
+            autoMoveRef.current = false;
+            autonomousWalkRef.current = false;
+            pendingStateRef.current = null;
+            requestState(s, { force: true, queueIfBlocked: false });
+            return;
+          }
           if (isFeedbackState(s)) queuedStateRef.current = s;
           return;
         }
       }
       requestState(s);
     });
+    const unlistenWander = win.listen("pet:wander", () => {
+      void startAutonomousWalk(true);
+    });
     return () => {
       void unlisten.then((f) => f());
+      void unlistenWander.then((f) => f());
     };
-  }, [requestState]);
+  }, [requestState, startAutonomousWalk]);
 
   // 光标巡逻：把「空白穿透」做成真的——网页里的 pointer-events 只管页内命中，
   // 窗口本身仍会吃掉整个矩形的鼠标事件（透明处点击也到不了桌面）。每 tick 读
@@ -1166,6 +1507,7 @@ export function PetWindow() {
     if (autoMoveRef.current) {
       autoMoveRunRef.current += 1;
       autoMoveRef.current = false;
+      autonomousWalkRef.current = false;
     }
     setActivity((n) => n + 1);
     downRef.current = { x: e.screenX, y: e.screenY };
@@ -1219,10 +1561,22 @@ export function PetWindow() {
 
   const onPointerCancel = () => {
     downRef.current = null;
-    if (!manualDragRef.current) return;
-    manualDragRunRef.current += 1;
-    manualDragRef.current = false;
-    bumpMoveStop();
+    if (manualDragRef.current) {
+      manualDragRunRef.current += 1;
+      manualDragRef.current = false;
+      bumpMoveStop();
+      return;
+    }
+    // 自主散步在 pointerdown 已被取消；若系统随后只给 cancel、不给 pointerup，
+    // 主动收步，不能让 walking 循环永久留在原地。
+    const current = stateRef.current;
+    if (isMoveState(current) && !autoMoveRef.current) {
+      pendingStateRef.current = convStateRef.current;
+      requestState(settlingStateFor(current), {
+        force: true,
+        queueIfBlocked: false,
+      });
+    }
   };
 
   return (
@@ -1238,7 +1592,7 @@ export function PetWindow() {
           onClick={bubbleClickable ? openChatFromBubble : undefined}
         >
           <PixelSurface
-            palette={bubble.kind === "think" ? PX.well : PX.panel}
+            palette={bubble.kind === "say" ? PX.panel : PX.well}
             state="rest"
             pixel={3}
             radius={2}
@@ -1247,20 +1601,41 @@ export function PetWindow() {
             contentStyle={{ display: "block", width: "100%", padding: "8px 11px" }}
           >
             <BubbleBody ref={bubbleBodyRef} data-kind={bubble.kind}>
-              {/* 弹簧字逐字蹦入（与对话窗同款）。key 按形态断开：想法泡 ⇄ 对话泡
-                  切换时整段重新蹦出，配合面色切换有「换了一口气」的感觉 */}
-              <StreamingText key={bubble.kind} text={bubble.text} live={bubble.live} />
+              {bubble.kind === "listen" ? (
+                // 倾听形态：跳动的像素声波条打头，草稿逐字跟在后面；
+                // 还没听出内容时亮占位提示
+                <ListenRow>
+                  <ListenBars aria-hidden>
+                    <ListenBar data-i="0" />
+                    <ListenBar data-i="1" />
+                    <ListenBar data-i="2" />
+                    <ListenBar data-i="3" />
+                  </ListenBars>
+                  <ListenText>
+                    {bubble.text ? (
+                      <ListenDraft text={bubble.text} />
+                    ) : (
+                      <ListenHint>在听你说…</ListenHint>
+                    )}
+                  </ListenText>
+                </ListenRow>
+              ) : (
+                /* 弹簧字逐字蹦入（与对话窗同款）。key 按形态断开：想法泡 ⇄ 对话泡
+                   切换时整段重新蹦出，配合面色切换有「换了一口气」的感觉 */
+                <StreamingText key={bubble.kind} text={bubble.text} live={bubble.live} />
+              )}
             </BubbleBody>
           </PixelSurface>
+          {/* 尾部装饰：说话泡 = 三角尾巴，想法泡 = 三颗圆圈；倾听泡悬空无尾 */}
           {bubble.kind === "think" ? (
             <ThinkTrail aria-hidden>
               <ThinkDot data-i="0" />
               <ThinkDot data-i="1" />
               <ThinkDot data-i="2" />
             </ThinkTrail>
-          ) : (
+          ) : bubble.kind === "say" ? (
             <Tail aria-hidden />
-          )}
+          ) : null}
         </Bubble>
       )}
       {/* 只有桌宠本体可交互：命中区 = 当前帧带非透明像素的最小包围盒（覆盖层，
@@ -1386,6 +1761,12 @@ const BubbleBody = styled.div`
   &[data-kind="think"] {
     color: #55616d;
   }
+
+  /* 倾听泡：最多三行，草稿更长时把前面的字顶掉（外层自动滚底只露最新） */
+  &[data-kind="listen"] {
+    max-height: calc(1.55em * 3);
+    color: #55616d;
+  }
 `;
 
 /* 对话尾巴：朝下的小三角，尖端指向桌宠头顶。色同气泡面（PX.panel.face = 白） */
@@ -1397,6 +1778,124 @@ const Tail = styled.div`
   border-right: 6px solid transparent;
   border-top: 8px solid #ffffff;
   filter: drop-shadow(0 2px 0 ${t.colorShadowPixel});
+`;
+
+/* 倾听行：声波条 + 草稿文本并排；条沉底对齐，像声音从桌宠耳朵里跳上来 */
+const ListenRow = styled.div`
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+`;
+
+/* 草稿文本块：字要装进独立块里才能正常换行——逐字 span 直接铺进 flex 行会
+   人人都成 flex item 卡死在一行往右溢出；min-width:0 允许块在气泡宽度内收缩 */
+const ListenText = styled.div`
+  flex: 1;
+  min-width: 0;
+`;
+
+/* 像素声波条：四根窄柱错拍跳动（steps 硬切，保住像素感），色同想法泡描边 */
+const ListenBars = styled.div`
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 2px;
+  height: 15px;
+  padding-bottom: 3px;
+`;
+
+const ListenBar = styled.div`
+  width: 3px;
+  background: #3f9599; /* = PX.well.edge */
+  box-shadow: 0 1px 0 ${t.colorShadowPixel};
+  animation: listen-eq 0.84s steps(3, jump-none) infinite;
+
+  &[data-i="0"] {
+    animation-delay: 0s;
+  }
+  &[data-i="1"] {
+    animation-delay: 0.21s;
+  }
+  &[data-i="2"] {
+    animation-delay: 0.42s;
+  }
+  &[data-i="3"] {
+    animation-delay: 0.63s;
+  }
+
+  @keyframes listen-eq {
+    0%,
+    100% {
+      height: 4px;
+    }
+    50% {
+      height: 12px;
+    }
+  }
+`;
+
+/* 倾听占位：草稿还没长出来时先亮一句，颜色再轻一档 */
+const ListenHint = styled.span`
+  color: #7d8a96;
+  letter-spacing: 1px;
+`;
+
+/** 倾听草稿字：刻意与 AI 回复的弹簧蹦字错开——新字从右侧滑入落位，
+    像声音被一截截「收进来」。草稿是整句替换快照（识别可能回改前文）：
+    与上一版做公共前缀 diff，前缀按 key 原地复用不重演，其后的字视为
+    新字（key 变化触发重挂载）带错拍滑入。 */
+function ListenDraft({ text }: { text: string }) {
+  const prevRef = useRef("");
+  const chars = [...text];
+  const prevChars = [...prevRef.current];
+  let common = 0;
+  while (
+    common < prevChars.length &&
+    common < chars.length &&
+    prevChars[common] === chars[common]
+  ) {
+    common++;
+  }
+  useEffect(() => {
+    prevRef.current = text;
+  }, [text]);
+  return (
+    <>
+      {chars.map((ch, i) => (
+        <DraftChar
+          key={`${i}:${ch}`}
+          data-new={i >= common || undefined}
+          style={
+            i >= common
+              ? { animationDelay: `${Math.min(i - common, 10) * 24}ms` }
+              : undefined
+          }
+        >
+          {ch}
+        </DraftChar>
+      ))}
+    </>
+  );
+}
+
+const DraftChar = styled.span`
+  display: inline-block;
+  white-space: pre;
+
+  &[data-new] {
+    animation: listen-slide-in 0.22s ease-out both;
+  }
+
+  @keyframes listen-slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(9px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 `;
 
 /* 想法泡的引导圆圈：三颗由大到小从气泡底下排向头顶（漫画式「冒想法」），
