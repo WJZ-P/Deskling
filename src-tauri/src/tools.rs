@@ -91,6 +91,17 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["name"]
             }),
         },
+        ToolSpec {
+            name: "remember",
+            description: "把一条关于主人的重要信息写进长期记忆（跨会话保留，之后每轮对话都能看到）。当得知主人的喜好、习惯、身份、正在做的项目、与你的约定等值得长久记住的事实时主动调用。一条记忆只装一件事实、精炼成一句独立可读的陈述（如「主人不吃香菜」）；得知多件事实就分多次调用，不要把不相干的事堆进同一条；琐碎的一次性信息不要记。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "要记住的事实，一句话" }
+                },
+                "required": ["content"]
+            }),
+        },
     ]
 }
 
@@ -112,9 +123,10 @@ pub fn subagent_spec() -> ToolSpec {
 
 /// 工具是否需要人工审批（写/命令类为 true）。未知工具按需审批处理（保守）。
 /// load_skill 只读取说明书、不执行任何东西，免审批（技能脚本的实际执行走
-/// run_command，仍受审批/免审批开关约束）。
+/// run_command，仍受审批/免审批开关约束）；remember 只写应用自己的记忆文件，
+/// 免审批（设置页可查看/删除/清空）。
 pub fn needs_approval(name: &str) -> bool {
-    !matches!(name, "read_file" | "list_dir" | "load_skill")
+    !matches!(name, "read_file" | "list_dir" | "load_skill" | "remember")
 }
 
 /// 给用户看的一句话摘要（工具卡标题右侧）。args 解析失败时回落到工具名。
@@ -129,6 +141,10 @@ pub fn summarize(name: &str, args: &Value) -> String {
         "write_file" => format!("写入 {}", str_arg(args, "path")),
         "run_command" => format!("执行 `{}`", str_arg(args, "command")),
         "load_skill" => format!("查阅技能 {}", str_arg(args, "name")),
+        "remember" => {
+            let head: String = str_arg(args, "content").chars().take(24).collect();
+            format!("记住「{head}」")
+        }
         "subagent" => {
             let head: String = str_arg(args, "task").chars().take(30).collect();
             format!("子任务：{head}")
@@ -160,6 +176,7 @@ pub async fn execute(name: &str, args: &Value) -> Result<String, String> {
         "list_dir" => list_dir(args).await,
         "write_file" => write_file(args).await,
         "run_command" => run_command(args).await,
+        "remember" => crate::memory::add(&str_arg(args, "content")),
         other => Err(format!("未知工具: {other}")),
     }
 }

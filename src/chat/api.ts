@@ -73,9 +73,12 @@ function messageToText(msg: ChatMessage): string {
     if (s.kind === "text") {
       if (s.text) parts.push(s.text);
     } else if (s.kind === "tool" && (s.status === "success" || s.status === "error")) {
+      // 存档记录口吻：这段文字会作为跨轮历史喂回模型，若写成「调用工具 …」
+      // 模型会在正文里手写同款格式冒充真调用（system prompt 的工具调用规范
+      // 与此呼应）——措辞必须一眼是「过去的记录」而非「可模仿的动作」
       const args = s.args ? `(${s.args})` : "";
       const result = s.detail ? `\n结果: ${s.detail}` : "";
-      const tag = s.status === "error" ? "调用工具(失败)" : "调用工具";
+      const tag = s.status === "error" ? "工具调用记录·失败" : "工具调用记录";
       parts.push(`[${tag} ${s.name}${args}${result}]`);
     }
   }

@@ -22,6 +22,14 @@ use tokio::sync::oneshot;
 use crate::skills;
 use crate::tools;
 
+/// 工具调用纪律片段（主/子 agent 的 system prompt 恒注入）。
+/// 背景：跨轮历史把过往工具调用压成「[工具调用记录 …]」纯文本（前端 toHistory），
+/// 模型会见样学样在正文里手写该格式冒充调用——不走原生接口就什么都没执行，
+/// 却让主人以为干了活。必须明文告诫。
+const TOOL_DISCIPLINE: &str = "【工具调用规范】需要使用工具时，必须通过原生的工具调用接口（tool call）发起，\
+绝不要在回复正文里手写「[调用工具 …]」「[工具调用记录 …]」之类的文字——历史消息里的这类文字\
+只是过往调用的存档记录，写在正文里不会真正执行任何工具，还会误导主人。";
+
 // ---- 取消登记表（保持原有语义）--------------------------------------------------
 
 /// 在途流式请求的取消登记表：requestId → 取消标志。
@@ -406,12 +414,16 @@ async fn run_subagent(
     ));
 
     // 子 agent 系统提示：自主多步、看不到主对话、给出最终结论、别再开子 agent。
-    // 技能清单照样给它（子 agent 也能用技能）。
+    // 技能清单照样给它（子 agent 也能用技能）；长期记忆同样注入——子任务常带
+    // 主人背景（如按喜好办事），且它也有 remember 工具，读写要对称，不然它
+    // 看不见已有记忆、换个措辞就会写出近似重复的条目。
     let sub_system = format!(
         "你是一个子 agent，被主 agent 指派独立完成一个子任务。你看不到主对话上下文，\
          只有下面这个任务说明。请自主使用工具多步完成它，完成后用一段清晰的文字给出最终\
-         结论/产出——这段文字会作为结果回给主 agent。不要再调用 subagent 工具。\n\n{}",
-        skills::system_prompt_fragment(skill_registry).unwrap_or_default()
+         结论/产出——这段文字会作为结果回给主 agent。不要再调用 subagent 工具。\n\n{}\n\n{}\n\n{}",
+        skills::system_prompt_fragment(skill_registry).unwrap_or_default(),
+        crate::memory::prompt_fragment().unwrap_or_default(),
+        TOOL_DISCIPLINE
     );
 
     let mut messages = proto.initial_messages(&[ChatTurn {
@@ -1300,6 +1312,24 @@ pub async fn provider_chat(
         }),
         None => system,
     };
+
+    // 长期记忆注入（技能清单之后）：全部记忆一次拼进，模型据此认得主人；
+    // 片段里同时提示它用 remember 工具沉淀新事实。没有记忆则不加空段落
+    let system = match crate::memory::prompt_fragment() {
+        Some(frag) => Some(match system {
+            Some(s) => format!("{s}\n\n{frag}"),
+            None => frag,
+        }),
+        None => system,
+    };
+
+    // 工具调用纪律（恒注入）：跨轮历史会把过往工具调用压成「[工具调用记录 …]」
+    // 纯文本（见前端 toHistory），模型见样学样、在正文里手写这个格式冒充调用
+    // ——看起来调了工具，实际什么都没执行。明文告诫只认原生接口
+    let system = Some(match system {
+        Some(s) => format!("{s}\n\n{TOOL_DISCIPLINE}"),
+        None => TOOL_DISCIPLINE.to_string(),
+    });
 
     // 单次运行的 agent 步数硬上限，避免模型死循环
     const MAX_STEPS: usize = 12;
