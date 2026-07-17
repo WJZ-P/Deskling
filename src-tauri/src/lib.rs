@@ -4,6 +4,7 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
 };
 
+mod memory;
 mod provider;
 mod skills;
 mod stt;
@@ -170,6 +171,16 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例守卫（须注册在最前）：点 X 是藏进托盘不退出，用户很容易再双击
+        // 快捷方式开出第二个进程——两个进程各持一份内存态互相覆写 memory.json
+        // 与设置存储。二次启动不开新进程，只把已有实例的主窗口唤出来
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         // 语音输入全局状态：录音会话 + 常驻 SenseVoice 识别器
@@ -180,6 +191,9 @@ pub fn run() {
         .manage(wake::WakeState::default())
         .setup(|app| {
             setup_tray(app)?;
+            // 长期记忆：加载 app_data_dir/memory.json（remember 工具写、
+            // provider 注入 system prompt、设置页管理、变更广播刷新 UI）
+            memory::init(app.handle().clone());
             Ok(())
         })
         // 默认行为：点 X 不退出，隐藏到系统托盘（真正退出走托盘菜单「退出」）
@@ -216,7 +230,10 @@ pub fn run() {
             tts::tts_stop,
             tts::tts_set_volume,
             wake::wake_configure,
-            wake::wake_chat_busy
+            wake::wake_chat_busy,
+            memory::memory_list,
+            memory::memory_remove,
+            memory::memory_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
