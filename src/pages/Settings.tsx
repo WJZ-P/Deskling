@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { styled } from "@linaria/react";
 import { invoke } from "@tauri-apps/api/core";
-import { emitTo } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { t } from "../styles/theme";
 import {
   PixelPage,
   PixelPageHeader,
@@ -19,6 +21,9 @@ import {
 } from "../components/pixel/PixelSettingRow";
 import { PixelSelect, type PixelSelectOption } from "../components/pixel/PixelSelect";
 import { PixelSwitch } from "../components/pixel/PixelSwitch";
+import { PixelModal } from "../components/pixel/PixelModal";
+import { PixelConfirmModal } from "../components/pixel/PixelConfirmModal";
+import { MemoryCard } from "../components/MemoryCard";
 import { PixelInput } from "../components/pixel/PixelInput";
 import { PixelSlider } from "../components/pixel/PixelSlider";
 import { BACKDROP_STYLES, type BackdropStyleId } from "../components/pixel/backdrops";
@@ -69,6 +74,13 @@ const PROXY_MODE_OPTIONS: PixelSelectOption[] = [
 ];
 
 
+
+/** 一条长期记忆（Rust memory_list 返回项） */
+interface MemoryEntry {
+  id: number;
+  content: string;
+  ts: number;
+}
 
 function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
   const isLight = theme === "light";
@@ -252,6 +264,39 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
   useEffect(() => {
     if (getSetting("voiceWake")) pushWake();
   }, [pushWake]);
+
+  // 长期记忆：挂载读一次拿条数，此后靠 Rust 侧 memory:changed 广播保持新鲜
+  // ——本页常驻挂载不重挂，对话中 remember 工具随时在加条目，不订阅的话
+  // 计数与「清除记忆」禁用态会永远停在启动那一刻。清除全部走确认弹窗
+  const [memories, setMemories] = useState<MemoryEntry[]>([]);
+  const [memOpen, setMemOpen] = useState(false);
+  const [memClearAsk, setMemClearAsk] = useState(false);
+  // 点开的单条记忆（长内容在列表卡片里被截断，详情浮窗看全文）
+  const [memDetail, setMemDetail] = useState<MemoryEntry | null>(null);
+  useEffect(() => {
+    const refresh = () =>
+      void invoke<MemoryEntry[]>("memory_list").then(setMemories).catch(() => {});
+    refresh();
+    const unlisten = listen("memory:changed", refresh);
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
+  const openMemories = useCallback(() => {
+    void invoke<MemoryEntry[]>("memory_list").then(setMemories).catch(() => {});
+    setMemOpen(true);
+  }, []);
+  const handleMemoryRemove = useCallback((id: number) => {
+    void invoke("memory_remove", { id })
+      .then(() => setMemories((prev) => prev.filter((m) => m.id !== id)))
+      .catch(() => {});
+  }, []);
+  const handleMemoryClear = useCallback(() => {
+    setMemClearAsk(false);
+    void invoke("memory_clear")
+      .then(() => setMemories([]))
+      .catch(() => {});
+  }, []);
 
   // 语音输入麦克风 / 播报扬声器：挂载时向后端各枚举一次；改动即落盘
   // （onKeyChange 广播给常驻对话窗，下次录音/念句生效）
@@ -591,8 +636,123 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
           </PixelSettingRow>
         </PixelSettingList>
       </PixelSection>
+
+      <PixelSection title="记忆">
+        <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>长期记忆</PixelSettingLabel>
+              <PixelSettingDesc>
+                桌宠在对话中主动记下的关于你的事（共 {memories.length} 条），
+                每轮对话都会带上
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelButton onClick={openMemories}>查看记忆</PixelButton>
+          </PixelSettingRow>
+        </PixelSettingList>
+      </PixelSection>
+
+      {/* 记忆浏览浮窗：一条记忆一张像素卡（时间倒序），右上删除 icon，
+          长内容截断三行、点卡片弹详情浮窗看全文；清除全部入口在脚部 */}
+      <PixelModal
+        open={memOpen}
+        title={`长期记忆 · ${memories.length} 条`}
+        onClose={() => setMemOpen(false)}
+        width={640}
+        footer={
+          memories.length > 0 ? (
+            <PixelButton variant="low" onClick={() => setMemClearAsk(true)}>
+              清除全部
+            </PixelButton>
+          ) : undefined
+        }
+      >
+        <MemList>
+          {memories.length > 0 ? (
+            memories.map((m) => (
+              <MemoryCard
+                key={m.id}
+                content={m.content}
+                ts={m.ts}
+                onOpen={() => setMemDetail(m)}
+                onDelete={() => handleMemoryRemove(m.id)}
+              />
+            ))
+          ) : (
+            <MemEmpty>还没有记忆——聊着聊着它就会记住你了喵</MemEmpty>
+          )}
+        </MemList>
+      </PixelModal>
+
+      {/* 单条记忆详情浮窗（叠在列表浮窗上层）：完整内容 + 精确时间 */}
+      <PixelModal
+        open={memDetail !== null}
+        title="记忆详情"
+        onClose={() => setMemDetail(null)}
+        width={560}
+        footer={
+          memDetail ? (
+            <PixelButton
+              variant="low"
+              onClick={() => {
+                handleMemoryRemove(memDetail.id);
+                setMemDetail(null);
+              }}
+            >
+              删除这条记忆
+            </PixelButton>
+          ) : undefined
+        }
+      >
+        {memDetail && (
+          <>
+            <MemDetailText>{memDetail.content}</MemDetailText>
+            <MemDate>记于 {new Date(memDetail.ts).toLocaleString()}</MemDate>
+          </>
+        )}
+      </PixelModal>
+
+      {/* 清除全部的确认弹窗（破坏性操作，不做静默直清） */}
+      <PixelConfirmModal
+        open={memClearAsk}
+        title="清除全部记忆"
+        message={`将删除桌宠记住的全部 ${memories.length} 条记忆，且无法恢复。确定吗？`}
+        confirmLabel="全部清除"
+        tone="danger"
+        onConfirm={handleMemoryClear}
+        onCancel={() => setMemClearAsk(false)}
+      />
     </PixelPage>
   );
 }
+
+/* 记忆卡列表：撑高浮窗（min-height），卡片纵向排布 */
+const MemList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: calc(${t.unit} * 3);
+  min-height: 440px;
+`;
+
+/* 记忆详情正文：全文展示，不截断 */
+const MemDetailText = styled.p`
+  margin: 0;
+  font: ${t.textMd};
+  line-height: 1.9;
+  color: ${t.colorText};
+  white-space: pre-wrap;
+  word-break: break-word;
+`;
+
+const MemDate = styled.span`
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+`;
+
+const MemEmpty = styled.p`
+  margin: 0;
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+`;
 
 export default Settings;

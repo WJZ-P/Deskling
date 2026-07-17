@@ -66,6 +66,9 @@ export function PixelModal({ open, title, onClose, children, footer, width }: Pi
       }}
     >
       <Panel role="dialog" aria-modal="true" data-open={open || undefined} style={{ width: width ?? PANEL_MAX_W }}>
+        {/* liveResize：内容条件渲染的浮窗（如记忆详情）关着时面板塌成小尺寸，
+            打开瞬间内容填入尺寸突变——不开的话首帧还画着旧尺寸的框，入场动画
+            期间边框错位撕裂，重绘完才恢复 */}
         <PixelFrame
           palette={PRIORITY_PAL.low}
           variant="raised"
@@ -74,6 +77,7 @@ export function PixelModal({ open, title, onClose, children, footer, width }: Pi
           noise={PANEL_NOISE}
           noiseGranularity={2}
           elevation={PANEL_ELEV}
+          liveResize
         />
         <Inner>
           <Head>
