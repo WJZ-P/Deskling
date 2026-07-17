@@ -9,6 +9,7 @@ mod skills;
 mod stt;
 mod tools;
 mod tts;
+mod wake;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -175,6 +176,8 @@ pub fn run() {
         .manage(stt::SttState::default())
         // 语音输出全局状态：语音包缓存 + 合成/播放运行时（首次 tts_speak 拉起）
         .manage(tts::TtsState::default())
+        // 语音唤醒全局状态：常驻监听管线（wake_configure 按设置拉起/重建）
+        .manage(wake::WakeState::default())
         .setup(|app| {
             setup_tray(app)?;
             Ok(())
@@ -211,7 +214,9 @@ pub fn run() {
             tts::tts_speak,
             tts::tts_beep_start,
             tts::tts_stop,
-            tts::tts_set_volume
+            tts::tts_set_volume,
+            wake::wake_configure,
+            wake::wake_chat_busy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

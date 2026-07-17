@@ -46,15 +46,16 @@ struct RecSession {
 
 /// STT 全局状态：进行中的录音会话 + 常驻识别器。
 /// 识别器首次用时加载（~1s）、之后复用（单次识别几百 ms）；
-/// 挂 Arc 让预热/识别的 blocking 线程能拿走一份句柄。
+/// 挂 Arc 让预热/识别的 blocking 线程能拿走一份句柄（wake.rs 的唤醒管线
+/// 也共享同一个识别器，不重复占 ~300MB 内存）。
 #[derive(Default)]
 pub struct SttState {
     session: Mutex<Option<RecSession>>,
-    recognizer: Arc<Mutex<Option<OfflineRecognizer>>>,
+    pub(crate) recognizer: Arc<Mutex<Option<OfflineRecognizer>>>,
 }
 
 /// 解析模型目录：打包后 = 安装目录 resources/stt；开发 = src-tauri/resources/stt
-fn model_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn model_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resolve("resources/stt", BaseDirectory::Resource)
         .map_err(|e| format!("解析语音模型目录失败: {e}"))
@@ -81,7 +82,7 @@ fn load_recognizer(dir: &Path) -> Result<OfflineRecognizer, String> {
 
 /// 确保识别器已加载。拿着锁装载：预热线程装载期间，stt_stop 会在锁上
 /// 等它装完再识别，天然串行无竞态。
-fn ensure_recognizer(
+pub(crate) fn ensure_recognizer(
     slot: &Arc<Mutex<Option<OfflineRecognizer>>>,
     dir: &Path,
 ) -> Result<(), String> {
@@ -93,7 +94,7 @@ fn ensure_recognizer(
 }
 
 /// 一段单声道样本 → （必要时）重采样 16k → SenseVoice 解码 → 识别文本
-fn recognize(
+pub(crate) fn recognize(
     recognizer: &OfflineRecognizer,
     samples: &[f32],
     sample_rate: u32,
@@ -150,7 +151,8 @@ where
 /// 采集线程主体：开麦克风（设置页指定设备名，缺省/失联回退系统默认）→
 /// 按设备样本格式建流（cpal 不做隐式格式转换，常见四种各给一条泛型分派）→
 /// 经 ready 回报采样率/错误 → 驻留到停止旗竖起，退出时 drop 流关麦。
-fn capture_thread(
+/// （wake.rs 的常驻唤醒管线复用同一套采集逻辑）
+pub(crate) fn capture_thread(
     device_name: Option<String>,
     stop: Arc<AtomicBool>,
     buffer: Arc<Mutex<Vec<f32>>>,
@@ -255,6 +257,8 @@ pub fn stt_start(
         sample_rate,
         handle,
     });
+    // 挂起唤醒管线：按住说话的这段语音别让它也听一遍（误触发/误发送）
+    crate::wake::set_stt_busy(true);
     // 预热：首次按下时提前加载识别器，松手识别就不用再等那 ~1s
     let slot = state.recognizer.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -307,6 +311,7 @@ pub async fn stt_stop(app: AppHandle, state: State<'_, SttState>) -> Result<Stri
         .unwrap()
         .take()
         .ok_or("当前没有在录音")?;
+    crate::wake::set_stt_busy(false);
     sess.stop.store(true, Ordering::Relaxed);
     let _ = sess.handle.join();
     let samples = std::mem::take(&mut *sess.buffer.lock().unwrap());
@@ -328,6 +333,7 @@ pub async fn stt_stop(app: AppHandle, state: State<'_, SttState>) -> Result<Stri
 /// 放弃本次录音：停采集直接丢样本（指针滑出按钮/取消等场景）
 #[tauri::command]
 pub fn stt_cancel(state: State<SttState>) -> Result<(), String> {
+    crate::wake::set_stt_busy(false);
     if let Some(sess) = state.session.lock().unwrap().take() {
         sess.stop.store(true, Ordering::Relaxed);
         let _ = sess.handle.join();

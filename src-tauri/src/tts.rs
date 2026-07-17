@@ -695,12 +695,15 @@ fn playback_thread(
         let want = last_audible.elapsed() < Duration::from_millis(PLAYING_HANGOVER_MS);
         if want != playing {
             playing = want;
+            // 唤醒管线同步挂起/恢复：桌宠自己念「雪豹」不能把自己叫醒
+            crate::wake::set_tts_busy(playing);
             // 广播给所有窗口：桌宠嘴型（talking）与对话窗按需各自消费
             let _ = app.emit("tts:state", serde_json::json!({ "playing": playing }));
         }
     }
     // 退役：确保嘴型不悬在「说话」上（换设备瞬间可能正播到一半）
     if playing {
+        crate::wake::set_tts_busy(false);
         let _ = app.emit("tts:state", serde_json::json!({ "playing": false }));
     }
     drop(stream);
