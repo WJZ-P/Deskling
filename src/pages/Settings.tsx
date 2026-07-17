@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import {
   PixelPage,
   PixelPageHeader,
@@ -31,6 +32,7 @@ import {
   saveProfile,
   deleteProfile,
   setActiveProvider,
+  syncWakeConfig,
 } from "../settings";
 
 interface SettingsProps {
@@ -65,6 +67,7 @@ const PROXY_MODE_OPTIONS: PixelSelectOption[] = [
   { value: "custom", label: "自定义" },
   { value: "off", label: "不使用代理" },
 ];
+
 
 
 function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: SettingsProps) {
@@ -172,6 +175,83 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     setBubbleClick(next);
     void setSetting("petBubbleClick", next);
   }, []);
+  const [petAutoWalk, setPetAutoWalk] = useState<boolean>(() =>
+    getSetting("petAutoWalk"),
+  );
+  const handlePetAutoWalk = useCallback((next: boolean) => {
+    setPetAutoWalk(next);
+    void setSetting("petAutoWalk", next);
+  }, []);
+  const [petAlwaysOnTop, setPetAlwaysOnTop] = useState<boolean>(() =>
+    getSetting("petAlwaysOnTop"),
+  );
+  const handlePetAlwaysOnTop = useCallback((next: boolean) => {
+    setPetAlwaysOnTop(next);
+    void setSetting("petAlwaysOnTop", next);
+    void emitTo("pet", "pet:always-on-top", { enabled: next });
+  }, []);
+
+  // 语音唤醒：开关 / 唤醒词 / 提示音。改动即落盘并推给 Rust 重建常驻监听管线
+  // （唤醒词失焦才提交——每次重建要重载 KWS 模型，别跟着键入抖）；
+  // 「唤醒词不在模型词表」这类配置错误就地显示在开关行的描述里。
+  const [voiceWake, setVoiceWake] = useState<boolean>(() => getSetting("voiceWake"));
+  const [wakeWord, setWakeWord] = useState<string>(() => getSetting("wakeWord"));
+  const [wakeError, setWakeError] = useState<string | null>(null);
+  const pushWake = useCallback(() => {
+    syncWakeConfig()
+      .then(() => setWakeError(null))
+      .catch((err) => setWakeError(String(err)));
+  }, []);
+  const handleVoiceWake = useCallback(
+    (next: boolean) => {
+      setVoiceWake(next);
+      void setSetting("voiceWake", next);
+      pushWake();
+    },
+    [pushWake],
+  );
+  // 唤醒灵敏度：拖动即落盘显示，但重建监听管线（要重载 KWS 模型）防抖 500ms——
+  // 拖一整条只重建一次
+  const [wakeSensitivity, setWakeSensitivity] = useState<number>(() =>
+    getSetting("wakeSensitivity"),
+  );
+  const wakePushTimerRef = useRef(0);
+  useEffect(() => () => window.clearTimeout(wakePushTimerRef.current), []);
+  const handleWakeSensitivity = useCallback(
+    (v: number) => {
+      const s = Math.max(0, Math.min(1, v));
+      setWakeSensitivity(s);
+      void setSetting("wakeSensitivity", s);
+      window.clearTimeout(wakePushTimerRef.current);
+      wakePushTimerRef.current = window.setTimeout(pushWake, 500);
+    },
+    [pushWake],
+  );
+  const [wakeCue, setWakeCue] = useState<boolean>(() => getSetting("wakeCue"));
+  const handleWakeCue = useCallback((next: boolean) => {
+    setWakeCue(next);
+    void setSetting("wakeCue", next);
+    // 打开即试听一声「在听」，立刻知道长什么样（音量跟软件音量设置）
+    if (next) {
+      const audio = new Audio("/audio/wake-start.wav");
+      audio.volume = Math.max(0, Math.min(1, getSetting("volume")));
+      void audio.play().catch(() => {});
+    }
+  }, []);
+  const handleWakeWordChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setWakeWord(e.target.value);
+  }, []);
+  const commitWakeWord = useCallback(() => {
+    const word = wakeWord.trim() || "雪豹";
+    setWakeWord(word);
+    void setSetting("wakeWord", word);
+    pushWake();
+  }, [wakeWord, pushWake]);
+  // 挂载重放一次唤醒配置：上次留下的失效配置（非法唤醒词/模型未就绪但开关已开）
+  // 会在进设置页时把错误重新亮出来，而不是开关显示开启、后端却静默没在听
+  useEffect(() => {
+    if (getSetting("voiceWake")) pushWake();
+  }, [pushWake]);
 
   // 语音输入麦克风 / 播报扬声器：挂载时向后端各枚举一次；改动即落盘
   // （onKeyChange 广播给常驻对话窗，下次录音/念句生效）
@@ -183,10 +263,15 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
     void invoke<string[]>("stt_devices").then(setMicDevices).catch(() => {});
     void invoke<string[]>("tts_output_devices").then(setSpkDevices).catch(() => {});
   }, []);
-  const handleMicDevice = useCallback((v: string) => {
-    setMicDevice(v);
-    void setSetting("sttDevice", v);
-  }, []);
+  const handleMicDevice = useCallback(
+    (v: string) => {
+      setMicDevice(v);
+      void setSetting("sttDevice", v);
+      // 常驻唤醒管线也用这个麦克风：换设备即重建（未开启则是幂等空转）
+      pushWake();
+    },
+    [pushWake],
+  );
   const handleSpkDevice = useCallback((v: string) => {
     setSpkDevice(v);
     void setSetting("ttsDevice", v);
@@ -315,6 +400,38 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
               aria-label="点击桌宠气泡打开对话窗"
             />
           </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>自主散步</PixelSettingLabel>
+              <PixelSettingDesc>
+                {petAutoWalk
+                  ? "开启：桌宠真正空闲时，偶尔随机走向屏幕水平线上的其他位置"
+                  : "关闭：桌宠只在拖动或任务栏避让时移动"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={petAutoWalk}
+              onChange={handlePetAutoWalk}
+              aria-label="允许桌宠自主散步"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>始终置顶</PixelSettingLabel>
+              <PixelSettingDesc>
+                {petAlwaysOnTop
+                  ? "开启：桌宠一直显示在其他普通窗口上方"
+                  : "关闭：其他窗口可以正常盖住桌宠"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={petAlwaysOnTop}
+              onChange={handlePetAlwaysOnTop}
+              aria-label="桌宠窗口始终置顶"
+            />
+          </PixelSettingRow>
         </PixelSettingList>
       </PixelSection>
 
@@ -401,6 +518,76 @@ function Settings({ theme, onToggleTheme, backdropStyle, onChangeBackdrop }: Set
               <PixelSettingDesc>为桌宠挑一把好听的嗓子</PixelSettingDesc>
             </PixelSettingInfo>
             <PixelSoonTag />
+          </PixelSettingRow>
+        </PixelSettingList>
+      </PixelSection>
+
+      <PixelSection title="语音唤醒">
+        <PixelSettingList>
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>语音唤醒</PixelSettingLabel>
+              <PixelSettingDesc>
+                {wakeError
+                  ? `⚠ ${wakeError}`
+                  : voiceWake
+                    ? "开启：常驻监听麦克风，喊唤醒词 → 提示音 → 直接说事，说完自动发进会话"
+                    : "关闭：语音输入只保留输入框的按住说话"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={voiceWake}
+              onChange={handleVoiceWake}
+              aria-label="语音唤醒"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>唤醒词</PixelSettingLabel>
+              <PixelSettingDesc>中文；多个候选用逗号分隔，移开输入框后生效</PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelInput
+              value={wakeWord}
+              onChange={handleWakeWordChange}
+              onBlur={commitWakeWord}
+              placeholder="雪豹"
+              aria-label="唤醒词"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>唤醒灵敏度</PixelSettingLabel>
+              <PixelSettingDesc>
+                越高越容易被唤醒（语速快也不漏），同时也更容易被同音词误触
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSlider
+              value={wakeSensitivity}
+              min={0}
+              max={1}
+              step={0.05}
+              onChange={handleWakeSensitivity}
+              formatTip={(v) => `${Math.round(v * 100)}%`}
+              aria-label="唤醒灵敏度"
+            />
+          </PixelSettingRow>
+
+          <PixelSettingRow>
+            <PixelSettingInfo>
+              <PixelSettingLabel>唤醒提示音</PixelSettingLabel>
+              <PixelSettingDesc>
+                {wakeCue
+                  ? "开启：命中唤醒词响「在听」，一句话说完响「收到」"
+                  : "关闭：只靠桌宠的倾听动画和头顶草稿泡提示"}
+              </PixelSettingDesc>
+            </PixelSettingInfo>
+            <PixelSwitch
+              checked={wakeCue}
+              onChange={handleWakeCue}
+              aria-label="唤醒提示音"
+            />
           </PixelSettingRow>
         </PixelSettingList>
       </PixelSection>

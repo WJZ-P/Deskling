@@ -31,7 +31,9 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 提示音 wav 是脚本生成的静态资源，不参与热更；且被资源管理器预览/
+      // 杀软扫描锁住时 chokidar watch 会直接 EBUSY 拖垮 dev 启动
+      ignored: ["**/src-tauri/**", "**/public/audio/**"],
     },
   },
 }));

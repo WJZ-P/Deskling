@@ -51,6 +51,11 @@ const BEEP_TAIL_MAX_MS = 1000;
 // 「思考」——AI 卡住时不至于一直张嘴说话对不上（有真实语音在播时不干预）
 const TALK_STALL_MS = 1000;
 
+// 语音唤醒起止提示音（正式资源，scripts/gen-wake-sounds.ps1 生成的软木确认一对）：
+// start = 命中唤醒词，两声上行「在听」；end = 一句话说完，镜像下行「收到，去干活」
+const WAKE_START_SOUND = "/audio/wake-start.wav";
+const WAKE_END_SOUND = "/audio/wake-end.wav";
+
 type PetWorkState = "searching" | "typing";
 type PetLoopState =
   | "thinking"
@@ -567,7 +572,7 @@ export function ChatWindow() {
   // 升上去）。高频到达 → 节流 ~100ms 只发最新一版；清空（text=""）与收尾
   // （done）立即发不节流。replyTextRef 累积本轮正文；thinkTextRef 累积当前
   // 思考段（每进入新一段思考清零重来，气泡只演最新一段的心理活动）
-  type BubbleKind = "say" | "think";
+  type BubbleKind = "say" | "think" | "listen";
   const replyTextRef = useRef("");
   const thinkTextRef = useRef("");
   const latestSayRef = useRef<{ text: string; kind: BubbleKind }>({ text: "", kind: "say" });
@@ -621,6 +626,8 @@ export function ChatWindow() {
     setTypingConv(convId);
     setStreamingId(replyId);
     liveRef.current = { convId, replyId };
+    // 回复在途：挂起语音唤醒检测（答完 finish 恢复），别让雪豹边答边被叫醒
+    void invoke("wake_chat_busy", { busy: true }).catch(() => {});
     petPlay("thinking"); // 等首包：桌宠托腮想
     replyTextRef.current = "";
     thinkTextRef.current = "";
@@ -667,6 +674,8 @@ export function ChatWindow() {
       streamRef.current = null;
       liveRef.current = null;
       toolPetStateRef.current.clear();
+      // 恢复语音唤醒检测（TTS 还在念的尾巴由 Rust 侧 TTS_BUSY 旗继续压住）
+      void invoke("wake_chat_busy", { busy: false }).catch(() => {});
       // 语音收尾：neural 把分句器余量念完（嘴型交给 tts:state 落回 idle）；
       // beep 不是念完就停——随机再叨 1-2s 才 tts_stop（AI 说完过一会才闭嘴）
       const sp = speechRef.current;
@@ -812,10 +821,11 @@ export function ChatWindow() {
     streamRef.current = handle;
   }, [petFeedback, petPlay, petSay, speakSentences]);
 
-  const handleSend = useCallback(
-    (text: string) => {
-      if (!activeId) return;
-
+  // 向指定会话落一条用户消息并发起流式回复（键盘发送与语音唤醒共用）。
+  // 先落用户消息，更新会话标题/预览；同时算出「含这条」的历史给后端。
+  // 注意用入参 convId 锁定会话，避免流式回填串到别的会话上。
+  const sendMessage = useCallback(
+    (convId: string, text: string) => {
       const userMsg: ChatMessage = {
         id: nextId(),
         role: "user",
@@ -823,9 +833,6 @@ export function ChatWindow() {
         segments: [{ kind: "text", text }],
       };
 
-      // 先落用户消息，更新会话标题/预览；同时算出「含这条」的历史给后端。
-      // 注意用 activeId 锁定当前会话，避免流式回填串到别的会话上。
-      const convId = activeId;
       let history: ChatTurn[] = [];
       setConversations((prev) =>
         prev.map((c) => {
@@ -844,8 +851,153 @@ export function ChatWindow() {
 
       startStream(convId, history);
     },
-    [activeId, startStream],
+    [startStream],
   );
+
+  const handleSend = useCallback(
+    (text: string) => {
+      if (activeId) sendMessage(activeId, text);
+    },
+    [activeId, sendMessage],
+  );
+
+  // ---- 语音唤醒桥：Rust wake 管线的四个事件 ----
+  // detected = 命中唤醒词：响提示音 + 桌宠竖耳倾听；partial = 倾听中的识别草稿：
+  // 推进桌宠头顶想法泡（边听边写）；command = 听完一句并识别完成：不拉起对话窗，
+  // 直接发进当前会话（没有会话就新建，聊天记录照常落盘）；aborted = 没听到下文/
+  // 识别为空：桌宠冒「没听清」气泡 + 播错误小动画放回待机（被打断则静默复位）。
+  // 挂载一次；回调经 ref 转发拿最新闭包（activeId / startStream 随渲染更新）。
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+  const startStreamRef = useRef(startStream);
+  startStreamRef.current = startStream;
+  // 唤醒起止提示音：挂载即预加载、常驻复用——KWS 判定本就滞后发音几百 ms，
+  // 命中那刻再现载 wav 会雪上加霜；重播只重置进度，即触即响
+  const wakeStartRef = useRef<HTMLAudioElement | null>(null);
+  const wakeEndRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    // 挂载先清一次在途旗：webview 重载/崩溃重建时 finish 的 busy=false 可能永远
+    // 发不出来，悬空的旗会把 Rust 侧唤醒检测永久压住
+    void invoke("wake_chat_busy", { busy: false }).catch(() => {});
+    const preload = (src: string) => {
+      const audio = new Audio(src);
+      audio.preload = "auto";
+      return audio;
+    };
+    wakeStartRef.current = preload(WAKE_START_SOUND);
+    wakeEndRef.current = preload(WAKE_END_SOUND);
+    const playCue = (audio: HTMLAudioElement | null) => {
+      // 提示音开关（默认关）：播放那刻读设置，桌宠倾听动画/草稿泡不受影响
+      if (!audio || !getSetting("wakeCue")) return;
+      audio.volume = Math.max(0, Math.min(1, getSetting("volume")));
+      audio.currentTime = 0;
+      void audio.play().catch((err) => console.warn("唤醒提示音播放失败:", err));
+    };
+    const unlisteners = [
+      listen<{ keyword?: string }>("wake:detected", () => {
+        playCue(wakeStartRef.current);
+        petPlay("listening");
+        // 立刻亮出倾听泡（声波条 + 占位提示）：草稿到达前就让主人知道在听
+        petSay("", "listen");
+      }),
+      // 倾听草稿：桌宠头顶倾听泡实时长出「它听到了什么」
+      listen<{ text?: string }>("wake:partial", (e) => {
+        const text = String(e.payload?.text ?? "");
+        if (text && petStateRef.current === "listening") petSay(text, "listen");
+      }),
+      listen<{ text?: string }>("wake:command", (e) => {
+        const text = String(e.payload?.text ?? "").trim();
+        // 在途兜底（Rust 侧 CHAT_BUSY 已挂起检测，正常到不了这里）：丢弃并复位演出
+        if (!text || liveRef.current) {
+          petSay(""); // 清掉倾听草稿泡
+          if (petStateRef.current === "listening") {
+            petPlay(liveRef.current ? "thinking" : "idle");
+          }
+          return;
+        }
+        // 结束音「收到」：话已全部接收并识别完成，马上开始生成
+        playCue(wakeEndRef.current);
+        // 对话窗没开着就唤出来并聚焦（下面的分支已把本会话置为当前，
+        // 展示的正是这轮语音对话；已开着则不打扰）
+        void invoke<boolean>("chat_visible")
+          .then((visible) => {
+            if (!visible) return invoke("chat_show");
+          })
+          .catch(() => {});
+        // 不走 sendMessage：它靠 setConversations updater 的副作用取 history，只在
+        // 该 dispatch 被 React 急切求值（本 tick 该组件首个 setState）时才成立；这里
+        // 新建会话分支要先 set 两个状态，updater 会推迟到 render，history 将是空的。
+        // 改为从已提交快照（conversationsRef）显式拼历史——状态更新与请求参数解耦。
+        // voice 标记：UI 气泡开头渲染声波条标识；发给模型的历史由 toHistory 统一
+        // 拼 "(语音输入) " 前缀（识别可能有误差），正文本身保持原文
+        const userMsg: ChatMessage = {
+          id: nextId(),
+          role: "user",
+          ts: Date.now(),
+          voice: true,
+          segments: [{ kind: "text", text }],
+        };
+        const activeConv = conversationsRef.current.find(
+          (c) => c.id === activeIdRef.current,
+        );
+        if (activeConv) {
+          const history = toHistory([...activeConv.messages, userMsg]);
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id !== activeConv.id
+                ? c
+                : {
+                    ...c,
+                    title: c.messages.length === 0 ? text.slice(0, 18) : c.title,
+                    preview: text,
+                    updatedAt: userMsg.ts,
+                    messages: [...c.messages, userMsg],
+                  },
+            ),
+          );
+          startStreamRef.current(activeConv.id, history);
+        } else {
+          // 一个会话都没有：像点「新建」一样起一个，语音命令作为它的第一条消息
+          const conv: Conversation = {
+            id: nextId(),
+            title: text.slice(0, 18),
+            preview: text,
+            updatedAt: userMsg.ts,
+            messages: [userMsg],
+          };
+          setConversations((prev) => [conv, ...prev]);
+          setActiveId(conv.id);
+          startStreamRef.current(conv.id, toHistory(conv.messages));
+        }
+      }),
+      listen<{ reason?: string }>("wake:aborted", (e) => {
+        const reason = e.payload?.reason;
+        if (reason === "suspended") {
+          // 被录音/播报/回复打断：静默复位，不怪主人
+          petSay("");
+          if (petStateRef.current === "listening") {
+            petPlay(liveRef.current ? "thinking" : "idle");
+          }
+          return;
+        }
+        // 没开口 / 没听清：头顶冒一句 + 错误小动画，播完回待机
+        petSay("没听清喵……", "say", true);
+        petFeedback("error", "idle");
+      }),
+      listen<{ message?: string }>("wake:error", (e) => {
+        console.warn("语音唤醒管线错误:", e.payload?.message);
+      }),
+    ];
+    return () => {
+      for (const u of unlisteners) void u.then((f) => f());
+      wakeStartRef.current?.pause();
+      wakeEndRef.current?.pause();
+      wakeStartRef.current = null;
+      wakeEndRef.current = null;
+    };
+  }, [petPlay, petSay, petFeedback]);
 
   // 编辑单条消息 = 从这个节点「分叉重来」：替换文本、丢弃它之后的全部消息；
   // 编辑的是用户消息时再以截断后的历史重新发起请求（重新进 loading，AI 重答）。

@@ -90,7 +90,12 @@ export function toHistory(messages: ChatMessage[]): ChatTurn[] {
   const out: ChatTurn[] = [];
   for (const m of messages) {
     const content = messageToText(m);
-    if (content) out.push({ role: m.role, content });
+    if (!content) continue;
+    // 语音输入的用户消息：只在发给模型的正文上拼标记（离线识别可能有同音/
+    // 断句误差，提示模型别太抠字面）；UI 气泡不显示前缀，用声波条标识
+    const tagged =
+      m.voice && m.role === "user" ? `(语音输入) ${content}` : content;
+    out.push({ role: m.role, content: tagged });
   }
   return out;
 }

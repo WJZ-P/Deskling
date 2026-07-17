@@ -118,6 +118,12 @@ const DEFAULT_PETS: PetProfile[] = [
   { id: "xuebao", name: "雪豹", prompt: DEFAULT_PET_PROMPT, sprite: "/pet/xuebao.png" },
 ];
 
+/** 桌宠最后一次普通落脚的窗口物理坐标；物理 px 可避免高 DPI 下反复换算漂移。 */
+export interface PetWindowPosition {
+  x: number;
+  y: number;
+}
+
 // ==================== 应用设置 ====================
 
 /** 所有持久化配置项集中在这里，新增配置时同步补默认值即可 */
@@ -172,6 +178,24 @@ export interface AppSettings {
   petBubbleSecs: number;
   /** 点击桌宠气泡拉起 AI 对话窗（默认开启） */
   petBubbleClick: boolean;
+  /**
+   * 语音唤醒：常驻监听麦克风，喊唤醒词 → 提示音 → 倾听一句话 → 自动发进会话
+   * （不拉起对话窗，聊天记录照常保存）。Rust 侧 wake_configure 按它起停管线。
+   * 起止提示音是固定资源 /audio/wake-{start,end}.wav（ChatWindow 播放）。
+   */
+  voiceWake: boolean;
+  /** 唤醒词（中文，多个用逗号分隔；空串回退「雪豹」） */
+  wakeWord: string;
+  /** 唤醒灵敏度 0~1（默认 0.5）：越高越容易唤醒（快语速不漏），也越容易被同音误触 */
+  wakeSensitivity: number;
+  /** 唤醒提示音开关（默认关）：开启时命中响「在听」、说完响「收到」 */
+  wakeCue: boolean;
+  /** 桌宠真正空闲时是否允许低频自主散步（手动动画测试不受影响） */
+  petAutoWalk: boolean;
+  /** 桌宠窗口是否始终压在其他普通窗口上方（默认关闭） */
+  petAlwaysOnTop: boolean;
+  /** 桌宠最后一次安全落脚位置；null = 首次运行交给系统安排 */
+  petPosition: PetWindowPosition | null;
   /** 桌宠档案列表（桌宠页展示栏；人设 prompt 等都存在档案里） */
   petProfiles: PetProfile[];
   /** 当前桌宠 id（展示栏排最前；对话人设取它的 prompt） */
@@ -196,6 +220,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ttsDevice: "",
   petBubbleSecs: 5,
   petBubbleClick: true,
+  voiceWake: false,
+  wakeWord: "雪豹",
+  wakeSensitivity: 0.5,
+  wakeCue: false,
+  petAutoWalk: true,
+  petAlwaysOnTop: false,
+  petPosition: null,
   petProfiles: DEFAULT_PETS,
   activePetId: "xuebao",
 };
@@ -274,6 +305,25 @@ function bindCrossWindowSync(s: Store): void {
   void s.onKeyChange<boolean>("petBubbleClick", (v) => {
     cache.petBubbleClick = v ?? DEFAULT_SETTINGS.petBubbleClick;
   });
+  void s.onKeyChange<boolean>("petAutoWalk", (v) => {
+    cache.petAutoWalk = v ?? DEFAULT_SETTINGS.petAutoWalk;
+  });
+  // 语音唤醒在主窗口设置里改、常驻对话窗响提示音/发会话时读，同样要跨窗口刷
+  void s.onKeyChange<boolean>("voiceWake", (v) => {
+    cache.voiceWake = v ?? DEFAULT_SETTINGS.voiceWake;
+  });
+  void s.onKeyChange<string>("wakeWord", (v) => {
+    cache.wakeWord = v ?? DEFAULT_SETTINGS.wakeWord;
+  });
+  void s.onKeyChange<number>("wakeSensitivity", (v) => {
+    cache.wakeSensitivity = v ?? DEFAULT_SETTINGS.wakeSensitivity;
+  });
+  void s.onKeyChange<boolean>("wakeCue", (v) => {
+    cache.wakeCue = v ?? DEFAULT_SETTINGS.wakeCue;
+  });
+  void s.onKeyChange<boolean>("petAlwaysOnTop", (v) => {
+    cache.petAlwaysOnTop = v ?? DEFAULT_SETTINGS.petAlwaysOnTop;
+  });
   // 桌宠档案在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
   void s.onKeyChange<PetProfile[]>("petProfiles", (v) => {
     cache.petProfiles = v && v.length > 0 ? v : DEFAULT_SETTINGS.petProfiles;
@@ -313,6 +363,23 @@ export async function syncBackendConfig(): Promise<void> {
   await invoke("tts_set_volume", { volume: cache.volume }).catch((err) =>
     console.warn("[settings] tts_set_volume 失败:", err),
   );
+  await syncWakeConfig().catch((err) =>
+    console.warn("[settings] wake_configure 失败:", err),
+  );
+}
+
+/**
+ * 把语音唤醒配置推给 Rust（起/停常驻监听管线）。后端按（设备 + 唤醒词）幂等
+ * 比对，多窗口 bootstrap 重复推送无害。设置页改动唤醒相关项后也调它即时生效。
+ * 抛错原样上抛（设置页要把「唤醒词不在词表」这类错误展示给用户）。
+ */
+export async function syncWakeConfig(): Promise<void> {
+  await invoke("wake_configure", {
+    enabled: cache.voiceWake,
+    keyword: cache.wakeWord,
+    device: cache.sttDevice || null,
+    sensitivity: cache.wakeSensitivity,
+  });
 }
 
 // ==================== Provider 配置操作 ====================

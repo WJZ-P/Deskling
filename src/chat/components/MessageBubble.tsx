@@ -142,6 +142,17 @@ export const MessageBubble = memo(function MessageBubble({
               msg.segments.map((seg, i) =>
                 seg.kind === "text" ? (
                   <Text key={i} data-role={msg.role}>
+                    {/* 语音输入标识：首个文本段开头缀几根静态声波条（与桌宠倾听
+                        泡同一套视觉语言），前缀文字只进模型历史不进气泡 */}
+                    {msg.voice && i === msg.segments.findIndex((s) => s.kind === "text") && (
+                      <VoiceMark aria-label="语音输入" title="语音输入">
+                        <i data-i="0" />
+                        <i data-i="1" />
+                        <i data-i="2" />
+                        <i data-i="3" />
+                        <i data-i="4" />
+                      </VoiceMark>
+                    )}
                     <StreamingText
                       text={seg.text}
                       live={live && i === lastTextIdx}
@@ -250,6 +261,38 @@ const Text = styled.p`
 
   &[data-role="user"] {
     color: ${t.colorTextOnBtnAccent};
+  }
+`;
+
+/* 语音输入标识：五根定格的像素声波柱（高低起伏像一小段波形），缀在正文开头。
+   background 取 currentColor —— 在用户深底气泡与助手浅底气泡上都跟随文字色 */
+const VoiceMark = styled.span`
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  margin-right: 7px;
+  vertical-align: -1px;
+
+  i {
+    width: 3px;
+    background: currentColor;
+    opacity: 0.85;
+  }
+  i[data-i="0"] {
+    height: 4px;
+  }
+  i[data-i="1"] {
+    height: 9px;
+  }
+  i[data-i="2"] {
+    height: 6px;
+  }
+  i[data-i="3"] {
+    height: 12px;
+  }
+  i[data-i="4"] {
+    height: 5px;
   }
 `;
 

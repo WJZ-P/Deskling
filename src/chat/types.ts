@@ -58,6 +58,11 @@ export type MessageSegment = TextSegment | ToolCallSegment | ThinkingSegment;
 export interface ChatMessage {
   id: string;
   role: ChatRole;
+  /**
+   * 语音输入标记：唤醒管线识别出的用户消息置真。UI 气泡开头渲染声波条标识；
+   * 发给模型的历史（toHistory）拼 "(语音输入) " 前缀，提示可能存在识别误差。
+   */
+  voice?: boolean;
   /** 由若干段组成（user 通常只有一个 text 段） */
   segments: MessageSegment[];
   /** 本地时间戳（ms）；渲染成 HH:MM */
