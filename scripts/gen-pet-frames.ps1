@@ -721,6 +721,97 @@ function Dream-Heart([System.Drawing.Bitmap]$bmp, [int]$x0, [int]$y0) {
   $bmp.SetPixel(($x0 + 2), ($y0 + 3), $PINK)
 }
 
+# 漂浮的文件纸片（喂文件动画用）：白纸面 + 深描边 + 右上折角 + 灰色字行，
+# (x0, y0) 左上角，完整时 8x9。$stage 咬食进度：0 完整 → 1 右下被咬掉一大口
+# （断口锯齿）→ 2 只剩上半截（下缘撕裂）→ 3 只剩 5x4 小纸角。
+# 永远画在所有表情/身体形变之后 = 纸片悬在脸前，咬合时自然挡脸。
+function Draw-File([System.Drawing.Bitmap]$bmp, [int]$x0, [int]$y0, [int]$stage = 0) {
+  if ($stage -ge 3) {
+    # 只剩小纸角：5x4 碎片，四边撕裂描边
+    Set-Px $bmp @(($x0)..($x0 + 4)) $y0 $DARK
+    Set-Px $bmp @(($x0)) ($y0 + 1) $DARK
+    $bmp.SetPixel(($x0 + 1), ($y0 + 1), $WHITE)
+    $bmp.SetPixel(($x0 + 2), ($y0 + 1), $TGREY)
+    $bmp.SetPixel(($x0 + 3), ($y0 + 1), $WHITE)
+    $bmp.SetPixel(($x0 + 4), ($y0 + 1), $DARK)
+    Set-Px $bmp @(($x0)) ($y0 + 2) $DARK
+    Set-Px $bmp @(($x0 + 1)..($x0 + 3)) ($y0 + 2) $WHITE
+    $bmp.SetPixel(($x0 + 4), ($y0 + 2), $DARK)
+    Set-Px $bmp @(($x0)..($x0 + 4)) ($y0 + 3) $DARK
+    return
+  }
+
+  # 顶部四行所有其余阶段共有：折角在右上（r0 缺两格、r1 折线补上）
+  Set-Px $bmp @(($x0)..($x0 + 5)) $y0 $DARK
+  $bmp.SetPixel($x0, ($y0 + 1), $DARK)
+  Set-Px $bmp @(($x0 + 1)..($x0 + 4)) ($y0 + 1) $WHITE
+  Set-Px $bmp @(($x0 + 5), ($x0 + 6)) ($y0 + 1) $DARK
+  $bmp.SetPixel($x0, ($y0 + 2), $DARK)
+  $bmp.SetPixel(($x0 + 1), ($y0 + 2), $WHITE)
+  Set-Px $bmp @(($x0 + 2), ($x0 + 3)) ($y0 + 2) $TGREY
+  Set-Px $bmp @(($x0 + 4)..($x0 + 6)) ($y0 + 2) $WHITE
+  $bmp.SetPixel(($x0 + 7), ($y0 + 2), $DARK)
+  $bmp.SetPixel($x0, ($y0 + 3), $DARK)
+  Set-Px $bmp @(($x0 + 1)..($x0 + 6)) ($y0 + 3) $WHITE
+  $bmp.SetPixel(($x0 + 7), ($y0 + 3), $DARK)
+
+  if ($stage -ge 2) {
+    # 只剩上半截：第四行整行撕裂断口
+    Set-Px $bmp @(($x0)..($x0 + 7)) ($y0 + 4) $DARK
+    return
+  }
+
+  # 第五行（字行）完整/缺角阶段共有
+  $bmp.SetPixel($x0, ($y0 + 4), $DARK)
+  $bmp.SetPixel(($x0 + 1), ($y0 + 4), $WHITE)
+  Set-Px $bmp @(($x0 + 2)..($x0 + 5)) ($y0 + 4) $TGREY
+  $bmp.SetPixel(($x0 + 6), ($y0 + 4), $WHITE)
+  $bmp.SetPixel(($x0 + 7), ($y0 + 4), $DARK)
+
+  if ($stage -ge 1) {
+    # 右下角被咬掉一大口：下三行只剩左半，断口沿 x0+3~x0+4 锯齿
+    $bmp.SetPixel($x0, ($y0 + 5), $DARK)
+    Set-Px $bmp @(($x0 + 1), ($x0 + 2)) ($y0 + 5) $WHITE
+    Set-Px $bmp @(($x0 + 3), ($x0 + 4)) ($y0 + 5) $DARK
+    $bmp.SetPixel($x0, ($y0 + 6), $DARK)
+    $bmp.SetPixel(($x0 + 1), ($y0 + 6), $WHITE)
+    $bmp.SetPixel(($x0 + 2), ($y0 + 6), $TGREY)
+    $bmp.SetPixel(($x0 + 3), ($y0 + 6), $DARK)
+    $bmp.SetPixel($x0, ($y0 + 7), $DARK)
+    Set-Px $bmp @(($x0 + 1), ($x0 + 2)) ($y0 + 7) $WHITE
+    $bmp.SetPixel(($x0 + 3), ($y0 + 7), $DARK)
+    Set-Px $bmp @(($x0)..($x0 + 3)) ($y0 + 8) $DARK
+    return
+  }
+
+  # 完整文件：下三行全宽
+  foreach ($r in 5, 7) {
+    $bmp.SetPixel($x0, ($y0 + $r), $DARK)
+    Set-Px $bmp @(($x0 + 1)..($x0 + 6)) ($y0 + $r) $WHITE
+    $bmp.SetPixel(($x0 + 7), ($y0 + $r), $DARK)
+  }
+  $bmp.SetPixel($x0, ($y0 + 6), $DARK)
+  $bmp.SetPixel(($x0 + 1), ($y0 + 6), $WHITE)
+  Set-Px $bmp @(($x0 + 2)..($x0 + 4)) ($y0 + 6) $TGREY
+  Set-Px $bmp @(($x0 + 5), ($x0 + 6)) ($y0 + 6) $WHITE
+  $bmp.SetPixel(($x0 + 7), ($y0 + 6), $DARK)
+  Set-Px $bmp @(($x0)..($x0 + 7)) ($y0 + 8) $DARK
+}
+
+# 咬合碎屑：嘴边溅起的两三粒纸屑（白/灰错色），$phase 1/2 位置不同做出飞散感
+function File-Crumbs([System.Drawing.Bitmap]$bmp, [int]$phase) {
+  if ($phase -eq 1) {
+    $bmp.SetPixel(22, 13, $WHITE)
+    $bmp.SetPixel(23, 15, $TGREY)
+    $bmp.SetPixel(21, 17, $WHITE)
+  } else {
+    $bmp.SetPixel(23, 12, $TGREY)
+    $bmp.SetPixel(24, 15, $WHITE)
+    $bmp.SetPixel(22, 18, $TGREY)
+    $bmp.SetPixel(8, 17, $WHITE)
+  }
+}
+
 # ---- 组帧器：每个动画一组逐帧 spec（scriptblock 收到一张底图副本随意改） ----
 function Build-Strip([string]$name, [scriptblock[]]$specs) {
   $frames = @()
@@ -1150,6 +1241,25 @@ Build-Strip "petted.png" @(
   { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail2 $f; Squash-Top $f },            # 9  落地压缩 T2
   { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail $f },                            # 10 站定 T1
   { param($f) Happy-Eyes $f; Add-Blush $f; Open-Mouth $f }                            # 11 意犹未尽 T0
+)
+
+# ==== eat：主人投喂文件（play-once → idle） ====
+# 四幕：文件飘现头顶（抬眼盯住）→ 张大嘴迎接下降 → 咔嚓两口（文件缺口逐阶段
+# 变小 + 碎屑飞散；纸片画在最后悬在脸前，咬合时自然挡脸）→ 鼓腮咕咚吞下 →
+# 满足舔嘴 + 头顶冒小心心收势。尾巴波浪贯穿保帧差。
+Build-Strip "eat.png" @(
+  { param($f) Look-Up $f; Draw-File $f 12 0 0 },                                        # 0  文件飘现头顶
+  { param($f) Look-Up $f; Flick-Ear $f; Sway-Tail $f; Draw-File $f 12 2 0 },            # 1  盯住 缓缓下降
+  { param($f) Look-Up $f; Yawn-Mouth $f; Sway-Tail2 $f; Draw-File $f 12 5 0 },          # 2  张大嘴迎接
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail3 $f; Draw-File $f 12 7 0 },       # 3  合眼咬合
+  { param($f) Close-Eyes $f; Half-Mouth $f; Sway-Tail2 $f; Draw-File $f 12 7 1; File-Crumbs $f 1 },  # 4  咔嚓第一口
+  { param($f) Close-Eyes $f; Yawn-Mouth $f; Sway-Tail $f; Draw-File $f 12 9 2; File-Crumbs $f 2 },   # 5  咔嚓第二口
+  { param($f) Half-Eyes $f; Open-Mouth $f; Sway-Tail2 $f; Draw-File $f 14 12 3 },       # 6  只剩小纸角
+  { param($f) Close-Eyes $f; Add-Blush $f; Squash-Top $f },                              # 7  鼓腮吞咽
+  { param($f) Half-Eyes $f; Squash-Top $f; Sway-Tail $f },                               # 8  咕咚咽下
+  { param($f) Happy-Eyes $f; Lick-Right $f; Sway-Tail2 $f },                             # 9  满足舔嘴
+  { param($f) Happy-Eyes $f; Add-Blush $f; Sway-Tail3 $f; Dream-Heart $f 25 0 },         # 10 冒小心心
+  { param($f) Half-Eyes $f; Sway-Tail $f }                                               # 11 回站姿接 idle
 )
 
 # ==== sleep：猫貌团趴睡 —— 呼吸起伏 + Zzz 逐帧上飘 + 尾尖/耳朵小动作（6s 一循环） ====

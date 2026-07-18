@@ -11,8 +11,6 @@ import {
   Tag,
 } from "../components/ui";
 import { PixelSection } from "../components/pixel/PixelSection";
-import { PixelCard } from "../components/pixel/PixelCard";
-import { PixelProgress } from "../components/pixel/PixelProgress";
 import { PixelButton } from "../components/pixel/PixelButton";
 import { PixelFrame } from "../components/pixel/PixelFrame";
 import { PX } from "../components/pixel/palettes";
@@ -25,20 +23,11 @@ import { getPetProfiles, getSetting } from "../settings";
  * 状态数值仍是占位，后续再接真实状态 / TTS / 互动。
  */
 
-/** 当前桌宠占位数据（名字/头像已接档案，其余后续接入真实状态源） */
+/** 当前桌宠静态档案文案（名字/头像接档案） */
 const PET = {
   species: "AI 雪豹桌宠",
-  level: 1,
-  mood: "待命中",
   bio: "一只住在桌面上的 AI agent 桌宠，随时准备陪主人喵～",
 };
-
-/** 状态占位数值（0–100，后续接真实数据） */
-const STATS = [
-  { key: "energy", label: "精力", value: 82 },
-  { key: "mood", label: "心情", value: 90 },
-  { key: "bond", label: "亲密度", value: 40 },
-];
 
 /** 动画测试项：key 与桌宠窗 ANIMS 的状态键一一对应 */
 const ANIM_TESTS = [
@@ -61,6 +50,7 @@ const ANIM_TESTS = [
   { key: "success", label: "成功" },
   { key: "error", label: "错误" },
   { key: "petted", label: "摸头" },
+  { key: "eating", label: "吃文件" },
   { key: "sleeping", label: "睡觉" },
   { key: "yawning", label: "打哈欠" },
   { key: "stretching", label: "伸懒腰" },
@@ -185,20 +175,10 @@ function Pet() {
 
           <Meta>
             <PetName>{activePet?.name ?? "Deskling"}</PetName>
-            <PetSpecies>
-              {PET.species} · Lv.{PET.level}
-            </PetSpecies>
+            <PetSpecies>{PET.species}</PetSpecies>
             <PetBio>{PET.bio}</PetBio>
           </Meta>
         </Profile>
-
-        <StatGrid>
-          {STATS.map((s) => (
-            <PixelCard key={s.key} title={s.label} trailing={<Tag>{s.value}%</Tag>} variant="low">
-              <PixelProgress value={s.value} />
-            </PixelCard>
-          ))}
-        </StatGrid>
 
         <Actions>
           <PixelButton onClick={() => void togglePet()}>
@@ -325,13 +305,6 @@ const PetBio = styled.p`
   font: ${t.textSm};
   line-height: 1.7;
   color: ${t.colorText};
-`;
-
-const StatGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: calc(${t.unit} * 3);
-  align-items: start;
 `;
 
 const Actions = styled.div`

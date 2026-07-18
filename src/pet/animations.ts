@@ -131,6 +131,9 @@ export const ANIMS = {
   error: [strip("/pet/anim/error.png", 7, { loop: false })],
   // 摸头：两轮开心蹦跶（起跳→最高→回落→落地压缩），播完自回 idle
   petted: [strip("/pet/anim/petted.png", 8, { loop: false })],
+  // 吃文件：主人投喂——文件飘现头顶 → 张嘴迎接 → 咔嚓两口（缺口渐大 + 碎屑）
+  // → 鼓腮咕咚吞下 → 舔嘴冒心收势，播完自回 idle
+  eating: [strip("/pet/anim/eat.png", 7, { loop: false })],
   // 睡觉：猫貌团趴姿——呼吸起伏 + Zzz 上飘 + 尾尖/耳朵偶发小动作（6s 一循环）
   sleeping: [strip("/pet/anim/sleep.png", 2)],
   // 打哈欠入睡：大哈欠 → 逐帧趴下团成猫貌团，播完顺势接 sleeping

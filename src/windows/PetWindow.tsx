@@ -16,6 +16,8 @@ import {
   getCurrentWindow,
   PhysicalPosition,
 } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { emitTo } from "@tauri-apps/api/event";
 import { t } from "../styles/theme";
 import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
@@ -88,6 +90,9 @@ const IDLE_ACTIONS: readonly IdleActionConfig[] = [
 /** 说话气泡兜底自消：这么久没收到新文本也没收尾（如中途暂停）就自行隐去（ms）。
     收尾（done）后的驻留时长走设置项 petBubbleSecs（设置面板可调） */
 const BUBBLE_IDLE_MS = 10_000;
+
+/** 投喂：吃文件动画播完（12 帧 / 7fps ≈ 1.7s）再把文件递给对话窗的延时 */
+const EAT_FEED_DELAY_MS = 1_900;
 /** 气泡退场动画时长（ms）：下沉缩小淡出，播完才真正卸载 */
 const BUBBLE_OUT_MS = 180;
 /** 气泡最大宽度 px（窗口 240 宽，留出两侧余量不贴边） */
@@ -287,7 +292,7 @@ function statePolicy(s: PetState): StatePolicy {
   if (s === "entering" || s === "greeting") {
     return { priority: 70, interruptible: false };
   }
-  if (s === "petted" || s === "stretching" || isWakeState(s)) {
+  if (s === "petted" || s === "eating" || s === "stretching" || isWakeState(s)) {
     return { priority: 60, interruptible: false };
   }
   if (s === "yawning" || isPeekingState(s)) {
@@ -732,6 +737,53 @@ export function PetWindow() {
   const lastYRef = useRef<number | null>(null);
   // 真 = 下一次 onMoved 来自落点校正的 setPosition：只记位置，不进走路状态
   const clampMoveRef = useRef(false);
+
+  // ---- 拖文件投喂：OS 拖着文件经过桌宠本体 → 警觉注意到；松手命中 → 吃掉 ----
+  // Tauri drag-drop 事件带窗口内物理坐标，只有落在本体命中矩形（hitRef）上才算
+  // 投喂，拖过空白区域一律无视（光标巡逻在文件拖到本体上时会自动关掉穿透，
+  // 事件才进得来）。吃完（保护区动画，thinking 会排队等收尾）再把路径递给
+  // 对话窗发起处理。躲藏/躲进躲出途中只露条尾巴，不接投喂。
+  const dragOverPetRef = useRef(false);
+  useEffect(() => {
+    const isOverPet = (pos?: { x: number; y: number }): boolean => {
+      const el = hitRef.current;
+      if (!pos || !el) return false;
+      const rect = el.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const x = pos.x / scale;
+      const y = pos.y / scale;
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    };
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      const busyHidden =
+        isHiddenState(stateRef.current) ||
+        isHidingState(stateRef.current) ||
+        isUnhideState(stateRef.current);
+      if (payload.type === "enter" || payload.type === "over") {
+        const over = !busyHidden && isOverPet(payload.position);
+        // 文件拖到身上那刻演一次「警觉」（连续 over 不重复触发）
+        if (over && !dragOverPetRef.current) requestState("idleAlert");
+        dragOverPetRef.current = over;
+      } else if (payload.type === "drop") {
+        const over = !busyHidden && isOverPet(payload.position);
+        dragOverPetRef.current = false;
+        const paths = payload.paths.filter(Boolean);
+        if (!over || paths.length === 0) return;
+        // 投喂是用户直接交互：force 抢占当前动画开吃
+        if (requestState("eating", { force: true })) {
+          window.setTimeout(() => {
+            void emitTo("chat", "pet:feed", { paths }).catch(() => {});
+          }, EAT_FEED_DELAY_MS);
+        }
+      } else {
+        dragOverPetRef.current = false;
+      }
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [requestState]);
   // 任务栏保护的程序化走位期间，onMoved 只同步坐标；run id 让用户按下时可立即取消。
   const autoMoveRef = useRef(false);
   const autoMoveRunRef = useRef(0);
