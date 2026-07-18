@@ -34,6 +34,8 @@ sherpa-onnx = "1.13.4"
 cpal = "0.18.1"
 # 唤醒词中文 → 带调拼音（转 KWS 模型的声母/韵母 token 格式）
 pinyin = "0.10"
+# 图片多模态：本地图片读出后 base64 内联进请求体 / 前端预览 data URL
+base64 = "0.22"
 
 # 命令输出编码回退：中文 Windows 控制台输出是 GBK(CP936)，UTF-8 解码失败时用它救乱码
 [target.'cfg(windows)'.dependencies]

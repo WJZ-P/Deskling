@@ -124,6 +124,120 @@ pub fn provider_tool_approve(request_id: String, tool_call_id: String, approved:
 pub struct ChatTurn {
     pub role: String,
     pub content: String,
+    /// 该轮附带的本地图片路径（仅用户轮）：构造请求体时读文件 base64 内联成
+    /// 各协议的图片内容块。缺省/空数组 = 纯文本轮，走原来的字符串 content
+    #[serde(default)]
+    pub images: Vec<String>,
+}
+
+// ---- 图片内容块 ----
+
+/// 单张图片上限：主流 provider 的内联限制在 5MB 上下（Anthropic 5MB）。
+/// 附件加入那刻前端就用 image_probe 按同一标准把关（上限/格式在 UI 与请求
+/// 之间必须一致——不能让 UI 显示「已发出」而模型侧静默丢图）
+pub(crate) const IMAGE_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// 请求级图片总预算（原始字节）：三家最紧的是 Gemini 20MB 请求体上限，
+/// base64 膨胀 1.33 倍再留文本余量 → 12MB。历史累积多图时新轮优先，
+/// 旧图降级成说明文字，绝不让整个会话因超限永远 4xx 发不出去
+const REQUEST_IMAGES_MAX_BYTES: u64 = 12 * 1024 * 1024;
+
+/// 按扩展名预筛（拖放分流/廉价把关用；真正的 MIME 以文件头嗅探为准）
+pub(crate) fn image_mime(path: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(path)
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// 文件头魔数 → MIME。扩展名会撒谎（CDN 把 WebP 存成 .jpg 很常见），而
+/// Anthropic 会校验 media_type 与数据一致性，不符整个请求 400——media_type
+/// 必须以内容为准
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// 附件加入前的把关（lib.rs image_probe 命令转发）：存在 + ≤5MB + 文件头是
+/// 支持的图片格式。与发送路径同一套标准，UI 收下的图就一定送得出去
+pub(crate) fn probe_image(path: &str) -> Result<(), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("读取失败: {e}"))?;
+    if meta.len() > IMAGE_MAX_BYTES {
+        return Err(format!(
+            "图片过大（{:.1}MB，上限 {}MB）",
+            meta.len() as f64 / 1_048_576.0,
+            IMAGE_MAX_BYTES / 1_048_576
+        ));
+    }
+    use std::io::Read as _;
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .map_err(|e| format!("读取失败: {e}"))?;
+    sniff_image_mime(&head[..n]).ok_or("不是支持的图片格式（png/jpg/webp/gif）")?;
+    Ok(())
+}
+
+/// 读一张本地图片 → (嗅探出的 mime, base64)。budget 是请求级剩余预算（读前扣）。
+/// 失败返回给用户/模型看的中文原因
+fn load_image_b64(path: &str, budget: &mut i64) -> Result<(&'static str, String), String> {
+    image_mime(path).ok_or("不支持的图片格式")?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("读取失败: {e}"))?;
+    if meta.len() > IMAGE_MAX_BYTES {
+        return Err(format!(
+            "图片过大（{:.1}MB > {}MB 上限）",
+            meta.len() as f64 / 1_048_576.0,
+            IMAGE_MAX_BYTES / 1_048_576
+        ));
+    }
+    if (meta.len() as i64) > *budget {
+        return Err("历史图片总量超出单次请求预算，已略去".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("读取失败: {e}"))?;
+    let mime = sniff_image_mime(&bytes).ok_or("无法识别的图片编码（文件头不匹配）")?;
+    *budget -= bytes.len() as i64;
+    use base64::Engine as _;
+    Ok((mime, base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// 整段历史的图片装载计划：与 history 等长的 (图片块列表, 失败说明) 序列。
+/// 预算从最新轮往旧轮分配（新图对当前提问最要紧），超出预算的旧图降级成
+/// 说明文字拼进该轮正文——模型知道有图被略去，不会凭空猜图
+fn plan_history_images(history: &[ChatTurn]) -> Vec<(Vec<(&'static str, String)>, String)> {
+    let mut budget = REQUEST_IMAGES_MAX_BYTES as i64;
+    let mut planned: Vec<(Vec<(&'static str, String)>, String)> = history
+        .iter()
+        .rev()
+        .map(|turn| {
+            let mut blocks = Vec::new();
+            let mut notes = String::new();
+            for path in &turn.images {
+                match load_image_b64(path, &mut budget) {
+                    Ok(pair) => blocks.push(pair),
+                    Err(e) => notes.push_str(&format!("\n（图片 {path} 未能附上：{e}）")),
+                }
+            }
+            (blocks, notes)
+        })
+        .collect();
+    planned.reverse();
+    planned
 }
 
 /// 流式对话事件：通过 tauri Channel 逐条推给前端。
@@ -429,6 +543,7 @@ async fn run_subagent(
     let mut messages = proto.initial_messages(&[ChatTurn {
         role: "user".into(),
         content: task,
+        images: Vec::new(),
     }]);
 
     const MAX_SUB_STEPS: usize = 10;
@@ -661,7 +776,27 @@ impl Protocol for Anthropic {
     fn initial_messages(&self, history: &[ChatTurn]) -> Vec<Value> {
         history
             .iter()
-            .map(|m| json!({ "role": m.role, "content": m.content }))
+            .zip(plan_history_images(history))
+            .map(|(m, (imgs, notes))| {
+                if imgs.is_empty() && notes.is_empty() {
+                    return json!({ "role": m.role, "content": m.content });
+                }
+                // 带图轮：content 升级成内容块数组（图片块在前、文本块殿后）
+                let mut blocks: Vec<Value> = imgs
+                    .into_iter()
+                    .map(|(mime, data)| {
+                        json!({
+                            "type": "image",
+                            "source": { "type": "base64", "media_type": mime, "data": data }
+                        })
+                    })
+                    .collect();
+                let text = format!("{}{}", m.content, notes);
+                if !text.trim().is_empty() {
+                    blocks.push(json!({ "type": "text", "text": text }));
+                }
+                json!({ "role": m.role, "content": blocks })
+            })
             .collect()
     }
     fn build_body(
@@ -850,7 +985,27 @@ impl Protocol for OpenAi {
     fn initial_messages(&self, history: &[ChatTurn]) -> Vec<Value> {
         history
             .iter()
-            .map(|m| json!({ "role": m.role, "content": m.content }))
+            .zip(plan_history_images(history))
+            .map(|(m, (imgs, notes))| {
+                if imgs.is_empty() && notes.is_empty() {
+                    return json!({ "role": m.role, "content": m.content });
+                }
+                // 带图轮：content 数组，图片走 data URL 形态的 image_url 块
+                let mut blocks: Vec<Value> = imgs
+                    .into_iter()
+                    .map(|(mime, data)| {
+                        json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{mime};base64,{data}") }
+                        })
+                    })
+                    .collect();
+                let text = format!("{}{}", m.content, notes);
+                if !text.trim().is_empty() {
+                    blocks.push(json!({ "type": "text", "text": text }));
+                }
+                json!({ "role": m.role, "content": blocks })
+            })
             .collect()
     }
     fn build_body(
@@ -1020,9 +1175,23 @@ impl Protocol for Gemini {
     fn initial_messages(&self, history: &[ChatTurn]) -> Vec<Value> {
         history
             .iter()
-            .map(|m| {
+            .zip(plan_history_images(history))
+            .map(|(m, (imgs, mut notes))| {
                 let role = if m.role == "assistant" { "model" } else { "user" };
-                json!({ "role": role, "parts": [{ "text": m.content }] })
+                // Gemini 不接受 GIF inline_data：降级成说明文字，别拖垮整个请求
+                let mut parts: Vec<Value> = Vec::new();
+                for (mime, data) in imgs {
+                    if mime == "image/gif" {
+                        notes.push_str("\n（一张 GIF 图片未能附上：当前服务商不支持 GIF）");
+                    } else {
+                        parts.push(json!({ "inline_data": { "mime_type": mime, "data": data } }));
+                    }
+                }
+                let text = format!("{}{}", m.content, notes);
+                if !text.trim().is_empty() || parts.is_empty() {
+                    parts.push(json!({ "text": text }));
+                }
+                json!({ "role": role, "parts": parts })
             })
             .collect()
     }

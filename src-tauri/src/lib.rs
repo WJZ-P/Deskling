@@ -110,6 +110,32 @@ fn chat_show(app: AppHandle) {
     }
 }
 
+/// 前端图片预览：读本地图片转 data URL（作曲区附件缩略图 / 消息气泡展示）。
+/// 上限 20MB——再大的原图别整个搬进 WebView 内存，直接报错让前端显示占位
+#[tauri::command]
+fn image_preview(path: String) -> Result<String, String> {
+    let mime = provider::image_mime(&path).ok_or("不支持的图片格式")?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("读取失败: {e}"))?;
+    const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
+    if meta.len() > PREVIEW_MAX_BYTES {
+        return Err("图片过大（>20MB），不做预览".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取失败: {e}"))?;
+    use base64::Engine as _;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// 附件把关：图片加入附件条之前校验（存在 + ≤5MB + 文件头是支持的格式）。
+/// 与发送路径同一套标准——UI 收下的图就一定送得出去，不做「显示已发、
+/// 模型没见着」的两面派
+#[tauri::command]
+fn image_probe(path: String) -> Result<(), String> {
+    provider::probe_image(&path)
+}
+
 /// 系统级查询鼠标主键是否按住。OS 拖窗的模态循环期间网页收不到指针事件，
 /// 桌宠窗的移动停表用它区分「拖到屏幕边顶住不动」和「已经松手」——按住就
 /// 保持悬空动画并推迟落点校正。两个键都查，兼容系统级左右键互换的用户
@@ -213,6 +239,8 @@ pub fn run() {
             pet_visible,
             chat_visible,
             mouse_pressed,
+            image_preview,
+            image_probe,
             set_proxy,
             provider::provider_test,
             provider::provider_chat,
