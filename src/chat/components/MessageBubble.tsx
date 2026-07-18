@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
 import { GLPixelFrame } from "../../components/pixel/GLPixelFrame";
@@ -8,6 +8,29 @@ import { ToolCallBlock } from "./ToolCallBlock";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { StreamingText } from "./StreamingText";
 import { MessageToolbar } from "./MessageToolbar";
+import { imagePreview } from "../imagePreview";
+
+/** 消息里的一张图：异步取 data URL（全局缓存），文件没了如实降级成占位条 */
+function MsgImage({ path }: { path: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void imagePreview(path).then((u) => {
+      if (!alive) return;
+      if (u) setUrl(u);
+      else setFailed(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  if (failed) {
+    return <ImgFallback title={path}>图片不可用（原文件被移动或删除）</ImgFallback>;
+  }
+  if (!url) return <ImgFallback>图片加载中…</ImgFallback>;
+  return <BubbleImg src={url} alt="" title={path} draggable={false} />;
+}
 
 /**
  * 一条消息气泡。
@@ -158,6 +181,8 @@ export const MessageBubble = memo(function MessageBubble({
                       live={live && i === lastTextIdx}
                     />
                   </Text>
+                ) : seg.kind === "image" ? (
+                  <MsgImage key={i} path={seg.path} />
                 ) : seg.kind === "tool" ? (
                   <ToolCallBlock key={i} seg={seg} onApprove={onApproveTool} />
                 ) : (
@@ -300,6 +325,25 @@ const Clock = styled.span`
   font: ${t.textXs};
   color: ${t.colorTextMuted};
   padding: 0 2px;
+`;
+
+/* 消息内嵌图：限宽高等比缩放，像素硬边框 + 硬投影与气泡同语言 */
+const BubbleImg = styled.img`
+  display: block;
+  max-width: 260px;
+  max-height: 260px;
+  border: 2px solid ${t.colorBorderStrong};
+  box-shadow: 0 2px 0 ${t.colorShadowPixel};
+  -webkit-user-drag: none;
+`;
+
+/* 图片占位（加载中 / 文件失踪）：一条低调的凹槽小牌 */
+const ImgFallback = styled.div`
+  padding: 8px 12px;
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+  background: ${t.colorWell};
+  border: 2px solid ${t.colorBorder};
 `;
 
 /* ---- 内嵌编辑态：气泡内直接改文本（气泡框/低噪原样保留）---- */

@@ -52,7 +52,17 @@ export interface ThinkingSegment {
   text: string;
 }
 
-export type MessageSegment = TextSegment | ToolCallSegment | ThinkingSegment;
+/**
+ * 一张图片：只存本地文件绝对路径（不把 base64 塞进会话存档——历史会被反复
+ * 全量落盘）。渲染经 image_preview 命令转 data URL；发请求时 Rust 读文件
+ * 内联进协议内容块。原文件被移动/删除则预览与发送都会如实降级提示。
+ */
+export interface ImageSegment {
+  kind: "image";
+  path: string;
+}
+
+export type MessageSegment = TextSegment | ToolCallSegment | ThinkingSegment | ImageSegment;
 
 /** 一条消息 */
 export interface ChatMessage {

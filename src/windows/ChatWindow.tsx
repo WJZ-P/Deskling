@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { styled } from "@linaria/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../styles/theme";
@@ -13,6 +14,7 @@ import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
+import { isImagePath } from "../chat/imagePreview";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
 import { SpeechSplitter } from "../chat/speech";
 import {
@@ -345,6 +347,35 @@ export function ChatWindow() {
   // 不依赖 activeId——用户中途切到别的会话，审批与收尾仍要回填到发起时那条。
   const liveRef = useRef<{ convId: string; replyId: string } | null>(null);
 
+  // 待发送图片附件（本地路径）：拖进对话窗 / 投喂桌宠的图都落这，随下一条
+  // 消息（键盘 / 语音唤醒直发都算）一并发出并清空。ref 与 state 同步更新——
+  // 语音直发发生在事件回调里，读 state 会拿到陈旧闭包
+  const pendingImagesRef = useRef<string[]>([]);
+  const [pendingImages, setPendingImagesState] = useState<string[]>([]);
+  const updatePendingImages = useCallback((updater: (prev: string[]) => string[]) => {
+    pendingImagesRef.current = updater(pendingImagesRef.current);
+    setPendingImagesState(pendingImagesRef.current);
+  }, []);
+  const addPendingImages = useCallback(
+    (paths: string[]) => {
+      updatePendingImages((prev) => [
+        ...prev,
+        ...paths.filter((p) => !prev.includes(p)),
+      ]);
+    },
+    [updatePendingImages],
+  );
+  /** 取走全部待发附件（发出的那刻调用：返回并清空） */
+  const takePendingImages = useCallback((): string[] => {
+    const taken = pendingImagesRef.current;
+    if (taken.length > 0) updatePendingImages(() => []);
+    return taken;
+  }, [updatePendingImages]);
+  const removePendingImage = useCallback(
+    (path: string) => updatePendingImages((prev) => prev.filter((p) => p !== path)),
+    [updatePendingImages],
+  );
+
   // 防抖落盘：会话任何变动后 ~500ms 写一次。流式 delta 高频触发，
   // 防抖把整段增量合并成一次写盘，最后一个 delta 落定后统一持久化。
   const persistTimer = useRef<number | undefined>(undefined);
@@ -668,6 +699,11 @@ export function ChatWindow() {
     // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
     // 取消触发的 Done 则靠它收拢没答完的审批段，不留孤儿转圈）。
     const finish = () => {
+      // 轮次守卫：本地取消/编辑重发/删会话的路径已各自收拾过现场并清掉（或
+      // 换掉）liveRef，此后 Rust 迟到的 Done 再触发 finish 必须完全空转——
+      // 否则会清掉新一轮的 liveRef/sending、误发 wake_chat_busy(false) 和
+      // reply 状态事件（取消的轮/秒错的轮不该记一次「回复收尾」）
+      if (liveRef.current?.replyId !== replyId) return;
       setTypingConv(null);
       setSending(false);
       setStreamingId(null);
@@ -821,45 +857,21 @@ export function ChatWindow() {
     streamRef.current = handle;
   }, [petFeedback, petPlay, petSay, speakSentences]);
 
-  // 向指定会话落一条用户消息并发起流式回复（键盘发送与语音唤醒共用）。
-  // 先落用户消息，更新会话标题/预览；同时算出「含这条」的历史给后端。
-  // 注意用入参 convId 锁定会话，避免流式回填串到别的会话上。
-  const sendMessage = useCallback(
-    (convId: string, text: string) => {
-      const userMsg: ChatMessage = {
-        id: nextId(),
-        role: "user",
-        ts: Date.now(),
-        segments: [{ kind: "text", text }],
-      };
-
-      let history: ChatTurn[] = [];
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id !== convId) return c;
-          const messages = [...c.messages, userMsg];
-          history = toHistory(messages);
-          return {
-            ...c,
-            title: c.messages.length === 0 ? text.slice(0, 18) : c.title,
-            preview: text,
-            updatedAt: userMsg.ts,
-            messages,
-          };
-        }),
-      );
-
-      startStream(convId, history);
-    },
-    [startStream],
+  // 组一条用户消息：待发图片附件在前、文本殿后（纯图无文字则只有图片段）
+  const buildUserMsg = useCallback(
+    (text: string, images: string[], voice: boolean): ChatMessage => ({
+      id: nextId(),
+      role: "user",
+      ts: Date.now(),
+      ...(voice ? { voice: true } : {}),
+      segments: [
+        ...images.map((p): MessageSegment => ({ kind: "image", path: p })),
+        ...(text ? [{ kind: "text", text } as MessageSegment] : []),
+      ],
+    }),
+    [],
   );
 
-  const handleSend = useCallback(
-    (text: string) => {
-      if (activeId) sendMessage(activeId, text);
-    },
-    [activeId, sendMessage],
-  );
 
   // ---- 语音唤醒桥：Rust wake 管线的四个事件 ----
   // detected = 命中唤醒词：响提示音 + 桌宠竖耳倾听；partial = 倾听中的识别草稿：
@@ -873,6 +885,111 @@ export function ChatWindow() {
   conversationsRef.current = conversations;
   const startStreamRef = useRef(startStream);
   startStreamRef.current = startStream;
+
+  // 免开窗直发一条用户消息（语音唤醒 / 投喂文件共用）：从已提交快照
+  // （conversationsRef）显式拼历史再发起流——不走 sendMessage 靠 setState
+  // updater 副作用取历史的模式（该模式仅在 React 急切求值时成立，事件回调里
+  // 先 set 过状态就会拿到空历史）。没有会话就新建；对话窗没开则唤出聚焦。
+  const directSend = useCallback(
+    (text: string, voice: boolean) => {
+      // 在途守卫：正生成时不叠发（键盘路径 UI 已挡，这里兜语音/投喂与
+      // stale-props 竞态——不 cancel 旧流硬换新流，事件会串轮）
+      if (liveRef.current) return;
+      // 待发图片附件一并带走：主人拖图给雪豹后再用语音说「看看这张图」，
+      // 图和话在同一轮里到达模型——这就是投喂 → 语音的联动线
+      const images = takePendingImages();
+      // 空消息守卫：文本空且附件恰被并发路径取走时，别落一条零段消息
+      if (!text && images.length === 0) return;
+      const userMsg = buildUserMsg(text, images, voice);
+      const label = text || `[图片 ×${images.length}]`;
+      const activeConv = conversationsRef.current.find(
+        (c) => c.id === activeIdRef.current,
+      );
+      if (activeConv) {
+        const history = toHistory([...activeConv.messages, userMsg]);
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id !== activeConv.id
+              ? c
+              : {
+                  ...c,
+                  title: c.messages.length === 0 ? label.slice(0, 18) : c.title,
+                  preview: label,
+                  updatedAt: userMsg.ts,
+                  messages: [...c.messages, userMsg],
+                },
+          ),
+        );
+        startStreamRef.current(activeConv.id, history);
+      } else {
+        const conv: Conversation = {
+          id: nextId(),
+          title: label.slice(0, 18),
+          preview: label,
+          updatedAt: userMsg.ts,
+          messages: [userMsg],
+        };
+        setConversations((prev) => [conv, ...prev]);
+        setActiveId(conv.id);
+        startStreamRef.current(conv.id, toHistory(conv.messages));
+      }
+      // 对话窗没开着就唤出来并聚焦（已开着则不打扰）
+      void invoke<boolean>("chat_visible")
+        .then((visible) => {
+          if (!visible) return invoke("chat_show");
+        })
+        .catch(() => {});
+    },
+    [buildUserMsg, takePendingImages],
+  );
+
+  // 键盘发送也走 directSend：老路径靠「setConversations updater 副作用取
+  // history」，仅在 React 急切求值时成立——消费附件的 takePendingImages 会先
+  // setState 打破急切求值，带附件的发送会拿着空历史请求后端
+  const handleSend = useCallback((text: string) => directSend(text, false), [directSend]);
+
+  // 附件收纳（把关版）：每张图先经 Rust image_probe 校验（≤5MB + 文件头是
+  // 支持格式，与发送路径同一标准）——收下的图就一定送得出去；被拒的经桌宠
+  // 气泡告知，不做「UI 显示已发、模型没见着」的两面派。返回实际收下张数
+  const attachImages = useCallback(
+    async (paths: string[]): Promise<number> => {
+      const accepted: string[] = [];
+      const rejected: string[] = [];
+      await Promise.all(
+        paths.map(async (p) => {
+          try {
+            await invoke("image_probe", { path: p });
+            accepted.push(p);
+          } catch (e) {
+            rejected.push(`${p.split(/[\\/]/).pop() ?? p}（${String(e)}）`);
+          }
+        }),
+      );
+      if (accepted.length > 0) addPendingImages(accepted);
+      if (rejected.length > 0) {
+        petSay(
+          `有图片没收下喵：${rejected[0]}${rejected.length > 1 ? ` 等 ${rejected.length} 张` : ""}`,
+          "say",
+          true,
+        );
+      }
+      return accepted.length;
+    },
+    [addPendingImages, petSay],
+  );
+
+  // ---- 拖图进对话窗：直接落进作曲区附件条（非图片文件忽略，投喂走桌宠） ----
+  useEffect(() => {
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const images = event.payload.paths.filter(isImagePath);
+      if (images.length > 0) void attachImages(images);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [attachImages]);
+
   // 唤醒起止提示音：挂载即预加载、常驻复用——KWS 判定本就滞后发音几百 ms，
   // 命中那刻再现载 wav 会雪上加霜；重播只重置进度，即触即响
   const wakeStartRef = useRef<HTMLAudioElement | null>(null);
@@ -917,59 +1034,52 @@ export function ChatWindow() {
           }
           return;
         }
-        // 结束音「收到」：话已全部接收并识别完成，马上开始生成
-        playCue(wakeEndRef.current);
-        // 对话窗没开着就唤出来并聚焦（下面的分支已把本会话置为当前，
-        // 展示的正是这轮语音对话；已开着则不打扰）
-        void invoke<boolean>("chat_visible")
-          .then((visible) => {
-            if (!visible) return invoke("chat_show");
-          })
-          .catch(() => {});
-        // 不走 sendMessage：它靠 setConversations updater 的副作用取 history，只在
-        // 该 dispatch 被 React 急切求值（本 tick 该组件首个 setState）时才成立；这里
-        // 新建会话分支要先 set 两个状态，updater 会推迟到 render，history 将是空的。
-        // 改为从已提交快照（conversationsRef）显式拼历史——状态更新与请求参数解耦。
+        // 结束音「收到」：话已全部接收并识别完成，马上开始生成。
         // voice 标记：UI 气泡开头渲染声波条标识；发给模型的历史由 toHistory 统一
         // 拼 "(语音输入) " 前缀（识别可能有误差），正文本身保持原文
-        const userMsg: ChatMessage = {
-          id: nextId(),
-          role: "user",
-          ts: Date.now(),
-          voice: true,
-          segments: [{ kind: "text", text }],
+        playCue(wakeEndRef.current);
+        directSend(text, true);
+      }),
+      // 投喂：桌宠吃完把路径递过来，图片和普通文件分流——
+      //   图片 → 进作曲区附件条不直发（主人接着打字/喊话，图随那条消息一起走，
+      //          这就是「拖图给雪豹 + 语音问它」的联动）；
+      //   其他 → 组一条带路径的用户消息直发，AI 自己用 read_file 等拆开看
+      //          （若附件条里有刚喂的图，直发会顺路一起带上）。
+      listen<{ paths?: string[] }>("pet:feed", (e) => {
+        const paths = (e.payload?.paths ?? []).filter(Boolean);
+        if (paths.length === 0) return;
+        const images = paths.filter(isImagePath);
+        const others = paths.filter((p) => !isImagePath(p));
+        const feedOthers = () => {
+          if (others.length === 0) return;
+          if (liveRef.current) {
+            petSay("嘴里还忙着呢，等会儿再喂我喵～", "say", true);
+            return;
+          }
+          const text =
+            others.length > 1
+              ? `(投喂文件) 主人拖给你 ${others.length} 个文件：\n${others.join("\n")}`
+              : `(投喂文件) 主人拖给你一个文件：${others[0]}`;
+          directSend(text, false);
         };
-        const activeConv = conversationsRef.current.find(
-          (c) => c.id === activeIdRef.current,
-        );
-        if (activeConv) {
-          const history = toHistory([...activeConv.messages, userMsg]);
-          setConversations((prev) =>
-            prev.map((c) =>
-              c.id !== activeConv.id
-                ? c
-                : {
-                    ...c,
-                    title: c.messages.length === 0 ? text.slice(0, 18) : c.title,
-                    preview: text,
-                    updatedAt: userMsg.ts,
-                    messages: [...c.messages, userMsg],
-                  },
-            ),
-          );
-          startStreamRef.current(activeConv.id, history);
+        if (images.length > 0) {
+          // 图片先过把关收进附件条，收下了才唤出对话窗（联动入口要让主人看见）；
+          // 同批的普通文件等图片收纳完再发——directSend 会把刚收的图一并带上
+          void attachImages(images).then((added) => {
+            if (added > 0) {
+              void invoke<boolean>("chat_visible")
+                .then((visible) => {
+                  if (!visible) return invoke("chat_show");
+                })
+                .catch(() => {});
+              if (others.length === 0 && !liveRef.current) {
+                petSay("图片收好啦，想问什么直接说喵～", "say", true);
+              }
+            }
+            feedOthers();
+          });
         } else {
-          // 一个会话都没有：像点「新建」一样起一个，语音命令作为它的第一条消息
-          const conv: Conversation = {
-            id: nextId(),
-            title: text.slice(0, 18),
-            preview: text,
-            updatedAt: userMsg.ts,
-            messages: [userMsg],
-          };
-          setConversations((prev) => [conv, ...prev]);
-          setActiveId(conv.id);
-          startStreamRef.current(conv.id, toHistory(conv.messages));
+          feedOthers();
         }
       }),
       listen<{ reason?: string }>("wake:aborted", (e) => {
@@ -997,7 +1107,20 @@ export function ChatWindow() {
       wakeStartRef.current = null;
       wakeEndRef.current = null;
     };
-  }, [petPlay, petSay, petFeedback]);
+  }, [petPlay, petSay, petFeedback, directSend, addPendingImages]);
+
+  // 拖图进对话窗：OS 拖拽落下的图片直接进附件条（随下一条消息发出）；
+  // 非图片文件想喂给 AI 请拖给桌宠（走投喂链路），这里不收
+  useEffect(() => {
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const images = event.payload.paths.filter(isImagePath);
+      if (images.length > 0) addPendingImages(images);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, [addPendingImages]);
 
   // 编辑单条消息 = 从这个节点「分叉重来」：替换文本、丢弃它之后的全部消息；
   // 编辑的是用户消息时再以截断后的历史重新发起请求（重新进 loading，AI 重答）。
@@ -1157,6 +1280,8 @@ export function ChatWindow() {
                   onVoiceActiveChange={handleVoiceActiveChange}
                   onStop={handleStop}
                   sending={sending}
+                  attachments={pendingImages}
+                  onRemoveAttachment={removePendingImage}
                 />
               </>
             ) : (

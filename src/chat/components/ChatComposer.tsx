@@ -15,6 +15,7 @@ import { PRIORITY_PAL } from "../../components/pixel/palettes";
 import { PixelTip } from "../../components/pixel/PixelTip";
 import { BulbIcon, MicIcon } from "../../components/pixel/icons";
 import { getActiveProfile, getSetting, setSetting } from "../../settings";
+import { imagePreview } from "../imagePreview";
 
 /**
  * 底部输入区：QQ 式一体输入框——整块像素面里从上到下依次是
@@ -60,6 +61,46 @@ interface ChatComposerProps {
   onStop?: () => void;
   /** 是否有回复正在生成中（决定按钮是「发送」还是「暂停」） */
   sending?: boolean;
+  /**
+   * 待发送的图片附件（本地路径）：状态在 ChatWindow（拖进对话窗 / 投喂桌宠都
+   * 会加进来，语音唤醒直发也要带上），本组件只展示缩略图条 + 移除。
+   * 有附件时允许纯图发送（文本可空）。
+   */
+  attachments?: string[];
+  onRemoveAttachment?: (path: string) => void;
+}
+
+/** 附件缩略图：异步取 data URL（imagePreview 全局缓存），失败显示占位 */
+function AttachThumb({ path, onRemove }: { path: string; onRemove?: (p: string) => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void imagePreview(path).then((u) => {
+      if (!alive) return;
+      if (u) setUrl(u);
+      else setFailed(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return (
+    <Thumb title={path}>
+      {url ? <ThumbImg src={url} alt="" draggable={false} /> : <ThumbHolder>{failed ? "✕" : "…"}</ThumbHolder>}
+      <ThumbRemove
+        type="button"
+        aria-label="移除图片"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove?.(path);
+        }}
+      >
+        ✕
+      </ThumbRemove>
+    </Thumb>
+  );
 }
 
 /**
@@ -78,7 +119,14 @@ const TAP_MS = 300;
 const VOICE_PARTIAL_FIRST_MS = 450;
 const VOICE_PARTIAL_INTERVAL_MS = 650;
 
-export function ChatComposer({ onSend, onVoiceActiveChange, onStop, sending }: ChatComposerProps) {
+export function ChatComposer({
+  onSend,
+  onVoiceActiveChange,
+  onStop,
+  sending,
+  attachments = [],
+  onRemoveAttachment,
+}: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -231,7 +279,8 @@ export function ChatComposer({ onSend, onVoiceActiveChange, onStop, sending }: C
     // 生成中不发送（此时按钮是暂停）；输入框仍可继续打字预输入
     if (sending || voice === "rec" || voice === "busy") return;
     const text = composedValue.trim();
-    if (!text) return;
+    // 有图片附件时允许纯图发送（附件由 ChatWindow 在发出时一并消费）
+    if (!text && attachments.length === 0) return;
     onSend(text);
     setValue("");
     setVoiceDraft("");
@@ -280,6 +329,13 @@ export function ChatComposer({ onSend, onVoiceActiveChange, onStop, sending }: C
             padding: "7px 10px 8px 12px",
           }}
         >
+          {attachments.length > 0 && (
+            <AttachRow>
+              {attachments.map((p) => (
+                <AttachThumb key={p} path={p} onRemove={onRemoveAttachment} />
+              ))}
+            </AttachRow>
+          )}
           {canThink && (
             <ToolRow>
               <PixelTip tip={thinking ? "深度思考 · 已开启" : "深度思考 · 已关闭"}>
@@ -359,7 +415,11 @@ export function ChatComposer({ onSend, onVoiceActiveChange, onStop, sending }: C
             ) : (
               <PixelButton
                 variant="primary"
-                disabled={composedValue.trim().length === 0 || voice === "rec" || voice === "busy"}
+                disabled={
+                  (composedValue.trim().length === 0 && attachments.length === 0) ||
+                  voice === "rec" ||
+                  voice === "busy"
+                }
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={submit}
               >
@@ -391,6 +451,64 @@ const ToolRow = styled.div`
   align-items: center;
   gap: 6px;
   margin-bottom: 7px;
+`;
+
+/* 附件条：待发送图片缩略图一排（拖进对话窗 / 投喂桌宠的图都落在这） */
+const AttachRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+`;
+
+/* 单张缩略图：像素硬边小方框 + 右上角移除钮 */
+const Thumb = styled.div`
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  border: 2px solid ${t.colorBorderStrong};
+  box-shadow: 0 2px 0 ${t.colorShadowPixel};
+  background: ${t.colorWell};
+`;
+
+const ThumbImg = styled.img`
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  image-rendering: auto;
+  -webkit-user-drag: none;
+`;
+
+const ThumbHolder = styled.div`
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+`;
+
+const ThumbRemove = styled.button`
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid ${t.colorBorderStrong};
+  background: ${t.colorSurface};
+  color: ${t.colorText};
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 0 ${t.colorShadowPixel};
+
+  &:hover {
+    background: ${t.colorControl};
+  }
 `;
 
 /* 发送行：输入面内部底栏——按住说话 + 发送/暂停 一起靠右下角 */

@@ -1,6 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type { ProviderProfile } from "../settings";
-import type { ChatMessage } from "./types";
+import type { ChatMessage, MessageSegment } from "./types";
 
 /**
  * 前端 → Rust 的流式对话桥。
@@ -37,6 +37,8 @@ type ChatEvent =
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
+  /** 本轮附带的本地图片路径（仅用户轮）：Rust 构造请求体时读文件内联成图片块 */
+  images?: string[];
 }
 
 /** 流式回调集合 */
@@ -93,12 +95,20 @@ export function toHistory(messages: ChatMessage[]): ChatTurn[] {
   const out: ChatTurn[] = [];
   for (const m of messages) {
     const content = messageToText(m);
-    if (!content) continue;
+    // 图片段单独收进 images（仅用户轮会有）；纯图无文字的消息不能被空文本滤掉
+    const images = m.segments
+      .filter((s): s is Extract<MessageSegment, { kind: "image" }> => s.kind === "image")
+      .map((s) => s.path);
+    if (!content && images.length === 0) continue;
     // 语音输入的用户消息：只在发给模型的正文上拼标记（离线识别可能有同音/
     // 断句误差，提示模型别太抠字面）；UI 气泡不显示前缀，用声波条标识
     const tagged =
       m.voice && m.role === "user" ? `(语音输入) ${content}` : content;
-    out.push({ role: m.role, content: tagged });
+    out.push({
+      role: m.role,
+      content: tagged,
+      ...(images.length > 0 ? { images } : {}),
+    });
   }
   return out;
 }
