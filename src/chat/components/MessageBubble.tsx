@@ -9,11 +9,13 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { StreamingText } from "./StreamingText";
 import { MessageToolbar } from "./MessageToolbar";
 import { imagePreview } from "../imagePreview";
+import { ImagePreviewModal } from "./ImagePreviewModal";
 
 /** 消息里的一张图：异步取 data URL（全局缓存），文件没了如实降级成占位条 */
 function MsgImage({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   useEffect(() => {
     let alive = true;
     void imagePreview(path).then((u) => {
@@ -29,7 +31,22 @@ function MsgImage({ path }: { path: string }) {
     return <ImgFallback title={path}>图片不可用（原文件被移动或删除）</ImgFallback>;
   }
   if (!url) return <ImgFallback>图片加载中…</ImgFallback>;
-  return <BubbleImg src={url} alt="" title={path} draggable={false} />;
+  return (
+    <>
+      <BubbleImageButton
+        type="button"
+        title="点击查看大图"
+        aria-label="放大预览图片"
+        onClick={(e) => {
+          e.stopPropagation();
+          setPreviewOpen(true);
+        }}
+      >
+        <BubbleImg src={url} alt="" draggable={false} />
+      </BubbleImageButton>
+      <ImagePreviewModal open={previewOpen} src={url} path={path} onClose={() => setPreviewOpen(false)} />
+    </>
+  );
 }
 
 /**
@@ -327,7 +344,23 @@ const Clock = styled.span`
   padding: 0 2px;
 `;
 
-/* 消息内嵌图：限宽高等比缩放，像素硬边框 + 硬投影与气泡同语言 */
+/* 消息内嵌图：整个缩略图都是放大预览按钮，不额外叠图标 */
+const BubbleImageButton = styled.button`
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+
+  &:focus-visible {
+    outline: 2px solid ${t.colorAccent};
+    outline-offset: 3px;
+  }
+`;
+
+/* 限宽高等比缩放，像素硬边框 + 硬投影与气泡同语言 */
 const BubbleImg = styled.img`
   display: block;
   max-width: 260px;

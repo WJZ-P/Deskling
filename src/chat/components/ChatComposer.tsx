@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -16,6 +17,7 @@ import { PixelTip } from "../../components/pixel/PixelTip";
 import { BulbIcon, MicIcon } from "../../components/pixel/icons";
 import { getActiveProfile, getSetting, setSetting } from "../../settings";
 import { imagePreview } from "../imagePreview";
+import { ImagePreviewModal } from "./ImagePreviewModal";
 
 /**
  * 底部输入区：QQ 式一体输入框——整块像素面里从上到下依次是
@@ -61,17 +63,29 @@ interface ChatComposerProps {
   onStop?: () => void;
   /** 是否有回复正在生成中（决定按钮是「发送」还是「暂停」） */
   sending?: boolean;
+  /** 剪贴板图片正在写入托管目录：期间锁住发送，避免文字先发、图片落到下一轮。 */
+  attaching?: boolean;
   /**
    * 待发送的图片附件（本地路径）：状态在 ChatWindow（拖进对话窗 / 投喂桌宠都
-   * 会加进来，语音唤醒直发也要带上），本组件只展示缩略图条 + 移除。
+   * 会加进来，语音唤醒直发也要带上），本组件只展示可点击预览的缩略图条。
    * 有附件时允许纯图发送（文本可空）。
    */
   attachments?: string[];
   onRemoveAttachment?: (path: string) => void;
+  /** 输入框收到剪贴板位图时交给 ChatWindow 持久化并加入附件条。 */
+  onPasteImages?: (files: File[]) => void;
 }
 
-/** 附件缩略图：异步取 data URL（imagePreview 全局缓存），失败显示占位 */
-function AttachThumb({ path, onRemove }: { path: string; onRemove?: (p: string) => void }) {
+/** 附件缩略图：单击预览；hover / 键盘聚焦时才露出右上角删除钮。 */
+function AttachThumb({
+  path,
+  onPreview,
+  onRemove,
+}: {
+  path: string;
+  onPreview: (path: string, url: string) => void;
+  onRemove?: (path: string) => void;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -86,20 +100,36 @@ function AttachThumb({ path, onRemove }: { path: string; onRemove?: (p: string) 
     };
   }, [path]);
   return (
-    <Thumb title={path}>
-      {url ? <ThumbImg src={url} alt="" draggable={false} /> : <ThumbHolder>{failed ? "✕" : "…"}</ThumbHolder>}
-      <ThumbRemove
+    <ThumbWrap>
+      <Thumb
         type="button"
-        aria-label="移除图片"
+        aria-label="放大预览图片"
+        title={url ? "点击查看大图" : path}
+        disabled={!url}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           e.stopPropagation();
-          onRemove?.(path);
+          if (url) onPreview(path, url);
         }}
       >
-        ✕
-      </ThumbRemove>
-    </Thumb>
+        {url ? <ThumbImg src={url} alt="" draggable={false} /> : <ThumbHolder>{failed ? "!" : "…"}</ThumbHolder>}
+      </Thumb>
+      {onRemove && (
+        <ThumbRemove
+          data-remove
+          type="button"
+          aria-label="移除图片"
+          title="移除图片"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(path);
+          }}
+        >
+          ✕
+        </ThumbRemove>
+      )}
+    </ThumbWrap>
   );
 }
 
@@ -124,15 +154,23 @@ export function ChatComposer({
   onVoiceActiveChange,
   onStop,
   sending,
+  attaching = false,
   attachments = [],
   onRemoveAttachment,
+  onPasteImages,
 }: ChatComposerProps) {
   const [value, setValue] = useState("");
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [preview, setPreview] = useState<{ path: string; url: string } | null>(null);
   // 「深度思考」开关：持久化在 settings（发送那一刻由 ChatWindow 读取），这里持有 UI 镜像
   const [thinking, setThinking] = useState<boolean>(() => getSetting("chatThinking"));
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // 附件被发送或由 hover 删除钮移除时，若正预览它就同步收起弹窗。
+  useEffect(() => {
+    if (preview && !attachments.includes(preview.path)) setPreview(null);
+  }, [attachments, preview]);
 
   // ---- 语音输入：点按 = 切换式开/关，长按 = 说完松手即停 ----
   const [voice, setVoice] = useState<VoiceState>("idle");
@@ -277,7 +315,7 @@ export function ChatComposer({
 
   const submit = () => {
     // 生成中不发送（此时按钮是暂停）；输入框仍可继续打字预输入
-    if (sending || voice === "rec" || voice === "busy") return;
+    if (sending || attaching || voice === "rec" || voice === "busy") return;
     const text = composedValue.trim();
     // 有图片附件时允许纯图发送（附件由 ChatWindow 在发出时一并消费）
     if (!text && attachments.length === 0) return;
@@ -287,11 +325,28 @@ export function ChatComposer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // 生成中：Enter 不发送，走默认换行（预输入下一句也能自由分行）
+    // 生成中：Enter 不发送，走默认换行（预输入下一句也能自由分行）。
+    // 图片导入中则吞掉 Enter，等附件落稳后再允许发送，避免图文分到两轮。
     if (e.key === "Enter" && !e.shiftKey && !sending) {
       e.preventDefault();
       submit();
     }
+  };
+
+  const onPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onPasteImages) return;
+    // Windows 截图/浏览器「复制图片」通常出现在 items；少数 WebView 只填 files，
+    // 因此后者作为回退。没有图片时不 preventDefault，普通文字粘贴完全照旧。
+    let images = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (images.length === 0) {
+      images = Array.from(e.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    }
+    if (images.length === 0) return;
+    e.preventDefault();
+    onPasteImages(images);
   };
 
   // 输入框始终可用（生成中也能预输入下一句），故 hover 态只看聚焦/悬停
@@ -318,6 +373,7 @@ export function ChatComposer({
           radius={FIELD_RADIUS}
           noise={FIELD_NOISE}
           tune={FIELD_TUNE}
+          liveResize
           rootStyle={{ display: "flex", width: "100%" }}
           contentStyle={{
             display: "flex",
@@ -332,7 +388,12 @@ export function ChatComposer({
           {attachments.length > 0 && (
             <AttachRow>
               {attachments.map((p) => (
-                <AttachThumb key={p} path={p} onRemove={onRemoveAttachment} />
+                <AttachThumb
+                  key={p}
+                  path={p}
+                  onPreview={(path, url) => setPreview({ path, url })}
+                  onRemove={onRemoveAttachment}
+                />
               ))}
             </AttachRow>
           )}
@@ -362,8 +423,9 @@ export function ChatComposer({
             ref={taRef}
             value={composedValue}
             rows={1}
-            placeholder="和 Deskling 说点什么喵～（Enter 发送 · Shift+Enter 换行）"
+            placeholder="和 Deskling 说点什么喵～（Enter 发送 · Ctrl+V 贴图）"
             onChange={(e) => setValue(e.target.value)}
+            onPaste={onPaste}
             readOnly={voice === "rec" || voice === "busy"}
             onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)}
@@ -379,6 +441,7 @@ export function ChatComposer({
               )}
               {voice === "busy" && <VoiceHint>识别中…</VoiceHint>}
               {voice === "err" && <VoiceHint data-err>{voiceErr}</VoiceHint>}
+              {attaching && voice === "idle" && <VoiceHint>图片处理中…</VoiceHint>}
               {/* 语音按钮：与发送同规格（图标 24px + 上下 8px = 40px 齐高），
                   pointer 事件驱动；mousedown preventDefault 防抢 textarea 焦点 */}
               <PixelTip
@@ -417,18 +480,27 @@ export function ChatComposer({
                 variant="primary"
                 disabled={
                   (composedValue.trim().length === 0 && attachments.length === 0) ||
+                  attaching ||
                   voice === "rec" ||
                   voice === "busy"
                 }
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={submit}
               >
-                发送
+                {attaching ? "处理中…" : "发送"}
               </PixelButton>
             )}
           </SendRow>
         </PixelSurface>
       </Field>
+      {preview && (
+        <ImagePreviewModal
+          open
+          src={preview.url}
+          path={preview.path}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </Root>
   );
 }
@@ -461,15 +533,48 @@ const AttachRow = styled.div`
   margin-bottom: 8px;
 `;
 
-/* 单张缩略图：像素硬边小方框 + 右上角移除钮 */
-const Thumb = styled.div`
+/* 缩略图外壳承担 hover/focus-within，确保指针移到删除钮上时它不会消失。 */
+const ThumbWrap = styled.div`
   position: relative;
   width: 52px;
   height: 52px;
   flex: 0 0 auto;
+
+  &:hover > [data-remove],
+  &:focus-within > [data-remove] {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+`;
+
+/* 单张缩略图：单击放大；删除入口由 ThumbWrap 在 hover 时揭示。 */
+const Thumb = styled.button`
+  position: relative;
+  width: 52px;
+  height: 52px;
+  box-sizing: border-box;
+  padding: 0;
   border: 2px solid ${t.colorBorderStrong};
   box-shadow: 0 2px 0 ${t.colorShadowPixel};
   background: ${t.colorWell};
+  color: inherit;
+  cursor: zoom-in;
+  overflow: hidden;
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    border-color: ${t.colorAccent};
+  }
+
+  &:focus-visible {
+    outline: 2px solid ${t.colorAccent};
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
 `;
 
 const ThumbImg = styled.img`
@@ -493,8 +598,9 @@ const ThumbHolder = styled.div`
 
 const ThumbRemove = styled.button`
   position: absolute;
-  top: -8px;
-  right: -8px;
+  z-index: 2;
+  top: 2px;
+  right: 2px;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -505,8 +611,12 @@ const ThumbRemove = styled.button`
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 2px 0 ${t.colorShadowPixel};
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 
-  &:hover {
+  &:hover,
+  &:focus-visible {
     background: ${t.colorControl};
   }
 `;

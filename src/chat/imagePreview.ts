@@ -16,6 +16,11 @@ export function imagePreview(path: string): Promise<string | null> {
   return hit;
 }
 
+/** 待发送的托管图片被移除时释放 data URL；历史中已发送的图片不会走这里。 */
+export function forgetImagePreview(path: string): void {
+  cache.delete(path);
+}
+
 /** 支持的位图扩展名判定（拖放分流：图片进附件条，其余走文件投喂）。
     与 Rust 侧 image_mime 同一份名单；BMP 三家协议都不收，不算图片 */
 export function isImagePath(path: string): boolean {

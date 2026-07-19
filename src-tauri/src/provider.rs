@@ -160,12 +160,12 @@ pub(crate) fn image_mime(path: &str) -> Option<&'static str> {
 /// 文件头魔数 → MIME。扩展名会撒谎（CDN 把 WebP 存成 .jpg 很常见），而
 /// Anthropic 会校验 media_type 与数据一致性，不符整个请求 400——media_type
 /// 必须以内容为准
-fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+pub(crate) fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         Some("image/png")
     } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF8") {
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
         Some("image/gif")
     } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
         Some("image/webp")

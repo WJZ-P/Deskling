@@ -4,6 +4,9 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
 };
 
+static CLIPBOARD_IMAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 mod memory;
 mod provider;
 mod skills;
@@ -136,6 +139,110 @@ fn image_probe(path: String) -> Result<(), String> {
     provider::probe_image(&path)
 }
 
+fn validate_clipboard_image(bytes: &[u8]) -> Result<&'static str, String> {
+    if bytes.is_empty() {
+        return Err("剪贴板图片为空".into());
+    }
+    if bytes.len() as u64 > provider::IMAGE_MAX_BYTES {
+        return Err(format!(
+            "图片过大（{:.1}MB，上限 {}MB）",
+            bytes.len() as f64 / 1_048_576.0,
+            provider::IMAGE_MAX_BYTES / 1_048_576
+        ));
+    }
+
+    let mime = provider::sniff_image_mime(bytes)
+        .ok_or_else(|| "不是支持的图片格式（png/jpg/webp/gif）".to_string())?;
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => return Err("不是支持的图片格式（png/jpg/webp/gif）".into()),
+    };
+    Ok(ext)
+}
+
+/// Ctrl+V 图片导入：校验后写进 app_data_dir/attachments/clipboard，返回稳定路径。
+/// 文件名完全由后端生成，不接受前端路径或扩展名，避免目录穿越和伪装格式。
+#[tauri::command]
+fn image_import_clipboard(
+    app: AppHandle,
+    webview: tauri::WebviewWindow,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    if webview.label() != "chat" {
+        return Err("只有对话窗口可以导入剪贴板图片".into());
+    }
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.as_slice(),
+        _ => return Err("剪贴板图片必须使用二进制传输".into()),
+    };
+    let ext = validate_clipboard_image(bytes)?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位附件目录: {e}"))?
+        .join("attachments")
+        .join("clipboard");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建附件目录: {e}"))?;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("系统时间异常: {e}"))?
+        .as_millis();
+    let seq = CLIPBOARD_IMAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("paste-{stamp}-{}-{seq}.{ext}", std::process::id()));
+
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| format!("无法创建剪贴板附件: {e}"))?;
+    if let Err(error) = file.write_all(bytes) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("无法保存剪贴板附件: {error}"));
+    }
+
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// 待发送的剪贴板图片被用户点 X 移除时清理托管文件。只允许删除 clipboard
+/// 目录的直属文件；拖入的任意外部路径会返回 false，不触碰文件系统。
+#[tauri::command]
+fn image_discard_clipboard(
+    app: AppHandle,
+    webview: tauri::WebviewWindow,
+    path: String,
+) -> Result<bool, String> {
+    if webview.label() != "chat" {
+        return Err("只有对话窗口可以清理剪贴板图片".into());
+    }
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位附件目录: {e}"))?
+        .join("attachments")
+        .join("clipboard");
+    let candidate = std::path::PathBuf::from(path);
+    if candidate.parent() != Some(root.as_path()) {
+        return Ok(false);
+    }
+    let Some(name) = candidate.file_name().and_then(|name| name.to_str()) else {
+        return Ok(false);
+    };
+    if !name.starts_with("paste-") {
+        return Ok(false);
+    }
+    match std::fs::remove_file(&candidate) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("无法删除剪贴板附件: {error}")),
+    }
+}
+
 /// 系统级查询鼠标主键是否按住。OS 拖窗的模态循环期间网页收不到指针事件，
 /// 桌宠窗的移动停表用它区分「拖到屏幕边顶住不动」和「已经松手」——按住就
 /// 保持悬空动画并推迟落点校正。两个键都查，兼容系统级左右键互换的用户
@@ -241,6 +348,8 @@ pub fn run() {
             mouse_pressed,
             image_preview,
             image_probe,
+            image_import_clipboard,
+            image_discard_clipboard,
             set_proxy,
             provider::provider_test,
             provider::provider_chat,
@@ -265,4 +374,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod clipboard_image_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_png_clipboard_payload() {
+        use base64::Engine as _;
+        // 1x1 PNG；导入层只负责大小与文件头把关，实际解码由 WebView/provider 完成。
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .expect("测试 PNG base64 应合法");
+        let ext = validate_clipboard_image(&bytes).expect("PNG 应可导入");
+        assert_eq!(ext, "png");
+        assert_eq!(provider::sniff_image_mime(&bytes), Some("image/png"));
+    }
+
+    #[test]
+    fn rejects_non_image_clipboard_payload() {
+        assert!(validate_clipboard_image(b"not an image").is_err());
+    }
 }

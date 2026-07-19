@@ -14,7 +14,7 @@ import { ChatBackdrop } from "../chat/components/ChatBackdrop";
 import { MessageList } from "../chat/components/MessageList";
 import { ChatComposer } from "../chat/components/ChatComposer";
 import { getConversations, persistConversations } from "../chat/store";
-import { isImagePath } from "../chat/imagePreview";
+import { forgetImagePreview, isImagePath } from "../chat/imagePreview";
 import { streamChat, toHistory, type ChatTurn, type ChatStream } from "../chat/api";
 import { SpeechSplitter } from "../chat/speech";
 import {
@@ -57,6 +57,10 @@ const TALK_STALL_MS = 1000;
 // start = 命中唤醒词，两声上行「在听」；end = 一句话说完，镜像下行「收到，去干活」
 const WAKE_START_SOUND = "/audio/wake-start.wav";
 const WAKE_END_SOUND = "/audio/wake-end.wav";
+
+// 与 Rust provider::IMAGE_MAX_BYTES 对齐。前端先挡住超大剪贴板对象，避免把
+// 超大对象完整读进内存再走 IPC；后端仍会独立复检，前端值不作信任边界。
+const CLIPBOARD_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 type PetWorkState = "searching" | "typing";
 type PetLoopState =
@@ -352,16 +356,23 @@ export function ChatWindow() {
   // 语音直发发生在事件回调里，读 state 会拿到陈旧闭包
   const pendingImagesRef = useRef<string[]>([]);
   const [pendingImages, setPendingImagesState] = useState<string[]>([]);
+  const [clipboardImports, setClipboardImports] = useState(0);
   const updatePendingImages = useCallback((updater: (prev: string[]) => string[]) => {
-    pendingImagesRef.current = updater(pendingImagesRef.current);
-    setPendingImagesState(pendingImagesRef.current);
+    const prev = pendingImagesRef.current;
+    const next = updater(prev);
+    if (next === prev) return;
+    pendingImagesRef.current = next;
+    setPendingImagesState(next);
   }, []);
   const addPendingImages = useCallback(
     (paths: string[]) => {
-      updatePendingImages((prev) => [
-        ...prev,
-        ...paths.filter((p) => !prev.includes(p)),
-      ]);
+      updatePendingImages((prev) => {
+        const next = [...prev];
+        for (const path of paths) {
+          if (!next.includes(path)) next.push(path);
+        }
+        return next.length === prev.length ? prev : next;
+      });
     },
     [updatePendingImages],
   );
@@ -372,10 +383,15 @@ export function ChatWindow() {
     return taken;
   }, [updatePendingImages]);
   const removePendingImage = useCallback(
-    (path: string) => updatePendingImages((prev) => prev.filter((p) => p !== path)),
+    (path: string) => {
+      updatePendingImages((prev) => prev.filter((p) => p !== path));
+      forgetImagePreview(path);
+      // 只会删除 app_data_dir/attachments/clipboard 的直属文件；拖入的外部路径
+      // 后端返回 false 且绝不会触碰。
+      void invoke<boolean>("image_discard_clipboard", { path }).catch(() => {});
+    },
     [updatePendingImages],
   );
-
   // 防抖落盘：会话任何变动后 ~500ms 写一次。流式 delta 高频触发，
   // 防抖把整段增量合并成一次写盘，最后一个 delta 落定后统一持久化。
   const persistTimer = useRef<number | undefined>(undefined);
@@ -978,6 +994,46 @@ export function ChatWindow() {
     [addPendingImages, petSay],
   );
 
+  // Ctrl+V 位图没有可长期使用的本地路径：用原始二进制交给 Rust 校验，并写进
+  // app_data_dir 的托管附件目录。成功后与拖入图片共用同一附件条/发送链路。
+  const importClipboardImages = useCallback(
+    async (files: File[]) => {
+      setClipboardImports((count) => count + 1);
+      try {
+        const results = await Promise.all(
+          files.map(async (file) => {
+            const label = file.name || "剪贴板图片";
+            try {
+              if (file.size > CLIPBOARD_IMAGE_MAX_BYTES) {
+                throw new Error(
+                  `图片过大（${(file.size / 1_048_576).toFixed(1)}MB，上限 5MB）`,
+                );
+              }
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              const path = await invoke<string>("image_import_clipboard", bytes);
+              return { path, error: "" };
+            } catch (error) {
+              return { path: "", error: `${label}（${String(error)}）` };
+            }
+          }),
+        );
+        const accepted = results.flatMap((result) => (result.path ? [result.path] : []));
+        const rejected = results.flatMap((result) => (result.error ? [result.error] : []));
+        if (accepted.length > 0) addPendingImages(accepted);
+        if (rejected.length > 0) {
+          petSay(
+            `有剪贴板图片没收下喵：${rejected[0]}${rejected.length > 1 ? ` 等 ${rejected.length} 张` : ""}`,
+            "say",
+            true,
+          );
+        }
+      } finally {
+        setClipboardImports((count) => Math.max(0, count - 1));
+      }
+    },
+    [addPendingImages, petSay],
+  );
+
   // ---- 拖图进对话窗：直接落进作曲区附件条（非图片文件忽略，投喂走桌宠） ----
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
@@ -1108,19 +1164,6 @@ export function ChatWindow() {
       wakeEndRef.current = null;
     };
   }, [petPlay, petSay, petFeedback, directSend, addPendingImages]);
-
-  // 拖图进对话窗：OS 拖拽落下的图片直接进附件条（随下一条消息发出）；
-  // 非图片文件想喂给 AI 请拖给桌宠（走投喂链路），这里不收
-  useEffect(() => {
-    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type !== "drop") return;
-      const images = event.payload.paths.filter(isImagePath);
-      if (images.length > 0) addPendingImages(images);
-    });
-    return () => {
-      void unlisten.then((f) => f());
-    };
-  }, [addPendingImages]);
 
   // 编辑单条消息 = 从这个节点「分叉重来」：替换文本、丢弃它之后的全部消息；
   // 编辑的是用户消息时再以截断后的历史重新发起请求（重新进 loading，AI 重答）。
@@ -1280,8 +1323,10 @@ export function ChatWindow() {
                   onVoiceActiveChange={handleVoiceActiveChange}
                   onStop={handleStop}
                   sending={sending}
+                  attaching={clipboardImports > 0}
                   attachments={pendingImages}
                   onRemoveAttachment={removePendingImage}
+                  onPasteImages={(files) => void importClipboardImages(files)}
                 />
               </>
             ) : (

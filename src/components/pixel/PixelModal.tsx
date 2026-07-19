@@ -131,6 +131,7 @@ const Overlay = styled.div`
 /* 面板整体不超过 90vh：内容装不下时由 Content 内部滚动消化（头/脚常驻可见） */
 const Panel = styled.div`
   position: relative;
+  min-width: 0;
   max-width: 100%;
   max-height: 90vh;
   display: flex;
@@ -176,11 +177,16 @@ const Head = styled.header`
 `;
 
 const Title = styled.h2`
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font: ${t.textLg};
   font-weight: bold;
   letter-spacing: 1px;
   color: ${t.colorText};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 /* 主体：超高时内部滚动（细滚动条与输入框风格一致），头部/底部操作区不动 */
