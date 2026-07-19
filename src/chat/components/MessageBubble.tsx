@@ -72,8 +72,8 @@ interface MessageBubbleProps {
   live?: boolean;
   /** 审批作答：透传给工具段的同意/拒绝按钮 */
   onApproveTool?: (toolCallId: string, approved: boolean) => void;
-  /** 编辑消息文本（悬浮工具栏「编辑」→ 内嵌编辑保存后回调） */
-  onEdit?: (msgId: string, text: string) => void;
+  /** 编辑消息文字与保留图片（悬浮工具栏「编辑」→ 内嵌编辑保存后回调） */
+  onEdit?: (msgId: string, text: string, imageSegmentIndexes: number[]) => void;
   /** 删除这条消息（悬浮工具栏「删除」） */
   onDelete?: (msgId: string) => void;
 }
@@ -105,6 +105,9 @@ export const MessageBubble = memo(function MessageBubble({
     (acc, seg, i) => (seg.kind === "text" ? i : acc),
     -1,
   );
+  const originalImages = msg.segments.flatMap((seg, i) =>
+    seg.kind === "image" ? [{ key: i, path: seg.path }] : [],
+  );
 
   // 悬浮工具栏：hover 整行浮现（工具栏挂在气泡下缘，仍是 Row 子树 ——
   // 指针从气泡移到工具栏不触发 pointerleave）。流式中 / 编辑中不显示。
@@ -112,15 +115,25 @@ export const MessageBubble = memo(function MessageBubble({
   // 内嵌编辑：draft 为编辑框草稿（进入编辑时从消息文本初始化）
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftImages, setDraftImages] = useState<Array<{ key: number; path: string }>>([]);
 
   const startEdit = () => {
     setDraft(plainTextOf(msg));
+    setDraftImages(originalImages);
     setEditing(true);
   };
   const saveEdit = () => {
-    setEditing(false);
     const text = draft.trim();
-    if (text && text !== plainTextOf(msg)) onEdit?.(msg.id, text);
+    const imageSegmentIndexes = draftImages.map((image) => image.key);
+    // 不落一条彻底为空的消息；纯图片或「删掉文字、保留图片」都仍是合法编辑结果。
+    if (!text && imageSegmentIndexes.length === 0) return;
+    setEditing(false);
+    const imagesChanged =
+      imageSegmentIndexes.length !== originalImages.length ||
+      imageSegmentIndexes.some((index, i) => index !== originalImages[i]?.key);
+    if (text !== plainTextOf(msg) || imagesChanged) {
+      onEdit?.(msg.id, text, imageSegmentIndexes);
+    }
   };
   const copyText = () => {
     void navigator.clipboard?.writeText(plainTextOf(msg));
@@ -160,6 +173,30 @@ export const MessageBubble = memo(function MessageBubble({
           <BubbleInner>
             {editing ? (
               <EditWrap>
+                {draftImages.length > 0 && (
+                  <EditImages aria-label="随编辑消息保留的图片">
+                    {draftImages.map((image) => (
+                      <EditImage key={image.key}>
+                        <MsgImage path={image.path} />
+                        <EditImageRemove
+                          data-remove
+                          type="button"
+                          aria-label="从编辑消息中移除图片"
+                          title="移除图片"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDraftImages((images) =>
+                              images.filter((candidate) => candidate.key !== image.key),
+                            );
+                          }}
+                        >
+                          ✕
+                        </EditImageRemove>
+                      </EditImage>
+                    ))}
+                  </EditImages>
+                )}
                 <EditArea
                   autoFocus
                   data-role={msg.role}
@@ -175,7 +212,9 @@ export const MessageBubble = memo(function MessageBubble({
                   }}
                 />
                 <EditHint data-role={msg.role}>
-                  Enter 保存 · Shift+Enter 换行 · Esc 取消
+                  {!draft.trim() && draftImages.length === 0
+                    ? "消息不能为空，请保留文字或至少一张图片 · Esc 取消"
+                    : `${draftImages.length > 0 ? "图片会随编辑后的消息一并发送 · " : ""}Enter 保存 · Shift+Enter 换行 · Esc 取消`}
                 </EditHint>
               </EditWrap>
             ) : (
@@ -387,6 +426,57 @@ const EditWrap = styled.div`
   /* 撑出一块稳定的编辑宽度：不随草稿字数抖动（上限仍受气泡 max-width 约束） */
   width: min(480px, 62vw);
   max-width: 100%;
+`;
+
+/* 编辑图文消息时图片不能凭空消失：沿用消息图片本体与单击预览能力，横向排布、
+   空间不足时自然换行；这里只展示并保留原图，文本仍由下方 textarea 修改。 */
+const EditImages = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+`;
+
+const EditImage = styled.div`
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+
+  &:hover > [data-remove],
+  &:focus-within > [data-remove] {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+`;
+
+/* 与作曲区附件一致：平时不盖住图片，hover / 键盘聚焦时才显示右上角移除钮。 */
+const EditImageRemove = styled.button`
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid ${t.colorBorderStrong};
+  background: ${t.colorSurface};
+  color: ${t.colorText};
+  font: ${t.textSm};
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 0 ${t.colorShadowPixel};
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+
+  &:hover,
+  &:focus-visible {
+    background: ${t.colorControl};
+  }
 `;
 
 const EditArea = styled.textarea`

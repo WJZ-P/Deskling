@@ -343,6 +343,9 @@ export function ChatWindow() {
   // 否则流式思考中切去/新开别的会话，loading 气泡会跟着串场；sending：整段请求进行中（禁输入框）
   const [typingConv, setTypingConv] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  // 真正接收一条用户消息就递增；MessageList 据此强制滚底，不从批处理后的消息
+  // 末项反推发送意图（同步 assistant 提示可能让末项已经不是 user）。
+  const [scrollToBottomRequest, setScrollToBottomRequest] = useState(0);
   // 正在流式输出的助手消息 id：驱动该条末尾文本段逐字蹦入（StreamingText）
   const [streamingId, setStreamingId] = useState<string | null>(null);
   // 当前在途流式请求的句柄（含 cancel/approve）：暂停按钮据它终止本轮
@@ -949,6 +952,7 @@ export function ChatWindow() {
         setActiveId(conv.id);
         startStreamRef.current(conv.id, toHistory(conv.messages));
       }
+      setScrollToBottomRequest((request) => request + 1);
       // 对话窗没开着就唤出来并聚焦（已开着则不打扰）
       void invoke<boolean>("chat_visible")
         .then((visible) => {
@@ -1169,7 +1173,7 @@ export function ChatWindow() {
   // 编辑的是用户消息时再以截断后的历史重新发起请求（重新进 loading，AI 重答）。
   // 编辑助手消息只截断不重发——没有新的用户提问，重发没有语义。
   const handleEditMessage = useCallback(
-    (convId: string, msgId: string, text: string) => {
+    (convId: string, msgId: string, text: string, imageSegmentIndexes: number[]) => {
       // 有在途流先取消收尾（编辑期间输入框虽被 sending 禁用，但工具栏仍可用；
       // 且被截断丢弃的消息里可能正包含流式落点，不取消会写进已删除的消息）
       if (streamRef.current) {
@@ -1198,18 +1202,23 @@ export function ChatWindow() {
           const idx = c.messages.findIndex((m) => m.id === msgId);
           if (idx === -1) return c;
           const msg = c.messages[idx];
-          // 文本段收敛为一段（编辑框里是拼接文本），工具调用段原位保留
+          // 文本段收敛为一段（编辑框里是拼接文本）；图片按原 segment 下标筛选，
+          // 同一路径重复出现时也能精确移除点中那一次，且无法注入原消息外的新路径。
+          // 工具调用 / 思考段仍原位保留。
           const segments: MessageSegment[] = [];
-          let inserted = false;
-          for (const s of msg.segments) {
+          const keptImages = new Set(imageSegmentIndexes);
+          let handledText = false;
+          for (const [segmentIndex, s] of msg.segments.entries()) {
             if (s.kind === "text") {
-              if (!inserted) {
-                segments.push({ kind: "text", text });
-                inserted = true;
+              if (!handledText) {
+                if (text) segments.push({ kind: "text", text });
+                handledText = true;
               }
+            } else if (s.kind === "image") {
+              if (keptImages.has(segmentIndex)) segments.push(s);
             } else segments.push(s);
           }
-          if (!inserted) segments.push({ kind: "text", text });
+          if (!handledText && text) segments.push({ kind: "text", text });
           // 截断：编辑的这条成为会话新末尾，之后的消息全部丢弃
           const messages = [...c.messages.slice(0, idx), { ...msg, segments }];
           if (msg.role === "user") history = toHistory(messages);
@@ -1222,7 +1231,10 @@ export function ChatWindow() {
         }),
       );
 
-      if (history) startStream(convId, history);
+      if (history) {
+        setScrollToBottomRequest((request) => request + 1);
+        startStream(convId, history);
+      }
     },
     [startStream],
   );
@@ -1311,6 +1323,7 @@ export function ChatWindow() {
                   <MessageList
                     messages={active.messages}
                     typing={typingConv === active.id}
+                    scrollToBottomRequest={scrollToBottomRequest}
                     streamingId={streamingId}
                     convId={active.id}
                     onApproveTool={handleApproveTool}

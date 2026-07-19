@@ -111,14 +111,24 @@ function JumpToBottom({ visible, onClick }: { visible: boolean; onClick: () => v
 interface MessageListProps {
   messages: ChatMessage[];
   typing?: boolean;
+  /**
+   * 用户消息真正进入发送链路后递增。显式表达“这次必须滚底”，不能从最终
+   * messages 快照猜——user 与 assistant 可能被 React 合并进同一次提交。
+   */
+  scrollToBottomRequest?: number;
   /** 正在流式输出的那条消息 id：它的末尾文本段逐字蹦入 */
   streamingId?: string | null;
   /** 当前会话 id：切换时强制回到底部 */
   convId?: string | null;
   /** 审批作答：放行/拒绝一次 pending 的工具调用（透传到 ToolCallBlock 按钮） */
   onApproveTool?: (toolCallId: string, approved: boolean) => void;
-  /** 编辑一条消息的文本（悬浮工具栏「编辑」保存后触发；带会话 id 防串会话） */
-  onEditMessage?: (convId: string, msgId: string, text: string) => void;
+  /** 编辑一条消息的文字与保留图片（带会话 id 防串会话） */
+  onEditMessage?: (
+    convId: string,
+    msgId: string,
+    text: string,
+    imageSegmentIndexes: number[],
+  ) => void;
   /** 删除一条消息（悬浮工具栏「删除」） */
   onDeleteMessage?: (convId: string, msgId: string) => void;
 }
@@ -126,6 +136,7 @@ interface MessageListProps {
 export function MessageList({
   messages,
   typing,
+  scrollToBottomRequest = 0,
   streamingId,
   convId,
   onApproveTool,
@@ -208,20 +219,35 @@ export function MessageList({
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [convId, scrollEl]);
 
-  // 用户刚发出一条消息：强制贴底（哪怕之前上滑读历史），让自己这条 + 随后的回复
-  // 都进视野。只认「列表变长且新末条是 user」——AI 流式续写不触发（那个交给下面的
-  // 贴底跟随，用户上滑读历史时不该被拽回去）。
-  const lastLenRef = useRef(messages.length);
+  // 用户刚发出一条消息：显式强制贴底（哪怕之前上滑读历史）。不能靠“列表变长且
+  // 末条是 user”推断：user + 同步 assistant 提示可能被 React 批成一次提交，最终
+  // 末条已经是 assistant；不同长度的会话切换也会污染 length 基线。
+  //
+  // 立即滚一次负责当下 DOM；随后两帧分别覆盖 virtualizer 换到末尾区间、以及新气泡
+  // 从估高变成实测高度的阶段。每次都重申 atBottom，避免中间 scroll 事件用旧高度把
+  // 贴底状态误判回 false。后续流式增长仍由下方的常规贴底 effect 接管。
   useLayoutEffect(() => {
-    const grew = messages.length > lastLenRef.current;
-    lastLenRef.current = messages.length;
-    if (grew && messages[messages.length - 1]?.role === "user") {
+    if (scrollToBottomRequest <= 0) return;
+    const el = scrollEl;
+    if (!el) return;
+
+    const pin = () => {
       atBottomRef.current = true;
-      setAway(false);
-      const el = scrollEl;
-      if (el) el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, scrollEl]);
+      el.scrollTop = el.scrollHeight;
+    };
+    setAway(false);
+    pin();
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      pin();
+      secondFrame = window.requestAnimationFrame(pin);
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [scrollToBottomRequest, scrollEl]);
 
   // 贴底跟随：消息增删 / typing / 流式续写都会改变总高 —— 若用户在底部就重新钉底。
   // totalSize 随 measureElement 校正而变（流式那条边生成边测高），故能逐帧跟住。
@@ -244,8 +270,8 @@ export function MessageList({
   // 气泡工具栏回调：补上会话 id 再上抛。引用只随会话切换而变
   // （切会话本来就全列表重渲染），流式期间稳定，不击穿 MessageBubble 的 memo。
   const editMsg = useCallback(
-    (msgId: string, text: string) => {
-      if (convId) onEditMessage?.(convId, msgId, text);
+    (msgId: string, text: string, imageSegmentIndexes: number[]) => {
+      if (convId) onEditMessage?.(convId, msgId, text, imageSegmentIndexes);
     },
     [convId, onEditMessage],
   );
