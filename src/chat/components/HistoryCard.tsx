@@ -50,6 +50,12 @@ const REST_PAL: PixelPalette = {
   edge: "#c2dadb",
   hi: "#ffffff",
   lo: "#d8e9e9",
+  dark: {
+    face: "#11263e",
+    edge: "#3d6690",
+    hi: "#22415e",
+    lo: "#081523",
+  },
 };
 
 interface HistoryCardProps {
@@ -255,9 +261,9 @@ const Spine = styled.span`
   [data-state="hover"] & > i {
     background: ${t.colorAccent};
   }
-  /* 选中态在青 plate 上：脊用亮色（近白）跳出来 */
+  /* 选中态在亮青 plate 上：脊改用深墨色，保持清楚的结构对比。 */
   [data-state="active"] & > i {
-    background: ${t.colorTextOnBtn};
+    background: ${t.colorOnAccent};
   }
 `;
 
@@ -350,7 +356,7 @@ const MenuItem = styled.button`
   transition: background-color 0.12s ease, color 0.12s ease;
 
   &:hover {
-    background: rgba(0, 0, 0, 0.06);
+    background: ${t.colorAccentSoft};
   }
   &[data-tone="danger"]:hover {
     color: ${t.btnClose};

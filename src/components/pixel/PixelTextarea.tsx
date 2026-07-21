@@ -72,6 +72,7 @@ export const PixelTextarea = forwardRef<HTMLTextAreaElement, PixelTextareaProps>
             ref={setRef}
             rows={rows}
             disabled={disabled}
+            data-variant={variant}
             onFocus={(e) => {
               setFocused(true);
               onFocus?.(e);
@@ -114,6 +115,10 @@ const Field = styled.textarea`
   letter-spacing: 0.5px;
   color: ${t.colorText};
 
+  &[data-variant="primary"] {
+    color: ${t.colorTextOnBtnAccent};
+  }
+
   /* 自绘细滚动条（超过 rows 后出现），跟整体像素风一致 */
   scrollbar-width: thin;
   scrollbar-color: ${t.colorBorderStrong} transparent;
@@ -121,6 +126,11 @@ const Field = styled.textarea`
   &::placeholder {
     color: ${t.colorTextMuted};
     opacity: 0.8;
+  }
+
+  &[data-variant="primary"]::placeholder {
+    color: ${t.colorTextOnBtnAccent};
+    opacity: 1;
   }
 
   &:disabled {

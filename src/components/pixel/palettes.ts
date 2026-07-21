@@ -1,5 +1,5 @@
-import { rawColor, type ThemeMode } from "../../styles/theme";
-import type { PixelPalette } from "./PixelFrame";
+import { rawColor, t, type ThemeMode } from "../../styles/theme";
+import type { PixelPalette, PixelPaletteColors } from "./PixelFrame";
 
 /* ---- 像素调色的色值运算工具（在字面 hex 上做明暗档，供 JS 逐格上色）---- */
 function hexToRgb(hex: string): [number, number, number] {
@@ -34,16 +34,56 @@ function skinFromBase(base: string) {
   };
 }
 
+/** 给固定浅色调色板挂上稳定引用的深色变体。 */
+function withDark(
+  light: PixelPaletteColors,
+  dark: PixelPaletteColors,
+): PixelPalette {
+  return { ...light, dark };
+}
+
 /**
- * 打样用调色板（青蓝识别色，浅色向）。
+ * 通用像素调色板（青蓝识别色，内含 light + dark 两套颜色）。
  * 每个 palette = 面色 / 外描边 / 高光 / 暗影，供 PixelFrame 逐格上色。
- * 之后要接主题可改成 var(--...) 字符串。
+ * 保持模块级稳定引用，主题选择统一交给三套底层渲染器。
  */
 export const PX = {
-  default: { face: "#e6f4f4", edge: "#3f9599", hi: "#ffffff", lo: "#a9cfd1" },
-  accent: { face: "#7dd1d4", edge: "#1d6a6f", hi: "#d8f4f5", lo: "#3f9ea3" },
-  well: { face: "#c2e7e8", edge: "#3f9599", hi: "#ffffff", lo: "#93c4c6" },
-  panel: { face: "#ffffff", edge: "#3f9599", hi: "#ffffff", lo: "#cfe8e9" },
+  default: withDark(
+    { face: "#e6f4f4", edge: "#3f9599", hi: "#ffffff", lo: "#a9cfd1" },
+    { face: "#21496e", edge: "#4b789f", hi: "#3a668a", lo: "#112c47" },
+  ),
+  accent: withDark(
+    { face: "#7dd1d4", edge: "#1d6a6f", hi: "#d8f4f5", lo: "#3f9ea3" },
+    { face: "#3fd2e2", edge: "#16717f", hi: "#9ff2f5", lo: "#2496a6" },
+  ),
+  well: withDark(
+    {
+      face: rawColor("colorWell", "light"),
+      edge: rawColor("colorPixelWellEdge", "light"),
+      hi: "#ffffff",
+      lo: "#93c4c6",
+    },
+    {
+      face: rawColor("colorWell", "dark"),
+      edge: rawColor("colorPixelWellEdge", "dark"),
+      hi: "#1a3854",
+      lo: "#040c17",
+    },
+  ),
+  panel: withDark(
+    {
+      face: rawColor("colorPixelPanelFace", "light"),
+      edge: "#3f9599",
+      hi: "#ffffff",
+      lo: "#cfe8e9",
+    },
+    {
+      face: rawColor("colorPixelPanelFace", "dark"),
+      edge: "#3d6690",
+      hi: "#315473",
+      lo: "#0d1f34",
+    },
+  ),
 } satisfies Record<string, PixelPalette>;
 
 /**
@@ -61,7 +101,7 @@ export const PRIORITY_PAL: Record<Priority, PixelPalette> = {
 };
 
 /** 抖动纹理颜色（浅青，用于进度/强调填充的斜向像素条纹） */
-export const DITHER_ACCENT = "#d8f4f5";
+export const DITHER_ACCENT = t.colorPixelDither;
 
 /**
  * 工具调用卡（ToolCallBlock）hover/展开的扫描目标面色：柔和青蓝，
@@ -73,6 +113,12 @@ export const TOOL_SWEEP_PAL: PixelPalette = {
   edge: shade(rawColor("colorAccent", "light"), -0.1),
   hi: "#ffffff",
   lo: shade(rawColor("colorAccent", "light"), 0.33),
+  dark: {
+    face: "#143b51",
+    edge: "#33758d",
+    hi: "#2b6176",
+    lo: "#0c2b3d",
+  },
 };
 
 /**
@@ -98,9 +144,18 @@ export const TITLEBAR_PAL: Record<ThemeMode, PixelPalette> = {
  * 窗口控制按钮（红绿灯）调色：面色取自 theme.ts 的 btn* token，
  * 描边/高光/暗影/图标色由面色统一推导，避免色值散落。
  */
-export const CONTROL_MIN = skinFromBase(rawColor("btnMin", "light"));
-export const CONTROL_MAX = skinFromBase(rawColor("btnMax", "light"));
-export const CONTROL_CLOSE = skinFromBase(rawColor("btnClose", "light"));
+function themedControlSkin(token: "btnMin" | "btnMax" | "btnClose") {
+  const light = skinFromBase(rawColor(token, "light"));
+  const dark = skinFromBase(rawColor(token, "dark"));
+  return {
+    pal: withDark(light.pal, dark.pal),
+    icon: light.icon,
+  };
+}
+
+export const CONTROL_MIN = themedControlSkin("btnMin");
+export const CONTROL_MAX = themedControlSkin("btnMax");
+export const CONTROL_CLOSE = themedControlSkin("btnClose");
 
 /**
  * 侧边栏面板调色（随主题）。与标题栏同一套分层边框做法（PixelFrame raised），
@@ -117,10 +172,10 @@ export const SIDEBAR_PANEL: Record<ThemeMode, PixelPalette> = {
     lo: rawColor("colorBorder", "light"),
   },
   dark: {
-    face: rawColor("colorSurface2", "dark"),
-    edge: rawColor("colorBorderStrong", "dark"),
-    hi: shade(rawColor("colorSurface2", "dark"), 0.22),
-    lo: rawColor("colorBg", "dark"),
+    face: "#0d1d31",
+    edge: "#3d6690",
+    hi: "#203d5a",
+    lo: "#06101d",
   },
 };
 
@@ -136,8 +191,18 @@ export const SIDEBAR_PAL: Record<ThemeMode, { idle: PixelPalette; active: PixelP
     active: skinFromBase(rawColor("colorAccent", "light")).pal,
   },
   dark: {
-    idle: skinFromBase(rawColor("colorControl", "dark")).pal,
-    active: skinFromBase(rawColor("colorAccent", "dark")).pal,
+    idle: {
+      face: "#21496e",
+      edge: "#4b789f",
+      hi: "#3a668a",
+      lo: "#112c47",
+    },
+    active: {
+      face: "#3fd2e2",
+      edge: "#16717f",
+      hi: "#9ff2f5",
+      lo: "#2496a6",
+    },
   },
 };
 

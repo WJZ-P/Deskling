@@ -9,6 +9,22 @@
 
 export type ThemeMode = "light" | "dark";
 
+type ThemeListener = () => void;
+
+const themeListeners = new Set<ThemeListener>();
+
+/** 当前已经写入 document 的主题；供 Canvas / SVG 像素渲染器同步配色。 */
+export function getAppliedTheme(): ThemeMode {
+  if (typeof document === "undefined") return "light";
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+/** 订阅实际主题切换，避免每个像素组件各自创建 MutationObserver。 */
+export function subscribeAppliedTheme(listener: ThemeListener): () => void {
+  themeListeners.add(listener);
+  return () => themeListeners.delete(listener);
+}
+
 /**
  * 随主题变化的颜色 token：单一数据源。
  * 色系：浅色 = 偏白冷调 + 青蓝点缀（初音青 × 天依蓝的二次元感）；
@@ -30,7 +46,7 @@ const colorTokens = {
   colorTextMuted: {
     css: "--color-text-muted",
     light: "#5a8288",
-    dark: "#8fa8c2",
+    dark: "#a5bad0",
   },
   // 主强调色：基准青 #7dd1d4（浅色）；深色仍用明亮青在深蓝上跳脱
   colorAccent: { css: "--color-accent", light: "#7dd1d4", dark: "#3fd2e2" },
@@ -39,6 +55,21 @@ const colorTokens = {
     css: "--color-accent-soft",
     light: "rgba(125, 209, 212, 0.40)",
     dark: "rgba(63, 210, 226, 0.32)",
+  },
+  colorPixelDither: {
+    css: "--color-pixel-dither",
+    light: "#d8f4f5",
+    dark: "#9ff2f5",
+  },
+  colorPixelPanelFace: {
+    css: "--color-pixel-panel-face",
+    light: "#ffffff",
+    dark: "#183050",
+  },
+  colorPixelWellEdge: {
+    css: "--color-pixel-well-edge",
+    light: "#3f9599",
+    dark: "#315a7d",
   },
   // 强调色背景上的文字色：青底上用深青墨，对比更高、更清晰精致
   colorOnAccent: { css: "--color-on-accent", light: "#0a2e30", dark: "#04202a" },
@@ -60,8 +91,8 @@ const colorTokens = {
   colorControl: { css: "--color-control", light: "#d6f0f0", dark: "#1e3a5c" },
   // 凹槽/进度槽/输入区的底色：比控件更深，显“内嵌”
   colorWell: { css: "--color-well", light: "#c2e7e8", dark: "#0b1c30" },
-  // 像素按钮文字色（青色家族深青墨，非死黑）。按钮面色暂固定浅青，故 light/dark 同值。
-  colorTextOnBtn: { css: "--color-text-on-btn", light: "#1f6f75", dark: "#1f6f75" },
+  // 普通像素按钮文字：浅色用深青墨，深色用浅蓝白；强调按钮另走下方深色文字。
+  colorTextOnBtn: { css: "--color-text-on-btn", light: "#1f6f75", dark: "#c8ddf1" },
   colorTextOnBtnAccent: {
     css: "--color-text-on-btn-accent",
     light: "#13474c",
@@ -87,6 +118,9 @@ export const t = {
   colorTextMuted: "var(--color-text-muted)",
   colorAccent: "var(--color-accent)",
   colorAccentSoft: "var(--color-accent-soft)",
+  colorPixelDither: "var(--color-pixel-dither)",
+  colorPixelPanelFace: "var(--color-pixel-panel-face)",
+  colorPixelWellEdge: "var(--color-pixel-well-edge)",
   colorOnAccent: "var(--color-on-accent)",
   colorShadow: "var(--color-shadow)",
   colorShadowSoft: "var(--color-shadow-soft)",
@@ -145,9 +179,13 @@ export function rawColor(token: ColorToken, mode: ThemeMode): string {
 /** 应用主题：把对象里的颜色值写入根元素的 CSS 变量，并标记 data-theme */
 export function applyTheme(mode: ThemeMode): void {
   const root = document.documentElement;
+  const changed = getAppliedTheme() !== mode;
   for (const token of Object.values(colorTokens)) {
     root.style.setProperty(token.css, token[mode]);
   }
   root.style.colorScheme = mode;
   root.setAttribute("data-theme", mode);
+  if (changed) {
+    for (const listener of themeListeners) listener();
+  }
 }

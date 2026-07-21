@@ -93,7 +93,7 @@ const Row = styled.button`
   }
   &:hover,
   &[data-active] {
-    color: ${t.colorTextOnBtnAccent};
+    color: ${t.colorAccent};
   }
   &:active {
     transform: scale(0.97);

@@ -8,7 +8,8 @@ import {
 } from "react";
 import { styled } from "@linaria/react";
 import { t } from "../../styles/theme";
-import type { PixelPalette } from "./PixelFrame";
+import { useAppliedTheme } from "../../hooks/useAppliedTheme";
+import { resolvePixelPalette, type PixelPalette } from "./PixelFrame";
 import { useElementSize } from "./useElementSize";
 
 /**
@@ -198,6 +199,8 @@ export function PixelSurface({
   rootStyle,
   contentStyle,
 }: PixelSurfaceProps) {
+  const theme = useAppliedTheme();
+  const activePalette = resolvePixelPalette(palette, theme);
   // 合并调参：consumer 传模块级常量 → tune 引用稳定 → T 稳定，不会误重建 cells
   const T = useMemo<SurfaceTune>(() => ({ ...DEFAULT_TUNE, ...tune }), [tune]);
   const rootRef = useRef<HTMLSpanElement>(null);
@@ -217,10 +220,10 @@ export function PixelSurface({
 
   // 分类每个可见像素 → 角色 + 基准色（弹簧目标基于此在亮度上做文章）
   const cells = useMemo<Cells>(() => {
-    const edge = hexToRgb(palette.edge);
-    const hi = hexToRgb(palette.hi);
-    const lo = hexToRgb(palette.lo);
-    const face = hexToRgb(palette.face);
+    const edge = hexToRgb(activePalette.edge);
+    const hi = hexToRgb(activePalette.hi);
+    const lo = hexToRgb(activePalette.lo);
+    const face = hexToRgb(activePalette.face);
     const roleRgb = [edge, hi, lo, face];
     // 按压反转：HI→LO、LO→HI，EDGE/FACE 不变
     const altRgb = [edge, lo, hi, face];
@@ -317,7 +320,7 @@ export function PixelSurface({
       c.kj[i] = cohesive ? 1 : 0.75 + Math.random() * 0.5; // 弹簧刚度抖动
     }
     return c;
-  }, [cols, rows, r, palette, noise, T]);
+  }, [cols, rows, r, activePalette, noise, T]);
 
   // 渲染 cell（引用冻结，状态变化不重建/不重置 fill）
   const rects = useMemo(() => {

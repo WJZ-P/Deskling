@@ -76,7 +76,11 @@ export const PixelInput = forwardRef<HTMLInputElement, PixelInputProps>(function
           padding: "6px 12px",
         }}
       >
-        {leading != null && <Leading aria-hidden>{leading}</Leading>}
+        {leading != null && (
+          <Leading aria-hidden data-variant={variant}>
+            {leading}
+          </Leading>
+        )}
         <Field
           ref={setRef}
           disabled={disabled}
@@ -114,6 +118,10 @@ const Leading = styled.span`
   flex: 0 0 auto;
   color: ${t.colorTextMuted};
   line-height: 1;
+
+  &[data-variant="primary"] {
+    color: ${t.colorTextOnBtnAccent};
+  }
 `;
 
 const Field = styled.input`
@@ -135,6 +143,11 @@ const Field = styled.input`
   &::placeholder {
     color: ${t.colorTextMuted};
     opacity: 0.8;
+  }
+
+  &[data-variant="primary"]::placeholder {
+    color: ${t.colorTextOnBtnAccent};
+    opacity: 1;
   }
 
   &:disabled {

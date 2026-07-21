@@ -1805,30 +1805,30 @@ const BubbleBody = styled.div`
   font: ${t.textMd};
   line-height: 1.55;
   letter-spacing: 0.3px;
-  color: #3a3540;
+  color: ${t.colorText};
   text-align: left;
   white-space: pre-wrap;
   word-break: break-word;
 
   &[data-kind="think"] {
-    color: #55616d;
+    color: ${t.colorTextMuted};
   }
 
   /* 倾听泡：最多三行，草稿更长时把前面的字顶掉（外层自动滚底只露最新） */
   &[data-kind="listen"] {
     max-height: calc(1.55em * 3);
-    color: #55616d;
+    color: ${t.colorTextMuted};
   }
 `;
 
-/* 对话尾巴：朝下的小三角，尖端指向桌宠头顶。色同气泡面（PX.panel.face = 白） */
+/* 对话尾巴：朝下的小三角，尖端指向桌宠头顶；颜色随 PX.panel 面色切换。 */
 const Tail = styled.div`
   width: 0;
   height: 0;
   margin-top: -1px;
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
-  border-top: 8px solid #ffffff;
+  border-top: 8px solid ${t.colorPixelPanelFace};
   filter: drop-shadow(0 2px 0 ${t.colorShadowPixel});
 `;
 
@@ -1858,7 +1858,7 @@ const ListenBars = styled.div`
 
 const ListenBar = styled.div`
   width: 3px;
-  background: #3f9599; /* = PX.well.edge */
+  background: ${t.colorPixelWellEdge};
   box-shadow: 0 1px 0 ${t.colorShadowPixel};
   animation: listen-eq 0.84s steps(3, jump-none) infinite;
 
@@ -1888,7 +1888,8 @@ const ListenBar = styled.div`
 
 /* 倾听占位：草稿还没长出来时先亮一句，颜色再轻一档 */
 const ListenHint = styled.span`
-  color: #7d8a96;
+  color: ${t.colorTextMuted};
+  opacity: 0.78;
   letter-spacing: 1px;
 `;
 
@@ -1962,8 +1963,8 @@ const ThinkTrail = styled.div`
 
 const ThinkDot = styled.div`
   border-radius: 50%;
-  background: #c2e7e8; /* = PX.well.face */
-  border: 2px solid #3f9599; /* = PX.well.edge */
+  background: ${t.colorWell};
+  border: 2px solid ${t.colorPixelWellEdge};
   box-shadow: 0 2px 0 ${t.colorShadowPixel};
   animation: think-bob 1.3s ease-in-out infinite;
 

@@ -208,7 +208,7 @@ const ToolName = styled.code`
 
   /* 裸属性祖先选择器（勿用 \${Head} 组件插值：wyw 生产构建会摇掉其声明致白屏） */
   [data-clickable]:hover & {
-    color: ${t.colorTextOnBtnAccent};
+    color: ${t.colorAccent};
   }
 `;
 

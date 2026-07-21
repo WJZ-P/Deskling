@@ -171,7 +171,7 @@ const ToolBtn = styled.button`
   transition: color 0.12s ease, transform 0.12s ease;
 
   &:hover {
-    color: ${t.colorTextOnBtnAccent};
+    color: ${t.colorAccent};
     transform: translateY(-1px);
   }
   &:active {

@@ -1,6 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
-import type { ThemeMode } from "./styles/theme";
+import { applyTheme, type ThemeMode } from "./styles/theme";
 import type { BackdropStyleId } from "./components/pixel/backdrops";
 
 export type { ThemeMode };
@@ -236,6 +236,19 @@ const STORE_FILE = "settings.json";
 let store: Store | null = null;
 /** 内存缓存：启动时填充，供 UI 同步读取，避免异步导致的主题闪烁 */
 let cache: AppSettings = { ...DEFAULT_SETTINGS };
+const themeSettingListeners = new Set<(theme: ThemeMode) => void>();
+
+/** 让常驻的主窗、聊天窗与透明桌宠窗同步响应主题设置。 */
+export function subscribeThemeSetting(
+  listener: (theme: ThemeMode) => void,
+): () => void {
+  themeSettingListeners.add(listener);
+  return () => themeSettingListeners.delete(listener);
+}
+
+function notifyThemeSetting(theme: ThemeMode): void {
+  for (const listener of themeSettingListeners) listener(theme);
+}
 /** 跨窗口同步监听只绑一次（initSettings 可能被多次调用，如 TrayMenu 聚焦时重读） */
 let crossWindowSyncBound = false;
 
@@ -276,6 +289,13 @@ export async function initSettings(): Promise<AppSettings> {
 function bindCrossWindowSync(s: Store): void {
   if (crossWindowSyncBound) return;
   crossWindowSyncBound = true;
+  void s.onKeyChange<ThemeMode>("theme", (v) => {
+    const next = v ?? DEFAULT_SETTINGS.theme;
+    if (cache.theme === next) return;
+    cache.theme = next;
+    applyTheme(next);
+    notifyThemeSetting(next);
+  });
   void s.onKeyChange<ProviderProfile[]>("providerProfiles", (v) => {
     cache.providerProfiles = v ?? [];
   });
@@ -343,7 +363,9 @@ export async function setSetting<K extends keyof AppSettings>(
   key: K,
   value: AppSettings[K],
 ): Promise<void> {
+  const changed = cache[key] !== value;
   cache[key] = value;
+  if (changed && key === "theme") notifyThemeSetting(value as ThemeMode);
   try {
     if (store) await store.set(key, value);
   } catch (err) {

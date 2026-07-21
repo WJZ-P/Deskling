@@ -1,6 +1,11 @@
 import { memo, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { t } from "../../styles/theme";
-import { PixelFrame, type PixelPalette } from "./PixelFrame";
+import { useAppliedTheme } from "../../hooks/useAppliedTheme";
+import {
+  PixelFrame,
+  resolvePixelPalette,
+  type PixelPalette,
+} from "./PixelFrame";
 import { useElementSize } from "./useElementSize";
 import {
   renderPixelFrameInto,
@@ -78,6 +83,9 @@ export const GLPixelFrame = memo(function GLPixelFrame(props: GLPixelFrameProps)
     sweepPalette,
   } = props;
 
+  const theme = useAppliedTheme();
+  const activePalette = resolvePixelPalette(palette, theme);
+
   const ref = useRef<HTMLCanvasElement>(null);
   const { w, h } = useElementSize(ref, { sizeKey, liveResize });
 
@@ -106,14 +114,14 @@ export const GLPixelFrame = memo(function GLPixelFrame(props: GLPixelFrameProps)
       cols,
       rows,
       variant,
-      palette,
+      palette: activePalette,
       radius,
       noise,
       noiseGranularity,
       noiseSpeed: speed,
       hollow,
     }),
-    [cols, rows, variant, palette, radius, noise, noiseGranularity, speed, hollow],
+    [cols, rows, variant, activePalette, radius, noise, noiseGranularity, speed, hollow],
   );
 
   // 静态渲染：尺寸/参数变化时画一帧（time=0）。游动态由下面的 rAF 覆盖，

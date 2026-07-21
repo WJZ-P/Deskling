@@ -335,6 +335,10 @@ const TriggerText = styled.span`
     color: ${t.colorTextMuted};
     font-weight: normal;
   }
+
+  &[data-placeholder][data-variant="primary"] {
+    color: ${t.colorTextOnBtnAccent};
+  }
 `;
 
 /* 像素小三角：border 三角形，crisp 且随展开平滑旋转 */

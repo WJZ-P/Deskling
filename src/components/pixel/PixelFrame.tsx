@@ -8,6 +8,7 @@ import {
   type ReactElement,
 } from "react";
 import { t } from "../../styles/theme";
+import { useAppliedTheme } from "../../hooks/useAppliedTheme";
 import { useElementSize } from "./useElementSize";
 
 /**
@@ -23,7 +24,7 @@ import { useElementSize } from "./useElementSize";
  * 绝对定位铺满父级（父级需 position: relative），只作背景，不拦截事件。
  */
 
-export interface PixelPalette {
+export interface PixelPaletteColors {
   /** 面色（填充） */
   face: string;
   /** 外描边（最深轮廓） */
@@ -32,6 +33,21 @@ export interface PixelPalette {
   hi: string;
   /** 暗影（凸起时在底/右） */
   lo: string;
+}
+
+/**
+ * 一份像素调色板可以携带深色变体。调用方仍只传一个稳定引用，底层渲染器会
+ * 按当前 WebView 主题选色，避免所有业务组件重复透传 theme。
+ */
+export interface PixelPalette extends PixelPaletteColors {
+  dark?: PixelPaletteColors;
+}
+
+export function resolvePixelPalette(
+  palette: PixelPalette,
+  theme: "light" | "dark",
+): PixelPaletteColors {
+  return theme === "dark" && palette.dark ? palette.dark : palette;
 }
 
 interface PixelFrameProps {
@@ -158,6 +174,11 @@ export const PixelFrame = memo(function PixelFrame({
   sweepPalette,
   sweepActive = false,
 }: PixelFrameProps) {
+  const theme = useAppliedTheme();
+  const activePalette = resolvePixelPalette(palette, theme);
+  const activeSweepPalette = sweepPalette
+    ? resolvePixelPalette(sweepPalette, theme)
+    : undefined;
   const ref = useRef<SVGSVGElement>(null);
   const { w, h } = useElementSize(ref, { sizeKey, liveResize });
   const rid = useId().replace(/:/g, "");
@@ -170,8 +191,8 @@ export const PixelFrame = memo(function PixelFrame({
   const rows = Math.max(4, Math.round(h / pixel));
 
   // 顶左 / 底右 内线颜色（凹陷则对调）
-  const topLeft = variant === "sunken" ? palette.lo : palette.hi;
-  const botRight = variant === "sunken" ? palette.hi : palette.lo;
+  const topLeft = variant === "sunken" ? activePalette.lo : activePalette.hi;
+  const botRight = variant === "sunken" ? activePalette.hi : activePalette.lo;
 
   // 四角切角（曼哈顿阶梯，保留像素硬边）。
   // 双级切角实现「圆角处描边仍连续包住转角」：
@@ -282,7 +303,7 @@ export const PixelFrame = memo(function PixelFrame({
     return blocks;
   }, [cols, rows, noise, noiseGranularity]);
 
-  const [fr, fg, fb] = hexToRgb(palette.face);
+  const [fr, fg, fb] = hexToRgb(activePalette.face);
   const noiseGroupRef = useRef<SVGGElement>(null);
 
   // 首帧 fill：静态用块 seed 定一次随机灰度；动态版会被 RAF 覆盖，这里给个稳定初值
@@ -298,7 +319,7 @@ export const PixelFrame = memo(function PixelFrame({
   // sweepPalette 存在时跳过——此时由下面的「扫描状态机」统一接管着色（含噪声），避免两条循环抢写同一批节点。
   useEffect(() => {
     const g = noiseGroupRef.current;
-    if (!g || noise <= 0 || sweepPalette) return;
+    if (!g || noise <= 0 || activeSweepPalette) return;
     const nodes = g.childNodes as unknown as SVGRectElement[];
 
     // 停机态（noiseSpeed<=0）：主动把每块刷回 seed 决定的静态灰度。
@@ -341,7 +362,7 @@ export const PixelFrame = memo(function PixelFrame({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb, sweepPalette]);
+  }, [noiseBlocks, noise, noiseSpeed, fr, fg, fb, activeSweepPalette]);
 
   // 扫描状态机：sweepPalette + sweepActive 组合出「从两边往中间汇聚」的颜色过渡。
   //  - 一个连续进度 prog（0=全rest，1=全sweep色），每帧朝目标(active?1:0)缓动 →
@@ -354,10 +375,10 @@ export const PixelFrame = memo(function PixelFrame({
   //    不会冒出违和的白边——颜色变化只发生在铺满面区的噪声块上。
   const sweepProgRef = useRef(0);
   useEffect(() => {
-    if (!sweepPalette || noise <= 0) return;
+    if (!activeSweepPalette || noise <= 0) return;
     const g = noiseGroupRef.current;
     if (!g) return;
-    const [sr, sg, sb] = hexToRgb(sweepPalette.face);
+    const [sr, sg, sb] = hexToRgb(activeSweepPalette.face);
     const halfCols = Math.max(1, (cols - 2) / 2);
     const EASE = 4.5; // 进度缓动速度系数（越大越快趋近目标）
     const BAND = 0.5; // 每块激活过渡带宽度（占 prog 的比例，越大越柔越重叠）
@@ -408,7 +429,7 @@ export const PixelFrame = memo(function PixelFrame({
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [noiseBlocks, sweepPalette, sweepActive, noiseSpeed, noise, fr, fg, fb, cols]);
+  }, [noiseBlocks, activeSweepPalette, sweepActive, noiseSpeed, noise, fr, fg, fb, cols]);
 
   return (
     <svg
@@ -465,7 +486,7 @@ export const PixelFrame = memo(function PixelFrame({
       {hollow ? (
         /* 空心框：外描边整块 + 内斜角，套 hollowMask 只留一圈环 */
         <g mask={`url(#${hollowMaskId})`}>
-          <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
+          <rect x={0} y={0} width={cols} height={rows} style={asFill(activePalette.edge)} />
           {variant !== "flat" && (
             <>
               {/* 顶左内斜角（在外描边内侧 1px 环上） */}
@@ -480,11 +501,17 @@ export const PixelFrame = memo(function PixelFrame({
       ) : (
         <g mask={`url(#${maskId})`}>
           {/* 外描边（整块，圆角外形由 outerCut 决定） */}
-          <rect x={0} y={0} width={cols} height={rows} style={asFill(palette.edge)} />
+          <rect x={0} y={0} width={cols} height={rows} style={asFill(activePalette.edge)} />
           {/* 面色 + 铺底 + 内线：再套 faceMask 多缩一档，使转角处露出连续描边 */}
           <g mask={`url(#${faceMaskId})`}>
             {/* 面色 */}
-            <rect x={1} y={1} width={cols - 2} height={rows - 2} style={asFill(palette.face)} />
+            <rect
+              x={1}
+              y={1}
+              width={cols - 2}
+              height={rows - 2}
+              style={asFill(activePalette.face)}
+            />
             {/* 底噪（按块灰度盖在面色上）；noiseSpeed>0 时由 RAF 逐帧改 fill 做慢速动态变化 */}
             <g ref={noiseGroupRef}>{noiseRects}</g>
             {/* 抖动纹理 */}
