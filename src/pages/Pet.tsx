@@ -19,7 +19,7 @@ import { getPetProfiles, getSetting } from "../settings";
 
 /**
  * 桌宠页：桌宠展示栏（图标卡，点击拉起人设面板）+ 当前桌宠信息大卡。
- * 名字/头像来自桌宠档案（settings.petProfiles）；
+ * 名字/头像来自桌宠包默认值与 settings.petInstances 用户覆盖项的解析结果；
  * 状态数值仍是占位，后续再接真实状态 / TTS / 互动。
  */
 

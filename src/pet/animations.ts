@@ -196,17 +196,33 @@ export const ANIMS = {
 
 /** 桌宠状态：键即登记表的键（状态 ⇄ 动画组一一对应） */
 export type PetState = keyof typeof ANIMS;
+export type AnimRegistry = Record<PetState, AnimDef[]>;
+
+/** 外部事件携带的是普通字符串，进入共享状态机前统一按语义状态表校验。 */
+export function isPetState(state: string): state is PetState {
+  return Object.prototype.hasOwnProperty.call(ANIMS, state);
+}
 
 /**
  * 动画播放管理器：持有登记表，负责状态合法性判断与进入状态时的变体抽取。
  * 播放侧用 useMemo 把 pick 结果咬死在状态上，保证段中不换变体。
  */
 export class PetAnimManager {
-  constructor(private readonly registry: Record<string, AnimDef[]> = ANIMS) {}
+  constructor(private registry: Record<string, AnimDef[]> = ANIMS) {}
+
+  /** 切换桌宠实例时原子替换整套动画登记表。 */
+  setRegistry(registry: AnimRegistry): void {
+    this.registry = registry;
+  }
+
+  /** 供桌宠窗预解码当前资源包的所有帧带。 */
+  definitions(): readonly AnimDef[][] {
+    return Object.values(this.registry);
+  }
 
   /** 该状态是否已登记（pet:play 事件与 next 跳转的合法性检查） */
   has(state: string): state is PetState {
-    return state in this.registry;
+    return Boolean(this.registry[state]?.length);
   }
 
   /** 进入状态时抽一套变体：单变体直取，多变体均匀随机 */

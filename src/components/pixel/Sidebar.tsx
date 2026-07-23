@@ -12,6 +12,7 @@ import {
   InfoIcon,
   PetIcon,
   SettingsIcon,
+  TasksIcon,
 } from "../icons";
 
 /* ============ 侧边栏可调参数喵（改这里即可调手感/尺寸/留白）============ */
@@ -64,7 +65,7 @@ const NAV_TUNE: Partial<SurfaceTune> = {
 /* ============================================================ */
 
 /** 主面板的可导航区域标识 */
-export type SectionId = "home" | "pet" | "settings" | "debug" | "about";
+export type SectionId = "home" | "pet" | "tasks" | "settings" | "debug" | "about";
 
 interface NavItemDef {
   id: SectionId;
@@ -76,6 +77,7 @@ interface NavItemDef {
 const PRIMARY: NavItemDef[] = [
   { id: "home", label: "主页", Icon: HomeIcon },
   { id: "pet", label: "桌宠", Icon: PetIcon },
+  { id: "tasks", label: "计划", Icon: TasksIcon },
   { id: "settings", label: "设置", Icon: SettingsIcon },
 ];
 

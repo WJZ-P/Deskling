@@ -534,9 +534,10 @@ async fn run_subagent(
     let sub_system = format!(
         "你是一个子 agent，被主 agent 指派独立完成一个子任务。你看不到主对话上下文，\
          只有下面这个任务说明。请自主使用工具多步完成它，完成后用一段清晰的文字给出最终\
-         结论/产出——这段文字会作为结果回给主 agent。不要再调用 subagent 工具。\n\n{}\n\n{}\n\n{}",
+         结论/产出——这段文字会作为结果回给主 agent。不要再调用 subagent 工具。\n\n{}\n\n{}\n\n{}\n\n{}",
         skills::system_prompt_fragment(skill_registry).unwrap_or_default(),
         crate::memory::prompt_fragment().unwrap_or_default(),
+        crate::scheduled_tasks::prompt_fragment(),
         TOOL_DISCIPLINE
     );
 
@@ -1491,6 +1492,13 @@ pub async fn provider_chat(
         }),
         None => system,
     };
+
+    // 真实本机时间 + 定时任务工具纪律：模型处理“半小时后/明早”时不能靠猜。
+    let clock = crate::scheduled_tasks::prompt_fragment();
+    let system = Some(match system {
+        Some(s) => format!("{s}\n\n{clock}"),
+        None => clock,
+    });
 
     // 工具调用纪律（恒注入）：跨轮历史会把过往工具调用压成「[工具调用记录 …]」
     // 纯文本（见前端 toHistory），模型见样学样、在正文里手写这个格式冒充调用

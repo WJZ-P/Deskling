@@ -2,6 +2,12 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
 import { applyTheme, type ThemeMode } from "./styles/theme";
 import type { BackdropStyleId } from "./components/pixel/backdrops";
+import {
+  BUILTIN_XUEBAO_PACKAGE_ID,
+  getPetPackage,
+  getPetPackagePreview,
+  type PetAppearanceType,
+} from "./pet/packages";
 
 export type { ThemeMode };
 
@@ -92,14 +98,29 @@ export const DEFAULT_PET_VOICE: PetVoice = {
   voiceId: 0,
 };
 
-/** 单个桌宠档案：桌宠页展示栏卡片 + 人设设置面板的数据源 */
+/** 用户安装出的桌宠实例：包资源只读，所有个人修改单独存在 override 字段。 */
+export interface PetInstance {
+  id: string;
+  packageId: string;
+  nameOverride?: string;
+  promptOverride?: string;
+  voiceOverride?: PetVoice;
+  /** 旧版/丢包时保留原预览，不会因为迁移而突然换成别的桌宠。 */
+  previewOverride?: string;
+}
+
+/** 给现有 UI/对话层使用的解析后档案，不直接整项持久化。 */
 export interface PetProfile {
   id: string;
+  /** 此实例引用的不可变资源包。 */
+  packageId: string;
+  /** 从资源包派生的渲染器类型，不单独持久化，避免与 packageId 指向的包冲突。 */
+  appearanceType: PetAppearanceType;
   /** 桌宠名字（展示栏悬停小签 / 桌宠页大卡标题） */
   name: string;
   /** 人设 prompt：作为对话的 system prompt 注入（设置面板可编辑） */
   prompt: string;
-  /** 精灵图路径（public 下，主窗/桌宠窗通用） */
+  /** 展示预览 URL（资源包 asset URL；后端不可用时可回退 public 路径） */
   sprite: string;
   /** 嗓音绑定（人设面板选择）：缺省用 DEFAULT_PET_VOICE，packId 空串 = 静音 */
   voice?: PetVoice;
@@ -113,10 +134,21 @@ export const DEFAULT_PET_PROMPT = `你是「雪豹」，一只住在主人桌面
 【干活】你有真实的工具能力（读写文件、执行命令）：主人求助时认真干活，边做边简单说明；闲聊时轻松俏皮。
 【边界】不要自称某个具体的大模型或厂商，你就是雪豹。`;
 
-/** 内置桌宠：雪豹（首次启动的默认档案） */
-const DEFAULT_PETS: PetProfile[] = [
-  { id: "xuebao", name: "雪豹", prompt: DEFAULT_PET_PROMPT, sprite: "/pet/xuebao.png" },
+/** 内置桌宠实例：只引用包，不复制包内的人设/资源。 */
+const DEFAULT_PET_INSTANCES: PetInstance[] = [
+  { id: "xuebao", packageId: BUILTIN_XUEBAO_PACKAGE_ID },
 ];
+
+/** 资源包后端不可用时的兼容档案（纯浏览器预览也能正常显示）。 */
+const FALLBACK_XUEBAO: PetProfile = {
+  id: "xuebao",
+  packageId: BUILTIN_XUEBAO_PACKAGE_ID,
+  appearanceType: "sprite-sheet",
+  name: "雪豹",
+  prompt: DEFAULT_PET_PROMPT,
+  sprite: "/pet/xuebao.png",
+  voice: DEFAULT_PET_VOICE,
+};
 
 /** 桌宠最后一次普通落脚的窗口物理坐标；物理 px 可避免高 DPI 下反复换算漂移。 */
 export interface PetWindowPosition {
@@ -196,8 +228,8 @@ export interface AppSettings {
   petAlwaysOnTop: boolean;
   /** 桌宠最后一次安全落脚位置；null = 首次运行交给系统安排 */
   petPosition: PetWindowPosition | null;
-  /** 桌宠档案列表（桌宠页展示栏；人设 prompt 等都存在档案里） */
-  petProfiles: PetProfile[];
+  /** 已安装桌宠实例：资源来自 packageId，这里只持久化用户覆盖项。 */
+  petInstances: PetInstance[];
   /** 当前桌宠 id（展示栏排最前；对话人设取它的 prompt） */
   activePetId: string;
 }
@@ -227,11 +259,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
   petAutoWalk: true,
   petAlwaysOnTop: false,
   petPosition: null,
-  petProfiles: DEFAULT_PETS,
+  petInstances: DEFAULT_PET_INSTANCES,
   activePetId: "xuebao",
 };
 
 const STORE_FILE = "settings.json";
+const PET_DATA_VERSION_KEY = "petDataVersion";
+const PET_DATA_VERSION = 1;
+
+interface LegacyPetProfile {
+  id?: string;
+  name?: string;
+  prompt?: string;
+  sprite?: string;
+  voice?: PetVoice;
+  packageId?: string;
+}
 
 let store: Store | null = null;
 /** 内存缓存：启动时填充，供 UI 同步读取，避免异步导致的主题闪烁 */
@@ -262,6 +305,7 @@ export async function initSettings(): Promise<AppSettings> {
       autoSave: true,
       defaults: DEFAULT_SETTINGS as unknown as { [key: string]: unknown },
     });
+    await migratePetProfiles(store);
     const loaded: Record<string, unknown> = {};
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[]) {
       const val = await store.get(key);
@@ -276,6 +320,44 @@ export async function initSettings(): Promise<AppSettings> {
     cache = { ...DEFAULT_SETTINGS };
   }
   return cache;
+}
+
+/**
+ * v0 把资源路径、默认人设和用户编辑混在 petProfiles；v1 只保存包引用与覆盖项。
+ * 版本键不放进 defaults，因而可以可靠分辨“新默认值”与“已经完成过迁移”。
+ */
+async function migratePetProfiles(settingsStore: Store): Promise<void> {
+  const version = (await settingsStore.get<number>(PET_DATA_VERSION_KEY)) ?? 0;
+  if (version >= PET_DATA_VERSION) return;
+
+  const legacy = await settingsStore.get<LegacyPetProfile[]>("petProfiles");
+  const migrated =
+    Array.isArray(legacy) && legacy.length > 0
+      ? legacy.map((pet): PetInstance => {
+          const id = pet.id?.trim() || "xuebao";
+          const sprite = pet.sprite || "/pet/xuebao.png";
+          const safeLegacyId =
+            id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+/, "") ||
+            "pet";
+          const isXuebao =
+            id === "xuebao" || sprite.toLowerCase().includes("xuebao");
+          return {
+            id,
+            packageId:
+              pet.packageId ||
+              (isXuebao ? BUILTIN_XUEBAO_PACKAGE_ID : `legacy.${safeLegacyId}`),
+            nameOverride: pet.name || (isXuebao ? "雪豹" : id),
+            promptOverride: pet.prompt ?? (isXuebao ? DEFAULT_PET_PROMPT : ""),
+            voiceOverride: pet.voice ?? DEFAULT_PET_VOICE,
+            previewOverride: sprite,
+          };
+        })
+      : DEFAULT_PET_INSTANCES;
+
+  await settingsStore.set("petInstances", migrated);
+  await settingsStore.set(PET_DATA_VERSION_KEY, PET_DATA_VERSION);
+  // 旧键暂留作一个版本的回滚保险；运行时已不再读取/写入它。多窗口同时启动时
+  // 也不会出现某个窗口刚删旧值、另一个窗口尚未来得及迁移的竞态。
 }
 
 /**
@@ -344,9 +426,9 @@ function bindCrossWindowSync(s: Store): void {
   void s.onKeyChange<boolean>("petAlwaysOnTop", (v) => {
     cache.petAlwaysOnTop = v ?? DEFAULT_SETTINGS.petAlwaysOnTop;
   });
-  // 桌宠档案在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
-  void s.onKeyChange<PetProfile[]>("petProfiles", (v) => {
-    cache.petProfiles = v && v.length > 0 ? v : DEFAULT_SETTINGS.petProfiles;
+  // 桌宠实例在主窗口桌宠页编辑、常驻聊天窗发送时读人设 prompt，同样要跨窗口刷
+  void s.onKeyChange<PetInstance[]>("petInstances", (v) => {
+    cache.petInstances = v && v.length > 0 ? v : DEFAULT_SETTINGS.petInstances;
   });
   void s.onKeyChange<string>("activePetId", (v) => {
     cache.activePetId = v ?? DEFAULT_SETTINGS.activePetId;
@@ -510,27 +592,72 @@ export async function setActiveProvider(id: string): Promise<void> {
 
 // ==================== 桌宠档案操作 ====================
 
-/** 读取全部桌宠档案（内存缓存） */
+function resolvePetInstance(instance: PetInstance): PetProfile {
+  const resourcePackage = getPetPackage(instance.packageId);
+  const packageVoice = resourcePackage?.manifest?.components.voice;
+  const defaultVoice =
+    packageVoice?.enabledByDefault && packageVoice.packId
+      ? {
+          packId: packageVoice.packId,
+          voiceId: packageVoice.voiceId,
+          speed: packageVoice.speed,
+        }
+      : DEFAULT_PET_VOICE;
+  const isBuiltinXuebao = instance.packageId === BUILTIN_XUEBAO_PACKAGE_ID;
+
+  return {
+    id: instance.id,
+    packageId: instance.packageId,
+    appearanceType:
+      resourcePackage?.manifest?.components.appearance.type ?? "sprite-sheet",
+    name:
+      instance.nameOverride ??
+      resourcePackage?.manifest?.name ??
+      (isBuiltinXuebao ? "雪豹" : instance.id),
+    prompt:
+      instance.promptOverride ??
+      resourcePackage?.personaPrompt ??
+      (isBuiltinXuebao ? DEFAULT_PET_PROMPT : ""),
+    sprite:
+      instance.previewOverride ??
+      getPetPackagePreview(instance.packageId) ??
+      (isBuiltinXuebao ? "/pet/xuebao.png" : "/pet/xuebao-preview.png"),
+    voice: instance.voiceOverride ?? defaultVoice,
+  };
+}
+
+/** 读取全部桌宠档案（包默认值 + 用户覆盖项的解析结果） */
 export function getPetProfiles(): PetProfile[] {
-  return cache.petProfiles;
+  return cache.petInstances.map(resolvePetInstance);
 }
 
 /** 当前桌宠（id 失配时回退列表首个，保证总有一只在岗） */
 export function getActivePet(): PetProfile {
+  const profiles = getPetProfiles();
   return (
-    cache.petProfiles.find((p) => p.id === cache.activePetId) ??
-    cache.petProfiles[0] ??
-    DEFAULT_PETS[0]
+    profiles.find((pet) => pet.id === cache.activePetId) ??
+    profiles[0] ??
+    FALLBACK_XUEBAO
   );
 }
 
 /** 局部更新某只桌宠（合并 patch），落盘 */
 export async function updatePetProfile(
   id: string,
-  patch: Partial<Omit<PetProfile, "id">>,
+  patch: Partial<Omit<PetProfile, "id" | "packageId">>,
 ): Promise<void> {
-  const next = cache.petProfiles.map((p) => (p.id === id ? { ...p, ...patch } : p));
-  await setSetting("petProfiles", next);
+  const next = cache.petInstances.map((instance) =>
+    instance.id === id
+      ? {
+          ...instance,
+          ...(patch.name !== undefined ? { nameOverride: patch.name } : {}),
+          ...(patch.prompt !== undefined ? { promptOverride: patch.prompt } : {}),
+          ...(patch.voice !== undefined ? { voiceOverride: patch.voice } : {}),
+          ...(patch.sprite !== undefined ? { previewOverride: patch.sprite } : {}),
+        }
+      : instance,
+  );
+  await setSetting("petInstances", next);
 }
 
 /** 取某只桌宠的有效嗓音：没设置回退默认嗓；显式静音（packId 空串）返回 null */

@@ -7,6 +7,7 @@ import { PetWindow } from "./windows/PetWindow";
 import { ChatWindow } from "./windows/ChatWindow";
 import { initSettings, syncBackendConfig } from "./settings";
 import { initConversations } from "./chat/store";
+import { initPetPackages } from "./pet/packages";
 import { applyTheme } from "./styles/theme";
 import "./styles/theme.css";
 
@@ -23,6 +24,8 @@ async function bootstrap() {
   // 启动时先 await 读取持久化配置（主题等），失败则回退默认浅色
   const settings = await initSettings();
   applyTheme(settings.theme);
+  // 资源包目录必须在任一窗口渲染前就绪：主窗用预览/人设，桌宠窗用动画登记表。
+  await initPetPackages();
   // 把代理 / 音量推给 Rust 侧生效（存前端 store，但要在后端进程起作用）
   void syncBackendConfig();
 

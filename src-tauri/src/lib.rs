@@ -8,7 +8,9 @@ static CLIPBOARD_IMAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 mod memory;
+mod pet_packages;
 mod provider;
+mod scheduled_tasks;
 mod skills;
 mod stt;
 mod tools;
@@ -327,6 +329,8 @@ pub fn run() {
             // 长期记忆：加载 app_data_dir/memory.json（remember 工具写、
             // provider 注入 system prompt、设置页管理、变更广播刷新 UI）
             memory::init(app.handle().clone());
+            // AI 计划任务：独立常驻调度线程；到点后交给隐藏聊天窗创建真实会话执行。
+            scheduled_tasks::init(app.handle().clone());
             Ok(())
         })
         // 默认行为：点 X 不退出，隐藏到系统托盘（真正退出走托盘菜单「退出」）
@@ -351,6 +355,7 @@ pub fn run() {
             image_import_clipboard,
             image_discard_clipboard,
             set_proxy,
+            pet_packages::pet_packages,
             provider::provider_test,
             provider::provider_chat,
             provider::provider_chat_cancel,
@@ -370,7 +375,16 @@ pub fn run() {
             wake::wake_chat_busy,
             memory::memory_list,
             memory::memory_remove,
-            memory::memory_clear
+            memory::memory_clear,
+            scheduled_tasks::scheduled_task_list,
+            scheduled_tasks::scheduled_task_create,
+            scheduled_tasks::scheduled_task_update,
+            scheduled_tasks::scheduled_task_set_enabled,
+            scheduled_tasks::scheduled_task_remove,
+            scheduled_tasks::scheduled_task_run_now,
+            scheduled_tasks::scheduled_task_run_started,
+            scheduled_tasks::scheduled_task_run_phase,
+            scheduled_tasks::scheduled_task_run_finished
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

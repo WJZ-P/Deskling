@@ -60,13 +60,22 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$RESOURCE/resources/pets/**", "$APPDATA/petpacks/**"]
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/stt/", "resources/tts/", "resources/skills/"],
+    "resources": [
+      "resources/stt/",
+      "resources/tts/",
+      "resources/skills/",
+      "resources/pets/"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

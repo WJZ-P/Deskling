@@ -31,6 +31,13 @@ import type {
   MessageSegment,
   ToolCallSegment,
 } from "../chat/types";
+import {
+  finishScheduledTaskRun,
+  listScheduledTasks,
+  markScheduledTaskRunStarted,
+  setScheduledTaskRunWaiting,
+  type ScheduledTaskRunRequest,
+} from "../scheduledTasks";
 
 /**
  * AI 对话窗口（label="chat"）：自绘标题栏 + 左历史栏 + 右主对话区。
@@ -74,6 +81,53 @@ type PetFeedbackState = "success" | "error";
 interface PetToolActivity {
   workState: PetWorkState;
   pendingApproval: boolean;
+}
+
+interface StreamCompletion {
+  success: boolean;
+  summary: string;
+}
+
+interface ScheduledRunContext {
+  taskId: number;
+  runId: number;
+}
+
+interface StreamRunOptions {
+  /** 单次计划任务独立控制无人值守权限，不继承普通聊天的全局开关。 */
+  autoApprove?: boolean;
+  /** 后台运行不播 TTS；文字和工具状态仍会正常落进真实会话。 */
+  background?: boolean;
+  scheduled?: ScheduledRunContext;
+  onFinished?: (result: StreamCompletion) => void;
+}
+
+interface LiveRequest {
+  convId: string;
+  replyId: string;
+  scheduled?: ScheduledRunContext;
+  onFinished?: (result: StreamCompletion) => void;
+}
+
+function scheduledRunPrompt(request: ScheduledTaskRunRequest): string {
+  const { task, run } = request;
+  const resources =
+    task.relatedFiles.length > 0
+      ? task.relatedFiles.map((path) => `- ${path}`).join("\n")
+      : "- （没有登记关联资源）";
+  return `[AI 计划任务自动运行]
+任务：${task.title}
+任务 ID：${task.id}；运行 ID：${run.id}
+计划：${task.schedule}
+工作目录：${task.workingDirectory || "（应用当前目录）"}
+
+执行指令：
+${task.instruction}
+
+关联资源：
+${resources}
+
+请把这当作一次真实执行，不要只给步骤建议：先检查关联资源，再完成任务并验证结果。调用 run_command 时使用上面的工作目录作为 cwd。最后简洁汇报本次结果、修改或生成的文件、失败项。除非执行指令明确要求，否则不要在本轮递归创建新的计划任务。`;
 }
 
 // web 搜索类工具名判定（如将来的内置 web_search 工具）：命中则桌宠举放大镜端详
@@ -352,7 +406,21 @@ export function ChatWindow() {
   const streamRef = useRef<ChatStream | null>(null);
   // 在途流的落点（会话 id + 回复消息 id）：审批回调 / 收尾清扫都按它定位，
   // 不依赖 activeId——用户中途切到别的会话，审批与收尾仍要回填到发起时那条。
-  const liveRef = useRef<{ convId: string; replyId: string } | null>(null);
+  const liveRef = useRef<LiveRequest | null>(null);
+  // ChatWindow 只有一条 provider stream：普通聊天占用时，到点任务先进入本地 FIFO；
+  // 当前轮完成/取消后 drain 再逐个创建会话，避免多个任务把工具事件串到一起。
+  const scheduledQueueRef = useRef<ScheduledTaskRunRequest[]>([]);
+  const scheduledClaimRef = useRef(false);
+  const scheduledClaimKeyRef = useRef<string | null>(null);
+  const drainScheduledQueueRef = useRef<() => void>(() => {});
+
+  const finishDetachedLive = useCallback(
+    (live: LiveRequest | null, summary: string) => {
+      live?.onFinished?.({ success: false, summary });
+      window.queueMicrotask(() => drainScheduledQueueRef.current());
+    },
+    [],
+  );
 
   // 待发送图片附件（本地路径）：拖进对话窗 / 投喂桌宠的图都落这，随下一条
   // 消息（键盘 / 语音唤醒直发都算）一并发出并清空。ref 与 state 同步更新——
@@ -442,9 +510,11 @@ export function ChatWindow() {
         window.clearTimeout(beepTailRef.current);
         void invoke("tts_stop").catch(() => {});
         speechRef.current = null;
+        const live = liveRef.current;
         streamRef.current.cancel();
         streamRef.current = null;
         liveRef.current = null;
+        finishDetachedLive(live, "计划任务会话在运行中被删除");
         setTypingConv(null);
         setSending(false);
         setStreamingId(null);
@@ -465,7 +535,7 @@ export function ChatWindow() {
     },
     // 依赖为空 = 引用稳定：在途流归属看 liveRef、选中回退用函数式 setActiveId，
     // 都不读 activeId。稳定引用让 HistoryCard 的 memo 不被删除回调击穿。
-    [],
+    [finishDetachedLive],
   );
 
   // 删除单条消息（气泡悬浮工具栏）：按 (convId, msgId) 精确定位——老数据存在
@@ -653,16 +723,20 @@ export function ChatWindow() {
    * 前置条件：目标会话的 messages 已更新到位，history 是要发给后端的完整轮次。
    * 未配置 provider 时落一条提示消息收场。
    */
-  const startStream = useCallback((convId: string, history: ChatTurn[]) => {
+  const startStream = useCallback(
+    (convId: string, history: ChatTurn[], options: StreamRunOptions = {}) => {
     // 没配置 provider：直接以一条助手提示收场，不发请求
     const profile = getActiveProfile();
     if (!profile) {
+      const message = "还没配置 AI 服务商喵～去「设置 → AI 服务」加一个并选中，就能聊啦。";
       appendAssistantText(
         setConversations,
         convId,
         nextId(),
-        "还没配置 AI 服务商喵～去「设置 → AI 服务」加一个并选中，就能聊啦。",
+        message,
       );
+      options.onFinished?.({ success: false, summary: message });
+      window.queueMicrotask(() => drainScheduledQueueRef.current());
       return;
     }
 
@@ -675,7 +749,12 @@ export function ChatWindow() {
     setSending(true);
     setTypingConv(convId);
     setStreamingId(replyId);
-    liveRef.current = { convId, replyId };
+    liveRef.current = {
+      convId,
+      replyId,
+      scheduled: options.scheduled,
+      onFinished: options.onFinished,
+    };
     // 回复在途：挂起语音唤醒检测（答完 finish 恢复），别让雪豹边答边被叫醒
     void invoke("wake_chat_busy", { busy: true }).catch(() => {});
     petPlay("thinking"); // 等首包：桌宠托腮想
@@ -687,7 +766,7 @@ export function ChatWindow() {
     // 桌宠不在桌面上则本轮静音（下面异步 pet_visible 兜底撤销）
     window.clearTimeout(beepTailRef.current);
     void invoke("tts_stop").catch(() => {});
-    const voice = getPetVoice(getActivePet());
+    const voice = options.background ? null : getPetVoice(getActivePet());
     const engine = voice ? engineByPackRef.current.get(voice.packId) : undefined;
     if (voice && engine === "beep") {
       speechRef.current = { mode: "beep", voice, armed: false, started: false };
@@ -717,12 +796,13 @@ export function ChatWindow() {
     // 本轮收尾闭包：正常/出错/暂停共用，幂等收拢 sending/typing/streamingId。
     // 顺手把残留的 pending/running 工具段扫成 error（正常结束时全已定稿，是空转；
     // 取消触发的 Done 则靠它收拢没答完的审批段，不留孤儿转圈）。
-    const finish = () => {
+    const finish = (success = true, failure = "") => {
       // 轮次守卫：本地取消/编辑重发/删会话的路径已各自收拾过现场并清掉（或
       // 换掉）liveRef，此后 Rust 迟到的 Done 再触发 finish 必须完全空转——
       // 否则会清掉新一轮的 liveRef/sending、误发 wake_chat_busy(false) 和
       // reply 状态事件（取消的轮/秒错的轮不该记一次「回复收尾」）
       if (liveRef.current?.replyId !== replyId) return;
+      const finishedLive = liveRef.current;
       setTypingConv(null);
       setSending(false);
       setStreamingId(null);
@@ -755,6 +835,11 @@ export function ChatWindow() {
         status: "error",
         detail: "已取消",
       });
+      const summary = success
+        ? replyTextRef.current.trim() || "AI 已完成本轮执行（没有最终文本输出）"
+        : failure || replyTextRef.current.trim() || "AI 计划任务执行失败";
+      finishedLive.onFinished?.({ success, summary });
+      window.queueMicrotask(() => drainScheduledQueueRef.current());
     };
 
     const handle = streamChat(
@@ -829,6 +914,16 @@ export function ChatWindow() {
             needsApproval: call.needsApproval,
             status: call.needsApproval ? "pending" : "running",
           });
+          if (call.needsApproval && options.scheduled) {
+            void setScheduledTaskRunWaiting(
+              options.scheduled.taskId,
+              options.scheduled.runId,
+              true,
+            ).catch(() => {});
+            // 无人值守权限关闭时，危险工具仍遵守原审批链；把真实会话拉出来让用户决定。
+            setActiveId(convId);
+            void invoke("chat_show").catch(() => {});
+          }
         },
         // 工具执行收尾：按 id 回填状态与结果预览
         onToolEnd: (end) => {
@@ -844,15 +939,22 @@ export function ChatWindow() {
             status: end.status,
             detail: end.detail,
           });
+          if (options.scheduled && !remaining.some((tool) => tool.pendingApproval)) {
+            void setScheduledTaskRunWaiting(
+              options.scheduled.taskId,
+              options.scheduled.runId,
+              false,
+            ).catch(() => {});
+          }
         },
         // 子 agent 进展：逐行追加进那张 subagent 工具卡的子步骤日志（不驱动桌宠）
         onSubagentStep: (s) => {
           if (liveRef.current?.replyId !== replyId) return; // 迟到事件守卫
           appendSubagentStep(setConversations, convId, replyId, s.id, s.line);
         },
-        onDone: finish, // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
+        onDone: () => finish(true), // 收尾：末段动画走完后 StreamingText 自动塌成纯文本
         onError: (message) => {
-          finish();
+          finish(false, message);
           petFeedback("error", "idle");
           // 把错误落成助手气泡（已开始的续在同一条，否则新起一条）
           appendDelta(
@@ -864,7 +966,7 @@ export function ChatWindow() {
         },
       },
       // 免审批开关：发送那一刻读取（跨窗口 onKeyChange 已保证缓存新鲜）
-      getSetting("autoApproveTools"),
+      options.autoApprove ?? getSetting("autoApproveTools"),
       // 深度思考开关：输入框操作栏切换写入，发送那一刻读取（同窗口缓存即时可见）
       getSetting("chatThinking"),
       // 工具并发上限：一轮多个工具调用最多同时跑几个（设置页可调；Rust 侧再 clamp）
@@ -874,7 +976,9 @@ export function ChatWindow() {
       getActivePet().prompt.trim() || null,
     );
     streamRef.current = handle;
-  }, [petFeedback, petPlay, petSay, speakSentences]);
+    },
+    [petFeedback, petPlay, petSay, speakSentences],
+  );
 
   // 组一条用户消息：待发图片附件在前、文本殿后（纯图无文字则只有图片段）
   const buildUserMsg = useCallback(
@@ -913,7 +1017,7 @@ export function ChatWindow() {
     (text: string, voice: boolean) => {
       // 在途守卫：正生成时不叠发（键盘路径 UI 已挡，这里兜语音/投喂与
       // stale-props 竞态——不 cancel 旧流硬换新流，事件会串轮）
-      if (liveRef.current) return;
+      if (liveRef.current || scheduledClaimRef.current) return;
       // 待发图片附件一并带走：主人拖图给雪豹后再用语音说「看看这张图」，
       // 图和话在同一轮里到达模型——这就是投喂 → 语音的联动线
       const images = takePendingImages();
@@ -962,6 +1066,121 @@ export function ChatWindow() {
     },
     [buildUserMsg, takePendingImages],
   );
+
+  const launchScheduledRun = useCallback(
+    async (request: ScheduledTaskRunRequest) => {
+      if (liveRef.current || scheduledClaimRef.current) {
+        scheduledQueueRef.current.unshift(request);
+        return;
+      }
+      scheduledClaimRef.current = true;
+      scheduledClaimKeyRef.current = `${request.task.id}:${request.run.id}`;
+      const conversationId = nextId();
+      try {
+        await markScheduledTaskRunStarted(
+          request.task.id,
+          request.run.id,
+          conversationId,
+        );
+      } catch (error) {
+        console.warn("计划任务运行认领失败:", error);
+        scheduledClaimRef.current = false;
+        scheduledClaimKeyRef.current = null;
+        window.queueMicrotask(() => drainScheduledQueueRef.current());
+        return;
+      }
+
+      const text = scheduledRunPrompt(request);
+      const userMessage = buildUserMsg(text, [], false);
+      const conversation: Conversation = {
+        id: conversationId,
+        title: `计划 · ${request.task.title}`.slice(0, 24),
+        preview: request.task.instruction.slice(0, 40),
+        updatedAt: userMessage.ts,
+        messages: [userMessage],
+        source: "scheduledTask",
+        scheduledTaskId: request.task.id,
+        scheduledRunId: request.run.id,
+      };
+      setConversations((previous) => [conversation, ...previous]);
+      scheduledClaimRef.current = false;
+      scheduledClaimKeyRef.current = null;
+      startStreamRef.current(conversation.id, toHistory(conversation.messages), {
+        autoApprove: request.task.autoApprove,
+        background: true,
+        scheduled: { taskId: request.task.id, runId: request.run.id },
+        onFinished: ({ success, summary }) => {
+          void finishScheduledTaskRun(
+            request.task.id,
+            request.run.id,
+            success,
+            summary,
+          ).catch((error) => console.warn("计划任务结果回写失败:", error));
+        },
+      });
+    },
+    [buildUserMsg],
+  );
+
+  const drainScheduledQueue = useCallback(() => {
+    if (liveRef.current || scheduledClaimRef.current) return;
+    const request = scheduledQueueRef.current.shift();
+    if (request) void launchScheduledRun(request);
+  }, [launchScheduledRun]);
+  drainScheduledQueueRef.current = drainScheduledQueue;
+
+  useEffect(() => {
+    let disposed = false;
+    const enqueue = (request: ScheduledTaskRunRequest) => {
+      if (disposed) return;
+      const key = `${request.task.id}:${request.run.id}`;
+      const sameRun = (queued: ScheduledTaskRunRequest) =>
+        queued.task.id === request.task.id && queued.run.id === request.run.id;
+      if (
+        scheduledClaimKeyRef.current === key ||
+        (liveRef.current?.scheduled?.taskId === request.task.id &&
+          liveRef.current.scheduled.runId === request.run.id) ||
+        scheduledQueueRef.current.some(sameRun)
+      ) {
+        return;
+      }
+      scheduledQueueRef.current.push(request);
+      drainScheduledQueueRef.current();
+    };
+    const runRequests = listen<ScheduledTaskRunRequest>(
+      "scheduled-task:run-request",
+      (event) => enqueue(event.payload),
+    );
+    // The scheduler event is intentionally lightweight and can be emitted while
+    // this hidden WebView is booting/reloading. Once the listener is attached,
+    // reconcile persisted queued runs so no real task depends on event timing.
+    void runRequests
+      .then(() => listScheduledTasks())
+      .then((tasks) => {
+        for (const task of tasks) {
+          for (const run of task.runs) {
+            if (run.status === "queued") enqueue({ task, run });
+          }
+        }
+      })
+      .catch((error) => console.warn("恢复计划任务运行队列失败:", error));
+    const openConversation = listen<{ conversationId?: string }>(
+      "scheduled-task:open-conversation",
+      (event) => {
+        const conversationId = event.payload?.conversationId;
+        if (!conversationId) return;
+        if (conversationsRef.current.some((item) => item.id === conversationId)) {
+          setActiveId(conversationId);
+        }
+        void invoke("chat_show").catch(() => {});
+      },
+    );
+    return () => {
+      disposed = true;
+      void runRequests.then((stop) => stop());
+      void openConversation.then((stop) => stop());
+    };
+  }, [drainScheduledQueue]);
 
   // 键盘发送也走 directSend：老路径靠「setConversations updater 副作用取
   // history」，仅在 React 急切求值时成立——消费附件的 takePendingImages 会先
@@ -1184,6 +1403,7 @@ export function ChatWindow() {
         streamRef.current = null;
         const live = liveRef.current;
         liveRef.current = null;
+        finishDetachedLive(live, "计划任务会话在运行中被编辑并中断");
         if (live) {
           updateToolSegments(setConversations, live.convId, live.replyId, null, {
             status: "error",
@@ -1236,7 +1456,7 @@ export function ChatWindow() {
         startStream(convId, history);
       }
     },
-    [startStream],
+    [finishDetachedLive, startStream],
   );
 
   // 暂停：请求后端终止当前流，并立即本地收尾。已产出的部分回复原样保留在气泡里，
@@ -1252,6 +1472,7 @@ export function ChatWindow() {
     streamRef.current = null;
     const live = liveRef.current;
     liveRef.current = null;
+    finishDetachedLive(live, "计划任务被用户手动停止");
     toolPetStateRef.current.clear();
     if (live) {
       updateToolSegments(setConversations, live.convId, live.replyId, null, {
@@ -1263,7 +1484,7 @@ export function ChatWindow() {
     setSending(false);
     setStreamingId(null);
     petPlay("idle");
-  }, [petPlay]);
+  }, [finishDetachedLive, petPlay]);
 
   // 审批作答：放行/拒绝一次 pending 的工具调用，唤醒 Rust 侧阻塞等待的 agent loop。
   // 放行做乐观更新 pending → running（Rust 对「开始执行」不再发事件，不更 UI 会一直显示待审批）；
@@ -1281,6 +1502,13 @@ export function ChatWindow() {
         ? "waitingApproval"
         : (activity?.workState ?? "typing");
       petPlay(next);
+      if (live.scheduled && !remaining.some((tool) => tool.pendingApproval)) {
+        void setScheduledTaskRunWaiting(
+          live.scheduled.taskId,
+          live.scheduled.runId,
+          false,
+        ).catch(() => {});
+      }
       updateToolSegments(setConversations, live.convId, live.replyId, toolCallId, {
         status: "running",
       });
@@ -1316,7 +1544,7 @@ export function ChatWindow() {
                 <ConvHeader>
                   <ConvTitle>{active.title}</ConvTitle>
                   <ConvMeta>
-                    {active.messages.length} 条消息 · 可操作整台电脑
+                    {active.messages.length} 条消息 · {active.source === "scheduledTask" ? "AI 计划自动运行" : "可操作整台电脑"}
                   </ConvMeta>
                 </ConvHeader>
                 <ListArea>

@@ -88,6 +88,10 @@ export interface Conversation {
   /** 最近活动时间戳（ms），用于列表排序与显示 */
   updatedAt: number;
   messages: ChatMessage[];
+  /** 计划任务每次运行也创建真实会话；这两个字段把运行记录与会话双向关联。 */
+  source?: "user" | "scheduledTask";
+  scheduledTaskId?: number;
+  scheduledRunId?: number;
 }
 
 /** 把 ms 时间戳格式化成 HH:MM（本地时区，补零） */

@@ -1,8 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type PointerEvent,
@@ -22,8 +20,17 @@ import { t } from "../styles/theme";
 import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
 import { StreamingText } from "../chat/components/StreamingText";
-import { getSetting, setSetting } from "../settings";
-import { ANIMS, PetAnimManager, type AnimDef, type PetState } from "../pet/animations";
+import { getActivePet, getSetting, setSetting } from "../settings";
+import { isPetState, type PetState } from "../pet/animations";
+import {
+  createFallbackSpriteRuntime,
+  getPetAppearanceRuntime,
+} from "../pet/packages";
+import {
+  PetRenderer,
+  type PetAnimationEnd,
+  type PetBodyRect,
+} from "../pet/renderers/PetRenderer";
 
 /**
  * 桌宠窗口（label="pet"）：透明 / 无边框 / 置顶 / 不上任务栏，按住可拖动。
@@ -55,10 +62,6 @@ import { ANIMS, PetAnimManager, type AnimDef, type PetState } from "../pet/anima
 // ---- 顶层可调常量 ----
 /** 桌宠整体透明度 0~1：作用于整个舞台，调小就是「半透明幽灵猫」喵～ */
 const PET_OPACITY = 1;
-/** 源图边长 px（帧带每帧 32×32） */
-const SPRITE_SIZE = 32;
-/** 整数放大倍数：32×6=192，在 240 窗口里给浮动留出余量 */
-const SPRITE_SCALE = 6;
 /** 按下后移动超过这个曼哈顿距离（px）判定为拖窗，原地松手判定为摸摸 */
 const DRAG_THRESHOLD_PX = 4;
 /** 长时间 idle 后统一决定“出去散步”还是“打哈欠睡觉”，避免两个计时器互相抢状态。 */
@@ -118,9 +121,6 @@ const AUTONOMOUS_WALK_RAMP_RATIO = 0.18;
 const AUTONOMOUS_WALK_COOLDOWN_MS = 45_000;
 /** 普通状态稳定这么久后保存位置；过滤动画落位和连续拖动产生的中间坐标。 */
 const POSITION_SAVE_DELAY_MS = 900;
-/** 正常站姿脚底的源图边界：腿画到 y=28，像素边界因此是 y=29。完整帧底 y=32
-    还留了 3px 透明区，底边召回时必须把这段空白沉进任务栏，否则猫会浮空。 */
-const STANDING_FOOT_BOTTOM_PX = 29;
 /** 底部召回共约 1.2s；窗口基线在前 1s 随冒头动作平滑落到脚底位置。 */
 const UNHIDE_DOWN_DOCK_MS = 1_000;
 /** 光标巡逻周期 ms：读全局光标判断在不在交互区，切换整窗穿透。
@@ -306,191 +306,18 @@ function statePolicy(s: PetState): StatePolicy {
   return { priority: 0, interruptible: true };
 }
 
-// 动画登记表（状态 → 帧带变体组）在 src/pet/animations.ts；管理器负责
-// 状态合法性检查 + 进入状态时的变体抽取（如向左走随机抽 w 嘴版/喘气版）
-const ANIM_MANAGER = new PetAnimManager();
-
-/** 桌宠本体命中矩形（32×32 帧内坐标，w/h 含端点） */
-interface BodyRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-// 帧带 src → 本体矩形缓存（帧带静态不变，整个会话每条只真扫一次）
-const bodyRectCache = new Map<string, Promise<BodyRect>>();
-
-// 解码后的 HTMLImageElement 本身也常驻缓存，既避免重复解码，也保证 Canvas
-// drawImage 时拿到的是仍有强引用的、可以同步绘制的图像源。
-const spriteImageCache = new Map<string, HTMLImageElement>();
-const spriteDecodeCache = new Map<string, Promise<HTMLImageElement>>();
-function decodeSprite(src: string): Promise<HTMLImageElement> {
-  const cached = spriteImageCache.get(src);
-  if (cached) return Promise.resolve(cached);
-  let ready = spriteDecodeCache.get(src);
-  if (!ready) {
-    ready = new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.decoding = "sync";
-      img.onload = () => {
-        const finish = () => {
-          spriteImageCache.set(src, img);
-          resolve(img);
-        };
-        if (typeof img.decode === "function") img.decode().then(finish, finish);
-        else finish();
-      };
-      img.onerror = () => reject(new Error(`桌宠帧带加载失败：${src}`));
-      img.src = src;
-    });
-    spriteDecodeCache.set(src, ready);
-  }
-  return ready;
-}
-
-/**
- * 帧动画直接画进持久 Canvas：requestAnimationFrame 与浏览器绘制周期同步，
- * React 只在业务状态变化时重渲染，不再为每一帧重跑整个 PetWindow。
- */
-function useCanvasSpriteAnim(
-  def: AnimDef,
-  canvasRef: { readonly current: HTMLCanvasElement | null },
-  onEnd?: () => void,
-): void {
-  const onEndRef = useRef(onEnd);
-  onEndRef.current = onEnd;
-
-  useLayoutEffect(() => {
-    let alive = true;
-    let raf = 0;
-    let wakeTimer = 0;
-    let lastFrame = -1;
-    let finished = false;
-
-    const start = (image: HTMLImageElement) => {
-      if (!alive) return;
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) return;
-
-      const sequenceLength = Math.max(1, def.sequence.length);
-      const frameMs = 1000 / Math.max(0.001, def.fps);
-      const startedAt = performance.now();
-      ctx.imageSmoothingEnabled = false;
-
-      const drawSequenceIndex = (sequenceIndex: number) => {
-        const candidate = def.sequence[sequenceIndex] ?? 0;
-        const frame = candidate >= 0 && candidate < def.frames ? candidate : 0;
-        // 驻留序列会重复同一帧；时间照走，但 Canvas 无需上传相同像素。
-        if (frame === lastFrame) return;
-        ctx.globalCompositeOperation = "copy";
-        ctx.drawImage(
-          image,
-          frame * SPRITE_SIZE,
-          0,
-          SPRITE_SIZE,
-          SPRITE_SIZE,
-          0,
-          0,
-          SPRITE_SIZE,
-          SPRITE_SIZE,
-        );
-        ctx.globalCompositeOperation = "source-over";
-        lastFrame = frame;
-      };
-
-      // layout effect 内同步落首帧：状态切换后的第一次浏览器 paint 已是新画面。
-      drawSequenceIndex(0);
-      const scheduleNext = () => {
-        if (!alive) return;
-        const now = performance.now();
-        const nextIndex = Math.floor((now - startedAt) / frameMs) + 1;
-        const nextAt = startedAt + nextIndex * frameMs;
-        // 大部分间隔让 timeout 休眠，只在目标时刻前 2ms 交给 rAF 对齐浏览器 paint。
-        const delay = Math.max(0, nextAt - now - 2);
-        wakeTimer = window.setTimeout(() => {
-          if (alive) raf = window.requestAnimationFrame(tick);
-        }, delay);
-      };
-      const tick = (now: number) => {
-        if (!alive) return;
-        const elapsedIndex = Math.floor((now - startedAt) / frameMs);
-        if (!def.loop && elapsedIndex >= sequenceLength) {
-          drawSequenceIndex(sequenceLength - 1);
-          if (!finished) {
-            finished = true;
-            onEndRef.current?.();
-          }
-          return;
-        }
-
-        const sequenceIndex = def.loop
-          ? elapsedIndex % sequenceLength
-          : elapsedIndex;
-        drawSequenceIndex(sequenceIndex);
-        scheduleNext();
-      };
-      scheduleNext();
-    };
-
-    const image = spriteImageCache.get(def.src);
-    if (image) start(image);
-    else void decodeSprite(def.src).then(start).catch((error) => console.warn(error));
-    return () => {
-      alive = false;
-      window.clearTimeout(wakeTimer);
-      window.cancelAnimationFrame(raf);
-    };
-  }, [canvasRef, def]);
-}
-
-/**
- * 扫帧带全帧非透明像素的并集包围盒 = 该状态下桌宠本体的最小命中矩形。
- * 横向折回帧内坐标（x % SPRITE_SIZE）：任一帧在该位置有像素就算体——
- * 换帧时命中区不跳动。逐像素判 alpha 对创意工坊的任意精灵图都适用；
- * 矩形内部残留的透明缺口（耳朵旁的天空这类）不追求剔除，「最小矩形」
- * 即约定精度。解码失败按整帧兜底（宁可多接事件不可点不了）
- */
-function stripBodyRect(src: string): Promise<BodyRect> {
-  let rect = bodyRectCache.get(src);
-  if (!rect) {
-    rect = new Promise<BodyRect>((resolve) => {
-      const full = { x: 0, y: 0, w: SPRITE_SIZE, h: SPRITE_SIZE };
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(full);
-        ctx.drawImage(img, 0, 0);
-        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let x0 = SPRITE_SIZE;
-        let y0 = SPRITE_SIZE;
-        let x1 = -1;
-        let y1 = -1;
-        for (let y = 0; y < canvas.height; y++) {
-          for (let x = 0; x < canvas.width; x++) {
-            if (data[(y * canvas.width + x) * 4 + 3] === 0) continue;
-            const fx = x % SPRITE_SIZE;
-            if (fx < x0) x0 = fx;
-            if (fx > x1) x1 = fx;
-            if (y < y0) y0 = y;
-            if (y > y1) y1 = y;
-          }
-        }
-        resolve(x1 < 0 ? full : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
-      };
-      img.onerror = () => resolve(full);
-      img.src = src;
-    });
-    bodyRectCache.set(src, rect);
-  }
-  return rect;
-}
-
 export function PetWindow() {
+  const [petVisual] = useState(() => {
+    const activePet = getActivePet();
+    const runtime =
+      getPetAppearanceRuntime(activePet.packageId) ??
+      createFallbackSpriteRuntime(activePet.packageId);
+    return {
+      name: activePet.name,
+      runtime,
+    };
+  });
+  const spriteGeometry = petVisual.runtime.geometry;
   // 初始即 entering：启动时从画面底边探头张望再蹦出来，接 greeting 落地挥手
   // 完成整套登场（隐藏启动则悄悄播完落回 idle）
   const [state, setState] = useState<PetState>("entering");
@@ -527,30 +354,65 @@ export function PetWindow() {
 
   // 交互脉冲：每次指针按下 +1，重置入睡倒计时（拖窗不改 state，靠它兜底）
   const [activity, setActivity] = useState(0);
-  // 进入状态时抽定帧带变体（多变体随机），状态不变则整段咬死不换
-  const anim = useMemo(() => ANIM_MANAGER.pick(state), [state]);
-  // 逻辑状态可以立即仲裁；视觉帧带只在新图片解码完成后原子替换。加载期间沿用
-  // 上一条动画（一次性动画播完则停在末帧），桌面上始终至少有一帧猫。
-  const [rendered, setRendered] = useState(() => ({ state, def: anim }));
-  useEffect(() => {
-    if (rendered.state === state && rendered.def === anim) return;
-    let alive = true;
-    void decodeSprite(anim.src)
-      .then(() => {
-        if (alive) setRendered({ state, def: anim });
-      })
-      .catch((error) => console.warn(error));
-    return () => {
-      alive = false;
-    };
-  }, [anim, rendered, state]);
+  // 渲染器只上报“已经真正显示的状态”和命中区域；窗口控制器不读取具体引擎。
+  const [renderedState, setRenderedState] = useState<PetState>(state);
+  const [bodyRect, setBodyRect] = useState<PetBodyRect | null>(null);
+  const rendererFrameRef = useRef<HTMLDivElement>(null);
 
-  // 小帧带总量很小，窗口挂载后一次性预解码。上面的原子替换仍保留作首次加载兜底。
-  useEffect(() => {
-    for (const defs of Object.values(ANIMS)) {
-      for (const def of defs) void decodeSprite(def.src).catch((error) => console.warn(error));
-    }
-  }, []);
+  const handleAnimationEnd = useCallback(
+    ({ state: completedState, next: declared }: PetAnimationEnd) => {
+      // 旧引擎画面尚在收尾时逻辑态可能已经换走，不能替新动作执行 onEnd。
+      if (stateRef.current !== completedState) return;
+      const current = completedState;
+      const isRecall = isUnhideState(current);
+
+      if (isRecall || isSettlingState(current)) {
+        const pending = pendingStateRef.current;
+        pendingStateRef.current = null;
+        const queued = queuedStateRef.current;
+        queuedStateRef.current = null;
+        const target =
+          queued && isPetState(queued)
+            ? queued
+            : pending && isPetState(pending)
+              ? pending
+              : convStateRef.current;
+        requestState(target !== "idle" ? target : "idle", {
+          force: true,
+          queueIfBlocked: false,
+        });
+        return;
+      }
+
+      // 正在躲边时被对话叫住：先完整离场，再从同侧召回。
+      const queued = queuedStateRef.current;
+      if (isHidingState(current) && queued && isUnhideState(queued)) {
+        queuedStateRef.current = null;
+        requestState(queued, { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      if (current === "yawning" && queued && queued !== "idle") {
+        requestState("stretching", { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      if (declared && isPetState(declared)) {
+        if (queuedStateRef.current === "idle") queuedStateRef.current = null;
+        requestState(declared, { force: true, queueIfBlocked: false });
+        return;
+      }
+
+      const next = queuedStateRef.current;
+      queuedStateRef.current = null;
+      const target = next && isPetState(next) ? next : convStateRef.current;
+      requestState(target !== "idle" ? target : "idle", {
+        force: true,
+        queueIfBlocked: false,
+      });
+    },
+    [requestState],
+  );
 
   // 默认允许其他窗口盖住桌宠；设置页切换后通过事件即时更新窗口层级。挂载时
   // 仍主动应用一次持久化值，覆盖 tauri.conf / 旧版本窗口配置的初始状态。
@@ -569,87 +431,6 @@ export function PetWindow() {
       void unlisten.then((stop) => stop());
     };
   }, []);
-
-  // Canvas 节点永久复用；动画 hook 直接写它，不通过 React state 逐帧重渲染。
-  const spriteRef = useRef<HTMLCanvasElement>(null);
-  useCanvasSpriteAnim(
-    rendered.def,
-    spriteRef,
-    () => {
-      // 新状态图片尚在解码时，旧的一次性动画可能先走到末尾；它已经不是逻辑
-      // 当前态，不能替尚未显示的新动画执行 onEnd。
-      if (stateRef.current !== rendered.state) return;
-      const current = rendered.state;
-      const isRecall = isUnhideState(current);
-
-      // 召回 / 收步是动态过渡：播完优先接缓存目标；目标已收工则回 idle。
-      if (isRecall || isSettlingState(current)) {
-        const pending = pendingStateRef.current;
-        pendingStateRef.current = null;
-        // 动画测试等非对话请求仍可能在保护期排队；它优先于过渡开始时缓存的
-        // resume 目标，消费后清空，不能让队列悬在循环态里永远等不到下一次 onEnd。
-        const queued = queuedStateRef.current;
-        queuedStateRef.current = null;
-        const target =
-          queued && ANIM_MANAGER.has(queued)
-            ? queued
-            : pending && ANIM_MANAGER.has(pending)
-              ? pending
-              : convStateRef.current;
-        requestState(target !== "idle" ? target : "idle", {
-          force: true,
-          queueIfBlocked: false,
-        });
-        return;
-      }
-
-      // 正在躲边时被对话叫住：完整播完冲出画面，再从同侧跑回来接演。
-      const queued = queuedStateRef.current;
-      if (isHidingState(current) && queued && isUnhideState(queued)) {
-        queuedStateRef.current = null;
-        requestState(queued, { force: true, queueIfBlocked: false });
-        return;
-      }
-
-      // 打哈欠已经趴下时若对话在排队，先完整伸懒腰站起来，再接对话态。
-      if (current === "yawning" && queued && queued !== "idle") {
-        requestState("stretching", { force: true, queueIfBlocked: false });
-        return;
-      }
-
-      // entering→greeting、yawning→sleeping、hiding→hidden 等声明式连续动作优先；
-      // idle 只是“收工”请求，不应拆断这条自然动作链。
-      const declared = rendered.def.next;
-      if (declared && ANIM_MANAGER.has(declared)) {
-        if (queuedStateRef.current === "idle") queuedStateRef.current = null;
-        requestState(declared, { force: true, queueIfBlocked: false });
-        return;
-      }
-
-      // 无声明后继的一次性动画：消费保护期间最后一个排队请求；没有则恢复
-      // 最近对话态（例如 thinking 中被摸头，开心蹦完继续托腮）。
-      const next = queuedStateRef.current;
-      queuedStateRef.current = null;
-      const target = next && ANIM_MANAGER.has(next) ? next : convStateRef.current;
-      requestState(target !== "idle" ? target : "idle", {
-        force: true,
-        queueIfBlocked: false,
-      });
-    },
-  );
-
-  // 当前帧带的本体命中矩形：换状态重取（有缓存，仅每条帧带首次真扫）。
-  // 新矩形到位前沿用旧值——比瞬间跳回整帧兜底更稳；首帧未就绪按整帧
-  const [bodyRect, setBodyRect] = useState<BodyRect | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void stripBodyRect(rendered.def.src).then((r) => {
-      if (alive) setBodyRect(r);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [rendered.def]);
 
   // 头顶气泡：对话窗把回复文本经 pet:say 事件推来逐字长出。三种形态——
   // say = 正文说话（白面对话泡 + 三角尾巴）；think = 思考中（浅青想法泡 +
@@ -713,6 +494,7 @@ export function PetWindow() {
       void unlisten.then((f) => f());
     };
   }, [closeBubble]);
+
   // 文本增长时滚到底：长内容气泡像字幕一样只露最新几行
   useEffect(() => {
     const el = bubbleBodyRef.current;
@@ -1056,10 +838,10 @@ export function PetWindow() {
   // 召回后站姿脚底却在 y29。随 unhideDown 同步把窗口向下移动 3 个源像素，
   // 既不让藏好时的耳朵少露一截，也让最后一拍准确站到任务栏上。
   useEffect(() => {
-    if (rendered.state !== "unhideDown") return;
+    if (renderedState !== "unhideDown") return;
     void (async () => {
       const pos = winPosRef.current;
-      const sprite = spriteRef.current;
+      const sprite = rendererFrameRef.current;
       const monitor = await currentMonitor();
       if (!pos || !sprite || !monitor || stateRef.current !== "unhideDown") return;
 
@@ -1067,7 +849,7 @@ export function PetWindow() {
       const frameRect = sprite.getBoundingClientRect();
       const footBottom =
         pos.y +
-        (frameRect.top + STANDING_FOOT_BOTTOM_PX * SPRITE_SCALE) * dpr;
+        (frameRect.top + spriteGeometry.groundY * spriteGeometry.scale) * dpr;
       const workBottom = monitor.workArea.position.y + monitor.workArea.size.height;
       const targetY = Math.round(pos.y + workBottom - footBottom);
       if (targetY === pos.y) return;
@@ -1080,7 +862,7 @@ export function PetWindow() {
     })();
     // animateWindowTo 只使用本次进入 unhideDown 时的坐标快照；帧更新不应重启动画。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rendered.state]);
+  }, [renderedState]);
 
   // 松手落位：按本体命中矩形（非整窗，头顶气泡展示位可以越出屏顶）四选一——
   //  · 本体拖出任一屏缘超过 HIDE_OVER_RATIO 个身位 = 想把它塞出去：窗口
@@ -1094,7 +876,7 @@ export function PetWindow() {
   const settleAfterMove = async (): Promise<SettleAfterMoveResult> => {
     const pos = winPosRef.current;
     const hit = hitRef.current;
-    const sprite = spriteRef.current;
+    const sprite = rendererFrameRef.current;
     if (!pos || !hit || !sprite) return "none";
     const monitor = await currentMonitor();
     if (!monitor) return "none";
@@ -1190,7 +972,7 @@ export function PetWindow() {
             : convStateRef.current !== "idle"
               ? convStateRef.current
               : interruptedState);
-        pendingStateRef.current = ANIM_MANAGER.has(resumeState) ? resumeState : "idle";
+        pendingStateRef.current = isPetState(resumeState) ? resumeState : "idle";
         requestState(settlingStateFor(walkState), {
           force: true,
           queueIfBlocked: false,
@@ -1438,11 +1220,11 @@ export function PetWindow() {
     const win = getCurrentWindow();
     const unlisten = win.listen<{ state?: string; resume?: string }>("pet:play", (e) => {
       const s = e.payload?.state;
-      if (!s || !ANIM_MANAGER.has(s)) return;
+      if (!s || !isPetState(s)) return;
       const cur = stateRef.current;
       // 一次性成功/错误由发送方附上播完后的循环态；普通对话态则自身就是恢复目标。
       const resume = e.payload?.resume;
-      if (resume && ANIM_MANAGER.has(resume) && isConvState(resume)) {
+      if (resume && isPetState(resume) && isConvState(resume)) {
         convStateRef.current = resume;
       }
       if (isConvState(s)) convStateRef.current = s;
@@ -1693,21 +1475,22 @@ export function PetWindow() {
       {/* 只有桌宠本体可交互：命中区 = 当前帧带非透明像素的最小包围盒（覆盖层，
           扫描未就绪前按整帧兜底），按下摸头 / 拖动搬窝；精灵框其余透明边角
           和窗口空白一样，由光标巡逻做成真穿透 */}
-      <SpriteBox>
-        <SpriteView
-          ref={spriteRef}
-          width={SPRITE_SIZE}
-          height={SPRITE_SIZE}
-          role="img"
-          aria-label="雪豹"
+      <SpriteBox ref={rendererFrameRef}>
+        <PetRenderer
+          runtime={petVisual.runtime}
+          state={state}
+          ariaLabel={petVisual.name}
+          onAnimationEnd={handleAnimationEnd}
+          onRenderedStateChange={setRenderedState}
+          onBodyRectChange={setBodyRect}
         />
         <PetHit
           ref={hitRef}
           style={{
-            left: (bodyRect?.x ?? 0) * SPRITE_SCALE,
-            top: (bodyRect?.y ?? 0) * SPRITE_SCALE,
-            width: (bodyRect?.w ?? SPRITE_SIZE) * SPRITE_SCALE,
-            height: (bodyRect?.h ?? SPRITE_SIZE) * SPRITE_SCALE,
+            left: (bodyRect?.x ?? 0) * spriteGeometry.scale,
+            top: (bodyRect?.y ?? 0) * spriteGeometry.scale,
+            width: (bodyRect?.w ?? spriteGeometry.frameWidth) * spriteGeometry.scale,
+            height: (bodyRect?.h ?? spriteGeometry.frameHeight) * spriteGeometry.scale,
           }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -1992,12 +1775,4 @@ const ThinkDot = styled.div`
       transform: translateY(-2px);
     }
   }
-`;
-
-/* 雪豹本体：持久 32×32 Canvas 保存当前帧，CSS 只负责整数放大；
-   pixelated 保住方块硬边不糊，换动画时不再替换透明 WebView 的背景合成层。 */
-const SpriteView = styled.canvas`
-  width: ${SPRITE_SIZE * SPRITE_SCALE}px;
-  height: ${SPRITE_SIZE * SPRITE_SCALE}px;
-  image-rendering: pixelated;
 `;

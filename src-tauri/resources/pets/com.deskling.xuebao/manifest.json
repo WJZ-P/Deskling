@@ -1,0 +1,237 @@
+{
+  "schemaVersion": 1,
+  "kind": "pet",
+  "id": "com.deskling.xuebao",
+  "version": "1.0.0",
+  "name": "雪豹",
+  "description": "Deskling 内置像素雪豹桌宠",
+  "author": {
+    "name": "Deskling"
+  },
+  "license": {
+    "name": "Deskling Built-in Asset",
+    "file": "licenses/NOTICE.txt"
+  },
+  "minDesklingVersion": "0.1.0",
+  "preview": {
+    "icon": "preview/icon.png",
+    "cover": "preview/cover.png"
+  },
+  "components": {
+    "appearance": {
+      "type": "sprite-sheet",
+      "frame": {
+        "width": 32,
+        "height": 32,
+        "scale": 6
+      },
+      "layout": {
+        "groundY": 29
+      },
+      "animations": {
+        "idle": [
+          { "src": "appearance/anim/idle.png", "frames": 12, "fps": 5, "loop": true }
+        ],
+        "idleLook": [
+          { "src": "appearance/anim/idle-look.png", "frames": 12, "fps": 5, "loop": false }
+        ],
+        "idleGroom": [
+          { "src": "appearance/anim/idle-groom.png", "frames": 12, "fps": 6, "loop": false }
+        ],
+        "idleScratch": [
+          { "src": "appearance/anim/idle-scratch.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "idleSneeze": [
+          { "src": "appearance/anim/idle-sneeze.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "idleAlert": [
+          { "src": "appearance/anim/idle-alert.png", "frames": 12, "fps": 7, "loop": false }
+        ],
+        "talking": [
+          { "src": "appearance/anim/talk.png", "frames": 12, "fps": 6, "loop": true }
+        ],
+        "walking": [
+          { "src": "appearance/anim/walk.png", "frames": 12, "fps": 10, "loop": true }
+        ],
+        "walkingDown": [
+          { "src": "appearance/anim/walk-down.png", "frames": 12, "fps": 10, "loop": true },
+          { "src": "appearance/anim/walk-down-pant.png", "frames": 12, "fps": 10, "loop": true }
+        ],
+        "walkingUp": [
+          { "src": "appearance/anim/walk-up.png", "frames": 12, "fps": 10, "loop": true },
+          { "src": "appearance/anim/walk-up-pant.png", "frames": 12, "fps": 10, "loop": true }
+        ],
+        "walkingLeft": [
+          { "src": "appearance/anim/walk-left.png", "frames": 12, "fps": 10, "loop": true },
+          { "src": "appearance/anim/walk-left-pant.png", "frames": 12, "fps": 10, "loop": true }
+        ],
+        "walkingRight": [
+          { "src": "appearance/anim/walk-right.png", "frames": 12, "fps": 10, "loop": true },
+          { "src": "appearance/anim/walk-right-pant.png", "frames": 12, "fps": 10, "loop": true }
+        ],
+        "settling": [
+          { "src": "appearance/anim/walk-stop.png", "frames": 4, "fps": 10, "loop": false }
+        ],
+        "settlingLeft": [
+          { "src": "appearance/anim/walk-stop-left.png", "frames": 4, "fps": 10, "loop": false }
+        ],
+        "settlingRight": [
+          { "src": "appearance/anim/walk-stop-right.png", "frames": 4, "fps": 10, "loop": false }
+        ],
+        "settlingUp": [
+          { "src": "appearance/anim/walk-stop-up.png", "frames": 4, "fps": 10, "loop": false }
+        ],
+        "settlingDown": [
+          { "src": "appearance/anim/walk-stop-down.png", "frames": 4, "fps": 10, "loop": false }
+        ],
+        "typing": [
+          { "src": "appearance/anim/typing.png", "frames": 12, "fps": 8, "loop": true }
+        ],
+        "searching": [
+          { "src": "appearance/anim/search.png", "frames": 12, "fps": 5, "loop": true },
+          { "src": "appearance/anim/search-right.png", "frames": 12, "fps": 5, "loop": true }
+        ],
+        "listening": [
+          { "src": "appearance/anim/listening.png", "frames": 12, "fps": 6, "loop": true }
+        ],
+        "waitingApproval": [
+          { "src": "appearance/anim/waiting-approval.png", "frames": 12, "fps": 5, "loop": true }
+        ],
+        "success": [
+          { "src": "appearance/anim/success.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "error": [
+          { "src": "appearance/anim/error.png", "frames": 12, "fps": 7, "loop": false }
+        ],
+        "petted": [
+          { "src": "appearance/anim/petted.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "eating": [
+          { "src": "appearance/anim/eat.png", "frames": 12, "fps": 7, "loop": false }
+        ],
+        "sleeping": [
+          { "src": "appearance/anim/sleep.png", "frames": 12, "fps": 2, "loop": true }
+        ],
+        "yawning": [
+          { "src": "appearance/anim/yawn.png", "frames": 12, "fps": 6, "loop": false, "next": "sleeping" }
+        ],
+        "stretching": [
+          { "src": "appearance/anim/stretch.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "wakingStartled": [
+          { "src": "appearance/anim/wake-startled.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "wakingDream": [
+          { "src": "appearance/anim/wake-dream.png", "frames": 12, "fps": 7, "loop": false }
+        ],
+        "dangling": [
+          { "src": "appearance/anim/dangle.png", "frames": 12, "fps": 8, "loop": true }
+        ],
+        "entering": [
+          {
+            "src": "appearance/anim/enter.png",
+            "frames": 12,
+            "sequence": [0, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11],
+            "fps": 8,
+            "loop": false,
+            "next": "greeting"
+          }
+        ],
+        "greeting": [
+          { "src": "appearance/anim/greet.png", "frames": 12, "fps": 8, "loop": false }
+        ],
+        "thinking": [
+          { "src": "appearance/anim/think.png", "frames": 12, "fps": 4, "loop": true }
+        ],
+        "hidingLeft": [
+          { "src": "appearance/anim/hide-left.png", "frames": 12, "fps": 10, "loop": false, "next": "hiddenLeft" }
+        ],
+        "hiddenLeft": [
+          {
+            "src": "appearance/anim/hidden-left.png",
+            "frames": 6,
+            "sequence": [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0],
+            "fps": 2,
+            "loop": true
+          }
+        ],
+        "peekingLeft": [
+          { "src": "appearance/anim/peek-left.png", "frames": 4, "fps": 4, "loop": false, "next": "hiddenLeft" }
+        ],
+        "unhideLeft": [
+          { "src": "appearance/anim/unhide-left.png", "frames": 12, "fps": 10, "loop": false }
+        ],
+        "hidingRight": [
+          { "src": "appearance/anim/hide-right.png", "frames": 12, "fps": 10, "loop": false, "next": "hiddenRight" }
+        ],
+        "hiddenRight": [
+          {
+            "src": "appearance/anim/hidden-right.png",
+            "frames": 6,
+            "sequence": [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0],
+            "fps": 2,
+            "loop": true
+          }
+        ],
+        "peekingRight": [
+          { "src": "appearance/anim/peek-right.png", "frames": 4, "fps": 4, "loop": false, "next": "hiddenRight" }
+        ],
+        "unhideRight": [
+          { "src": "appearance/anim/unhide-right.png", "frames": 12, "fps": 10, "loop": false }
+        ],
+        "hidingDown": [
+          { "src": "appearance/anim/hide-down.png", "frames": 12, "fps": 10, "loop": false, "next": "hiddenDown" }
+        ],
+        "hiddenDown": [
+          {
+            "src": "appearance/anim/hidden-down.png",
+            "frames": 6,
+            "sequence": [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0],
+            "fps": 2,
+            "loop": true
+          }
+        ],
+        "peekingDown": [
+          { "src": "appearance/anim/peek-down.png", "frames": 4, "fps": 4, "loop": false, "next": "hiddenDown" }
+        ],
+        "unhideDown": [
+          { "src": "appearance/anim/unhide-down.png", "frames": 12, "fps": 10, "loop": false }
+        ],
+        "hidingUp": [
+          {
+            "src": "appearance/anim/hide-up.png",
+            "frames": 12,
+            "sequence": [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 9, 10, 11],
+            "fps": 10,
+            "loop": false,
+            "next": "hiddenUp"
+          }
+        ],
+        "hiddenUp": [
+          {
+            "src": "appearance/anim/hidden-up.png",
+            "frames": 6,
+            "sequence": [0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 4, 4, 5, 5, 4, 4, 0, 0],
+            "fps": 2,
+            "loop": true
+          }
+        ],
+        "peekingUp": [
+          { "src": "appearance/anim/peek-up.png", "frames": 4, "fps": 4, "loop": false, "next": "hiddenUp" }
+        ],
+        "unhideUp": [
+          { "src": "appearance/anim/unhide-up.png", "frames": 12, "fps": 10, "loop": false }
+        ]
+      }
+    },
+    "persona": {
+      "promptFile": "persona/system.md"
+    },
+    "voice": {
+      "packId": "beep",
+      "voiceId": 0,
+      "speed": 1,
+      "enabledByDefault": false
+    }
+  }
+}

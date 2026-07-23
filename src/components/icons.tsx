@@ -90,6 +90,17 @@ export function PetIcon(props: IconProps) {
   );
 }
 
+/** 定时任务：方形日程板 + 表针 */
+export function TasksIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.5" y="3.5" width="11" height="10" />
+      <path d="M5 2 V5 M11 2 V5 M2.5 6 H13.5" />
+      <path d="M8 8 V10.5 L10 11.5" />
+    </Svg>
+  );
+}
+
 /** 调试：代码尖括号 “</>” */
 export function DebugIcon(props: IconProps) {
   return (

@@ -1,0 +1,2 @@
+This package contains Deskling's built-in snow leopard artwork and animation assets.
+Redistribution rights follow the license terms of the Deskling project that bundles it.

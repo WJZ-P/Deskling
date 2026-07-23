@@ -13,17 +13,21 @@ import { PX } from "./palettes";
 const WELL_PIXEL = 3; // 每个美术像素占的 CSS px
 const WELL_RADIUS = 2; // 像素切角
 const WELL_PAD = 12; // 内边距
+const WELL_COMPACT_HEIGHT = 38; // 与 PixelInput / PixelSelect 的控件高度一致
+const WELL_COMPACT_PAD_X = 12; // 紧凑只读框的水平内边距
 
 interface PixelWellProps {
   children?: ReactNode;
   className?: string;
+  /** 与输入框/下拉框同高，适合表单里的只读值。 */
+  compact?: boolean;
 }
 
-export function PixelWell({ children, className }: PixelWellProps) {
+export function PixelWell({ children, className, compact = false }: PixelWellProps) {
   return (
     <Well className={className}>
       <PixelFrame palette={PX.well} variant="sunken" pixel={WELL_PIXEL} radius={WELL_RADIUS} />
-      <WellInner>{children}</WellInner>
+      <WellInner data-compact={compact || undefined}>{children}</WellInner>
     </Well>
   );
 }
@@ -41,4 +45,12 @@ const WellInner = styled.div`
   font: ${t.textSm};
   line-height: 1.7;
   color: ${t.colorText};
+
+  &[data-compact] {
+    display: flex;
+    align-items: center;
+    min-height: ${WELL_COMPACT_HEIGHT}px;
+    padding: 0 ${WELL_COMPACT_PAD_X}px;
+    line-height: 1;
+  }
 `;

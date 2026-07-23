@@ -71,7 +71,8 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "要执行的完整命令行" }
+                    "command": { "type": "string", "description": "要执行的完整命令行" },
+                    "cwd": { "type": "string", "description": "可选工作目录；计划任务执行脚本时优先使用任务绑定的 workingDirectory" }
                 },
                 "required": ["command"]
             }),
@@ -102,6 +103,75 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["content"]
             }),
         },
+        ToolSpec {
+            name: "create_scheduled_task",
+            description: "创建一个未来会自动启动真实 AI 会话并执行工作的计划任务。当目标包含未来执行、周期巡检，或你刚为后续工作创建了脚本/配置时，应自行判断并主动调用，不必等用户逐字要求“创建定时任务”。若任务依赖尚不存在的复用脚本或配置，应先创建并验证它们，再建立计划。instruction 必须脱离当前对话也能独立执行；relatedFiles 要列全运行所需的脚本、配置、输入及关键输出路径。该操作会建立未来执行授权，因此需要用户审批。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "简短、可识别的任务标题" },
+                    "instruction": { "type": "string", "description": "每次运行时交给 AI 的完整、自包含执行指令，包含目标、步骤边界和期望结果" },
+                    "schedule": { "type": "string", "description": "运行计划：单次用 @once RFC3339；周期用五字段 Cron（分钟 小时 日 月 星期）或 @hourly/@daily 等别名。例如每天 9 点为 0 9 * * *" },
+                    "relatedFiles": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "任务依赖或产出的全部关键文件/目录路径；没有则传空数组"
+                    },
+                    "workingDirectory": { "type": "string", "description": "执行脚本、解析相对路径时使用的工作目录" },
+                    "autoApprove": { "type": "boolean", "description": "是否允许后台会话无人值守写文件和执行命令；省略为 false，false 时危险工具会等待用户审批" },
+                    "enabled": { "type": "boolean", "description": "创建后是否立即启用；省略为 true" }
+                },
+                "required": ["title", "instruction", "schedule", "relatedFiles"]
+            }),
+        },
+        ToolSpec {
+            name: "list_scheduled_tasks",
+            description: "列出当前所有 AI 计划任务、运行计划、下次运行、关联资源数量与最近结果。修改、删除或立即运行前，如果没有可靠的任务 ID，先调用本工具。",
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolSpec {
+            name: "update_scheduled_task",
+            description: "按 ID 修改 AI 计划任务。只传需要变化的字段；修改计划、指令、关联资源或无人值守权限属于未来执行授权变更，需要用户审批。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "description": "任务 ID" },
+                    "title": { "type": "string" },
+                    "instruction": { "type": "string" },
+                    "schedule": { "type": "string", "description": "@once RFC3339、五字段 Cron 或计划别名" },
+                    "relatedFiles": { "type": "array", "items": { "type": "string" } },
+                    "workingDirectory": { "type": "string" },
+                    "autoApprove": { "type": "boolean" },
+                    "enabled": { "type": "boolean" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSpec {
+            name: "delete_scheduled_task",
+            description: "按 ID 删除一条 AI 计划任务及其本地运行历史。正在运行的任务不能删除。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "description": "任务 ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSpec {
+            name: "run_scheduled_task",
+            description: "立即把指定 AI 计划任务加入运行队列，但不改变它原本的下次运行时间。会创建真实会话并执行任务。",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "description": "任务 ID" }
+                },
+                "required": ["id"]
+            }),
+        },
     ]
 }
 
@@ -126,7 +196,14 @@ pub fn subagent_spec() -> ToolSpec {
 /// run_command，仍受审批/免审批开关约束）；remember 只写应用自己的记忆文件，
 /// 免审批（设置页可查看/删除/清空）。
 pub fn needs_approval(name: &str) -> bool {
-    !matches!(name, "read_file" | "list_dir" | "load_skill" | "remember")
+    !matches!(
+        name,
+        "read_file"
+            | "list_dir"
+            | "load_skill"
+            | "remember"
+            | "list_scheduled_tasks"
+    )
 }
 
 /// 给用户看的一句话摘要（工具卡标题右侧）。args 解析失败时回落到工具名。
@@ -139,12 +216,37 @@ pub fn summarize(name: &str, args: &Value) -> String {
             format!("列出目录 {p}")
         }
         "write_file" => format!("写入 {}", str_arg(args, "path")),
-        "run_command" => format!("执行 `{}`", str_arg(args, "command")),
+        "run_command" => {
+            let command = str_arg(args, "command");
+            let cwd = str_arg(args, "cwd");
+            if cwd.is_empty() {
+                format!("执行 `{command}`")
+            } else {
+                format!("在 {cwd} 执行 `{command}`")
+            }
+        }
         "load_skill" => format!("查阅技能 {}", str_arg(args, "name")),
         "remember" => {
             let head: String = str_arg(args, "content").chars().take(24).collect();
             format!("记住「{head}」")
         }
+        "create_scheduled_task" => {
+            let title = str_arg(args, "title");
+            format!("创建 AI 计划「{title}」")
+        }
+        "list_scheduled_tasks" => "查看 AI 计划任务".into(),
+        "update_scheduled_task" => format!(
+            "更新 AI 计划 #{}",
+            args.get("id").and_then(Value::as_u64).unwrap_or(0)
+        ),
+        "delete_scheduled_task" => format!(
+            "删除 AI 计划 #{}",
+            args.get("id").and_then(Value::as_u64).unwrap_or(0)
+        ),
+        "run_scheduled_task" => format!(
+            "立即运行 AI 计划 #{}",
+            args.get("id").and_then(Value::as_u64).unwrap_or(0)
+        ),
         "subagent" => {
             let head: String = str_arg(args, "task").chars().take(30).collect();
             format!("子任务：{head}")
@@ -177,6 +279,11 @@ pub async fn execute(name: &str, args: &Value) -> Result<String, String> {
         "write_file" => write_file(args).await,
         "run_command" => run_command(args).await,
         "remember" => crate::memory::add(&str_arg(args, "content")),
+        "create_scheduled_task" => crate::scheduled_tasks::tool_create(args),
+        "list_scheduled_tasks" => crate::scheduled_tasks::tool_list(),
+        "update_scheduled_task" => crate::scheduled_tasks::tool_update(args),
+        "delete_scheduled_task" => crate::scheduled_tasks::tool_delete(args),
+        "run_scheduled_task" => crate::scheduled_tasks::tool_run_now(args),
         other => Err(format!("未知工具: {other}")),
     }
 }
@@ -372,6 +479,7 @@ fn apply_proxy_env(cmd: &mut tokio::process::Command) {
 
 async fn run_command(args: &Value) -> Result<String, String> {
     let command = str_arg(args, "command");
+    let cwd = str_arg(args, "cwd");
     if command.trim().is_empty() {
         return Err("缺少参数 command".into());
     }
@@ -396,6 +504,10 @@ async fn run_command(args: &Value) -> Result<String, String> {
         c.arg("-c").arg(&command);
         c
     };
+
+    if !cwd.trim().is_empty() {
+        cmd.current_dir(cwd.trim());
+    }
 
     // 按设置页的代理偏好给命令设代理环境（默认跟随 Windows 系统代理）——
     // 让 web-search 等联网脚本默认就能通，无需用户手动设环境变量

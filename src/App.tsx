@@ -4,6 +4,7 @@ import Titlebar from "./components/pixel/Titlebar";
 import Sidebar, { type SectionId } from "./components/pixel/Sidebar";
 import Home from "./pages/Home";
 import Pet from "./pages/Pet";
+import Tasks from "./pages/Tasks";
 import Settings from "./pages/Settings";
 import Debug from "./pages/Debug";
 import About from "./pages/About";
@@ -62,6 +63,9 @@ function App() {
             </PageLayer>
             <PageLayer data-active={section === "pet" || undefined}>
               <Pet />
+            </PageLayer>
+            <PageLayer data-active={section === "tasks" || undefined}>
+              <Tasks />
             </PageLayer>
             <PageLayer data-active={section === "settings" || undefined}>
               <Settings
