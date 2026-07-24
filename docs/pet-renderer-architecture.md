@@ -10,7 +10,7 @@ PetWindow（桌面行为控制器）
 ├─ 任务栏保护、四边隐藏、气泡
 └─ PetRenderer（按 appearance.type 分发）
    ├─ SpriteSheetRenderer
-   ├─ Live2DCubismRenderer（许可控制，未随默认构建提供）
+   ├─ Live2DCubismRenderer（正式内置，Core 随安装包分发）
    └─ Inochi2DRenderer（开放格式，待接入）
 ```
 
@@ -37,21 +37,25 @@ PetWindow（桌面行为控制器）
 ## Live2D Cubism 许可边界
 
 Live2D 官方把可以通过增加/组合文件使用不特定数量模型的作品归为
-“Expandable Application”。Deskling 的创意工坊符合这一特征，因此发布包含
-Cubism SDK/Core 的版本前需要向 Live2D 申请审核并签署专项出版许可；个人和小型
-开发者也不在普通豁免范围内。
+“Expandable Application”。Deskling 的创意工坊符合这一技术特征，实际分发时
+由产品所有者按届时商业规模与 Live2D 最新条款确认适用方案；运行时架构不把
+“Core 外置”当成规避许可的手段。
 
 - 官方发布许可：https://www.live2d.com/en/sdk/license/
 - Expandable Application：https://www.live2d.com/en/sdk/license/expandable/
 - Cubism Core 说明：https://docs.live2d.com/en/cubism-sdk-manual/cubism-core/
 
-默认发行版遵守以下硬边界：
+当前实现边界：
 
-1. 不把 Cubism Core 或其下载产物提交进仓库、npm 包或安装包。
-2. 不把第三方 Web wrapper 当成许可替代品；只要实际加载 `.moc3`，仍依赖专有 Core。
-3. `live2d-cubism` 清单可以被扫描和展示，但没有获批的 Renderer 时必须标记为
-   unavailable，不能暗中降级到另一套模型解析代码。
-4. 将来只有获得与 Deskling 分发方式相符的书面许可后，才发布 Cubism Renderer。
+1. Cubism Core 作为 Deskling 自身的 Tauri resource 随安装包统一分发。
+2. 不把第三方 Web wrapper 当成 Core；加载 `.moc3` 时仍使用 Live2D 专有运行时。
+3. 创意工坊模型包不能携带 Core，也不能覆盖全局运行时。
+4. 用户可在桌宠面板安装外部 Core 覆盖内置版本，用于 SDK 升级测试，并可一键恢复。
+5. 开发构建与正式构建使用相同渲染路径，避免只在发布产物里出现集成差异。
+
+渲染实现使用按需加载的 PixiJS 8 与 `untitled-pixi-live2d-engine/cubism`，覆盖
+Cubism 3/4/5，并使用 Pixi 8 原生 Render Pipe。像素桌宠不会加载这些 WebGL chunk；
+Core 和模型加载完成前保留资源包预览图，连续输出两帧后再切换，避免桌宠出现空白帧。
 
 ## 开放方案
 

@@ -5,6 +5,7 @@ import type { BackdropStyleId } from "./components/pixel/backdrops";
 import {
   BUILTIN_XUEBAO_PACKAGE_ID,
   getPetPackage,
+  getPetPackages,
   getPetPackagePreview,
   type PetAppearanceType,
 } from "./pet/packages";
@@ -118,6 +119,8 @@ export interface PetProfile {
   appearanceType: PetAppearanceType;
   /** 桌宠名字（展示栏悬停小签 / 桌宠页大卡标题） */
   name: string;
+  /** 资源包只读简介。 */
+  description: string;
   /** 人设 prompt：作为对话的 system prompt 注入（设置面板可编辑） */
   prompt: string;
   /** 展示预览 URL（资源包 asset URL；后端不可用时可回退 public 路径） */
@@ -145,6 +148,7 @@ const FALLBACK_XUEBAO: PetProfile = {
   packageId: BUILTIN_XUEBAO_PACKAGE_ID,
   appearanceType: "sprite-sheet",
   name: "雪豹",
+  description: "一只住在桌面上的 AI 雪豹桌宠，随时准备陪主人。",
   prompt: DEFAULT_PET_PROMPT,
   sprite: "/pet/xuebao.png",
   voice: DEFAULT_PET_VOICE,
@@ -614,6 +618,9 @@ function resolvePetInstance(instance: PetInstance): PetProfile {
       instance.nameOverride ??
       resourcePackage?.manifest?.name ??
       (isBuiltinXuebao ? "雪豹" : instance.id),
+    description:
+      resourcePackage?.manifest?.description ??
+      (isBuiltinXuebao ? "一只住在桌面上的 AI 雪豹桌宠，随时准备陪主人。" : ""),
     prompt:
       instance.promptOverride ??
       resourcePackage?.personaPrompt ??
@@ -631,6 +638,34 @@ export function getPetProfiles(): PetProfile[] {
   return cache.petInstances.map(resolvePetInstance);
 }
 
+/**
+ * 扫描器发现的新资源包自动生成一个用户实例；卸载/损坏的包只保留原实例与覆盖项，
+ * 不擅自删除用户写过的人设。一个资源包目前默认对应一个实例，后续工坊再开放复制。
+ */
+export async function syncInstalledPetPackages(): Promise<void> {
+  const knownPackages = new Set(cache.petInstances.map((item) => item.packageId));
+  const usedIds = new Set(cache.petInstances.map((item) => item.id));
+  const additions: PetInstance[] = [];
+
+  for (const resourcePackage of getPetPackages()) {
+    if (!resourcePackage.valid || knownPackages.has(resourcePackage.id)) continue;
+    const baseId = `pet-${resourcePackage.id
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "package"}`;
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(id)) id = `${baseId}-${suffix++}`;
+    usedIds.add(id);
+    knownPackages.add(resourcePackage.id);
+    additions.push({ id, packageId: resourcePackage.id });
+  }
+
+  if (additions.length > 0) {
+    await setSetting("petInstances", [...cache.petInstances, ...additions]);
+  }
+}
+
 /** 当前桌宠（id 失配时回退列表首个，保证总有一只在岗） */
 export function getActivePet(): PetProfile {
   const profiles = getPetProfiles();
@@ -639,6 +674,13 @@ export function getActivePet(): PetProfile {
     profiles[0] ??
     FALLBACK_XUEBAO
   );
+}
+
+export async function setActivePet(id: string): Promise<void> {
+  if (!cache.petInstances.some((item) => item.id === id)) {
+    throw new Error(`桌宠实例不存在: ${id}`);
+  }
+  await setSetting("activePetId", id);
 }
 
 /** 局部更新某只桌宠（合并 patch），落盘 */

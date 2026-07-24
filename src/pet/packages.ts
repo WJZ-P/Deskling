@@ -2,6 +2,8 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { ANIMS, type AnimDef, type PetState } from "./animations";
 
 export const BUILTIN_XUEBAO_PACKAGE_ID = "com.deskling.xuebao";
+/** 正式构建与开发模式都提供 Live2D 渲染器；Core 由安装包内置。 */
+export const LIVE2D_RENDERER_ENABLED = true;
 export type PetAppearanceType =
   | "sprite-sheet"
   | "live2d-cubism"
@@ -26,6 +28,18 @@ export interface PetPackageAnimation {
   next?: string;
 }
 
+export interface PetPackageCubismMotion {
+  /** model3.json 中的 Motion group；省略时可以只切 expression。 */
+  group?: string;
+  /** 省略时由引擎在该 group 内随机抽取。 */
+  index?: number;
+  expression?: string;
+  /** 覆盖语义动画的收尾时长；主要给没有可靠结束信号的特殊动作使用。 */
+  durationMs?: number;
+  loop?: boolean;
+  next?: string;
+}
+
 export interface PetPackageAppearance {
   type: PetAppearanceType;
   frame?: {
@@ -35,9 +49,15 @@ export interface PetPackageAppearance {
   };
   layout?: {
     groundY: number;
+    /** Live2D 模型相对“适配进画布”的二次缩放。 */
+    modelScale?: number;
+    offsetX?: number;
+    offsetY?: number;
   };
   entry?: string;
   animations: Record<string, PetPackageAnimation[]>;
+  /** Deskling 语义状态 → Cubism Motion/Expression 变体。 */
+  motions?: Record<string, PetPackageCubismMotion[]>;
 }
 
 export interface PetPackageManifest {
@@ -97,8 +117,22 @@ export interface SpritePetRuntime {
   previewUrl: string | null;
 }
 
+export interface Live2DCubismRuntime {
+  type: "live2d-cubism";
+  packageId: string;
+  rendererAvailable: boolean;
+  entryUrl: string;
+  previewUrl: string | null;
+  geometry: SpriteGeometry;
+  modelScale: number;
+  offsetX: number;
+  offsetY: number;
+  motionMap: Partial<Record<PetState, PetPackageCubismMotion[]>>;
+  unavailableReason?: string;
+}
+
 export interface DeferredPuppetRuntime {
-  type: "live2d-cubism" | "inochi2d";
+  type: "inochi2d";
   packageId: string;
   rendererAvailable: false;
   entryUrl: string;
@@ -109,13 +143,23 @@ export interface DeferredPuppetRuntime {
   geometry: SpriteGeometry;
 }
 
-export type PetAppearanceRuntime = SpritePetRuntime | DeferredPuppetRuntime;
+export type PetAppearanceRuntime =
+  | SpritePetRuntime
+  | Live2DCubismRuntime
+  | DeferredPuppetRuntime;
 
 export const DEFAULT_PET_GEOMETRY: SpriteGeometry = {
   frameWidth: 32,
   frameHeight: 32,
   scale: 6,
   groundY: 29,
+};
+
+export const DEFAULT_LIVE2D_GEOMETRY: SpriteGeometry = {
+  frameWidth: 240,
+  frameHeight: 240,
+  scale: 1,
+  groundY: 236,
 };
 
 let packageCatalog: PetPackageInfo[] = [];
@@ -159,7 +203,22 @@ function safePackagePath(relativePath: string): string | null {
   return relativePath;
 }
 
-/** 把后端已校验过的包内相对路径变成 Tauri asset URL。 */
+/**
+ * `convertFileSrc` 会把整条 Windows 路径编码进同一个 URL path segment，例如
+ * `C:\pet\model.model3.json` 会变成 `C%3A%5Cpet%5Cmodel.model3.json`。
+ * 普通 `<img>` 可以直接读取，但 Cubism 会用 `new URL(relative, model3Url)` 解析
+ * moc/纹理；如果目录分隔符仍是 `%5C`/`%2F`，浏览器会把整个本地路径当成文件名，
+ * 相对引用最终退化成 `asset.localhost/model.moc3`。
+ *
+ * 这里只恢复 URL 的 path 分隔符，盘符等内容仍保持编码，Tauri asset scope 也会
+ * 继续在后端校验真实文件是否位于允许目录。这样同一 URL 既能直接加载，也保留了
+ * Cubism 解析相对资源所需的目录层级。
+ */
+function preserveAssetUrlDirectories(url: string): string {
+  return url.replace(/%5c/gi, "/").replace(/%2f/gi, "/");
+}
+
+/** 把后端已校验过的包内相对路径变成可继续解析相对引用的 Tauri asset URL。 */
 export function petPackageAssetUrl(
   info: PetPackageInfo,
   relativePath: string,
@@ -169,7 +228,7 @@ export function petPackageAssetUrl(
   const separator = info.rootPath.includes("\\") ? "\\" : "/";
   const root = info.rootPath.replace(/[\\/]+$/, "");
   const path = `${root}${separator}${safe.split("/").join(separator)}`;
-  return convertFileSrc(path);
+  return preserveAssetUrlDirectories(convertFileSrc(path));
 }
 
 export function getPetPackagePreview(packageId: string): string | null {
@@ -261,7 +320,7 @@ export function getSpritePetRuntime(packageId: string): SpritePetRuntime | null 
 
 /**
  * 通用外观解析入口。PetWindow 只依赖这个判别联合，不再了解某一种模型格式。
- * Cubism/Inochi2D 当前返回可识别但不可播放的描述符，由对应 Renderer 插件接管。
+ * 每一种外观都只在这里物化自己的运行时；窗口控制器不接触具体 SDK。
  */
 export function getPetAppearanceRuntime(
   packageId: string,
@@ -274,22 +333,44 @@ export function getPetAppearanceRuntime(
     return getSpritePetRuntime(packageId);
   }
 
-  if (
-    (appearance.type === "live2d-cubism" || appearance.type === "inochi2d") &&
-    appearance.entry
-  ) {
+  if (appearance.type === "live2d-cubism" && appearance.entry) {
+    const entryUrl = petPackageAssetUrl(info, appearance.entry);
+    if (!entryUrl) return null;
+    const frame = appearance.frame;
+    const layout = appearance.layout;
+    return {
+      type: "live2d-cubism",
+      packageId,
+      rendererAvailable: LIVE2D_RENDERER_ENABLED,
+      entryUrl,
+      previewUrl: getPetPackagePreview(packageId),
+      geometry: {
+        frameWidth: frame?.width ?? DEFAULT_LIVE2D_GEOMETRY.frameWidth,
+        frameHeight: frame?.height ?? DEFAULT_LIVE2D_GEOMETRY.frameHeight,
+        scale: frame?.scale ?? DEFAULT_LIVE2D_GEOMETRY.scale,
+        groundY: layout?.groundY ?? DEFAULT_LIVE2D_GEOMETRY.groundY,
+      },
+      modelScale: layout?.modelScale ?? 1,
+      offsetX: layout?.offsetX ?? 0,
+      offsetY: layout?.offsetY ?? 0,
+      motionMap:
+        (appearance.motions as Partial<
+          Record<PetState, PetPackageCubismMotion[]>
+        >) ?? {},
+      unavailableReason: undefined,
+    };
+  }
+
+  if (appearance.type === "inochi2d" && appearance.entry) {
     const entryUrl = petPackageAssetUrl(info, appearance.entry);
     if (!entryUrl) return null;
     return {
-      type: appearance.type,
+      type: "inochi2d",
       packageId,
       rendererAvailable: false,
       entryUrl,
       previewUrl: getPetPackagePreview(packageId),
-      unavailableReason:
-        appearance.type === "live2d-cubism"
-          ? "Live2D Cubism 渲染器受发布许可控制，当前构建未携带 Cubism Core"
-          : "Inochi2D 渲染器接口已预留，运行时尚未接入",
+      unavailableReason: "Inochi2D 渲染器接口已预留，运行时尚未接入",
       geometry: DEFAULT_PET_GEOMETRY,
     };
   }

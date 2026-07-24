@@ -16,18 +16,13 @@ import { PixelFrame } from "../components/pixel/PixelFrame";
 import { PX } from "../components/pixel/palettes";
 import { PetShowcase } from "../components/PetShowcase";
 import { getPetProfiles, getSetting } from "../settings";
+import type { Live2DCoreStatus } from "../pet/live2dCore";
 
 /**
  * 桌宠页：桌宠展示栏（图标卡，点击拉起人设面板）+ 当前桌宠信息大卡。
  * 名字/头像来自桌宠包默认值与 settings.petInstances 用户覆盖项的解析结果；
  * 状态数值仍是占位，后续再接真实状态 / TTS / 互动。
  */
-
-/** 当前桌宠静态档案文案（名字/头像接档案） */
-const PET = {
-  species: "AI 雪豹桌宠",
-  bio: "一只住在桌面上的 AI agent 桌宠，随时准备陪主人喵～",
-};
 
 /** 动画测试项：key 与桌宠窗 ANIMS 的状态键一一对应 */
 const ANIM_TESTS = [
@@ -88,6 +83,10 @@ function Pet() {
   const [petShown, setPetShown] = useState(false);
   const [chatShown, setChatShown] = useState(false);
   const [playingWakeSound, setPlayingWakeSound] = useState<string | null>(null);
+  const [live2dCore, setLive2dCore] = useState<Live2DCoreStatus | null>(null);
+  const [live2dBusy, setLive2dBusy] = useState(false);
+  const [live2dMessage, setLive2dMessage] = useState("");
+  const live2dFileRef = useRef<HTMLInputElement>(null);
   const wakeSoundRef = useRef<HTMLAudioElement | null>(null);
   const wakeSoundTokenRef = useRef(0);
   // 桌宠档案：本页持有一份（展示栏 + 大卡片共用），面板保存后重读缓存刷新
@@ -97,6 +96,9 @@ function Pet() {
   useEffect(() => {
     void invoke<boolean>("pet_visible").then(setPetShown).catch(() => {});
     void invoke<boolean>("chat_visible").then(setChatShown).catch(() => {});
+    void invoke<Live2DCoreStatus>("live2d_core_status")
+      .then(setLive2dCore)
+      .catch(() => setLive2dCore(null));
 
     return () => {
       wakeSoundTokenRef.current += 1;
@@ -147,6 +149,47 @@ function Pet() {
     }
   };
 
+  const importLive2dCore = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.name.toLowerCase() !== "live2dcubismcore.min.js") {
+      setLive2dMessage("请选择官方 SDK 中的 live2dcubismcore.min.js");
+      if (live2dFileRef.current) live2dFileRef.current.value = "";
+      return;
+    }
+    setLive2dBusy(true);
+    setLive2dMessage("");
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const status = await invoke<Live2DCoreStatus>(
+        "live2d_core_install",
+        bytes,
+      );
+      setLive2dCore(status);
+      setLive2dMessage("外部 Cubism Core 已安装，将覆盖软件内置版本。");
+      await emitTo("pet", "pet:live2d-runtime-changed");
+    } catch (error) {
+      setLive2dMessage(`导入失败：${String(error)}`);
+    } finally {
+      setLive2dBusy(false);
+      if (live2dFileRef.current) live2dFileRef.current.value = "";
+    }
+  };
+
+  const restoreBundledLive2dCore = async () => {
+    setLive2dBusy(true);
+    setLive2dMessage("");
+    try {
+      const status = await invoke<Live2DCoreStatus>("live2d_core_remove");
+      setLive2dCore(status);
+      setLive2dMessage("已恢复软件内置 Cubism Core。");
+      await emitTo("pet", "pet:live2d-runtime-changed");
+    } catch (error) {
+      setLive2dMessage(`移除失败：${String(error)}`);
+    } finally {
+      setLive2dBusy(false);
+    }
+  };
+
   return (
     <Page>
       <PageHeader>
@@ -169,14 +212,27 @@ function Pet() {
             <PixelFrame palette={PX.accent} variant="raised" pixel={3} radius={3} />
             <AvatarInner>
               <PixelFrame palette={PX.well} variant="sunken" pixel={3} radius={2} />
-              <AvatarSprite src={activePet?.sprite ?? "/pet/xuebao.png"} alt="" draggable={false} />
+              <AvatarSprite
+                src={activePet?.sprite ?? "/pet/xuebao.png"}
+                alt=""
+                draggable={false}
+                data-pixel={
+                  activePet?.appearanceType === "sprite-sheet" || undefined
+                }
+              />
             </AvatarInner>
           </Avatar>
 
           <Meta>
             <PetName>{activePet?.name ?? "Deskling"}</PetName>
-            <PetSpecies>{PET.species}</PetSpecies>
-            <PetBio>{PET.bio}</PetBio>
+            <PetSpecies>
+              {activePet?.appearanceType === "live2d-cubism"
+                ? "Live2D AI 桌宠"
+                : activePet?.appearanceType === "inochi2d"
+                  ? "Inochi2D AI 桌宠"
+                  : "像素 AI 桌宠"}
+            </PetSpecies>
+            <PetBio>{activePet?.description || "一个住在桌面上的 AI 伙伴。"}</PetBio>
           </Meta>
         </Profile>
 
@@ -188,6 +244,68 @@ function Pet() {
             {chatShown ? "关闭对话" : "打开对话"}
           </PixelButton>
         </Actions>
+      </PixelSection>
+
+      <PixelSection
+        title="Live2D 运行时"
+        trailing={
+          <Tag>
+            {live2dCore?.source === "override"
+              ? "外部 Core"
+              : live2dCore?.installed
+                ? "内置 Core"
+                : "Core 异常"}
+          </Tag>
+        }
+      >
+        <Live2DRow>
+          <PixelButton
+            variant="normal"
+            disabled={live2dBusy}
+            onClick={() => live2dFileRef.current?.click()}
+          >
+            {live2dBusy
+              ? "处理中…"
+              : live2dCore?.overrideInstalled
+                ? "替换外部 Core"
+                : "使用外部 Core"}
+          </PixelButton>
+          {live2dCore?.overrideInstalled && (
+            <PixelButton
+              variant="low"
+              disabled={live2dBusy}
+              onClick={() => void restoreBundledLive2dCore()}
+            >
+              恢复内置
+            </PixelButton>
+          )}
+          <RuntimeMeta>
+            已识别 {pets.filter((pet) => pet.appearanceType === "live2d-cubism").length}{" "}
+            个 Live2D 桌宠包
+            {live2dCore?.sizeBytes
+              ? ` · ${(live2dCore.sizeBytes / 1024).toFixed(0)}KB`
+              : ""}
+          </RuntimeMeta>
+          <HiddenFileInput
+            ref={live2dFileRef}
+            type="file"
+            accept=".js,application/javascript,text/javascript"
+            aria-label="选择 live2dcubismcore.min.js"
+            onChange={(event) =>
+              void importLive2dCore(event.currentTarget.files?.[0])
+            }
+          />
+        </Live2DRow>
+        <TestHint>
+          Cubism Core 已随 Deskling 安装，正式版本可直接运行 Live2D 桌宠。需要测试
+          新版 SDK 时，可选择官方 Core 目录中的 live2dcubismcore.min.js
+          覆盖内置版本；创意工坊模型包仍不允许自行捆绑 Core。
+        </TestHint>
+        {(live2dMessage || live2dCore?.error) && (
+          <RuntimeMessage data-error={live2dCore?.error ? true : undefined}>
+            {live2dMessage || live2dCore?.error}
+          </RuntimeMessage>
+        )}
       </PixelSection>
 
       <PixelSection
@@ -278,8 +396,12 @@ const AvatarSprite = styled.img`
   z-index: 1;
   width: 48px;
   height: 48px;
-  image-rendering: pixelated;
+  image-rendering: auto;
   -webkit-user-drag: none;
+
+  &[data-pixel] {
+    image-rendering: pixelated;
+  }
 `;
 
 const Meta = styled.div`
@@ -324,4 +446,36 @@ const TestHint = styled.p`
   margin: 0;
   font: ${t.textSm};
   color: ${t.colorTextMuted};
+`;
+
+const Live2DRow = styled.div`
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(${t.unit} * 2);
+`;
+
+const RuntimeMeta = styled.span`
+  font: ${t.textSm};
+  color: ${t.colorTextMuted};
+`;
+
+const RuntimeMessage = styled.p`
+  margin: 0;
+  font: ${t.textSm};
+  color: ${t.colorAccent};
+
+  &[data-error] {
+    color: ${t.colorText};
+  }
+`;
+
+const HiddenFileInput = styled.input`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 `;

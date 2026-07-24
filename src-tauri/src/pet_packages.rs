@@ -1,8 +1,8 @@
 //! Deskling Pet Package v1：扫描、解析与校验桌宠资源包。
 //!
 //! 包本身是只读资源，用户对名字、人设与音色的修改由前端 PetInstance 单独保存，
-//! 因此升级/重装资源包不会覆盖用户偏好。当前运行时支持 sprite-sheet；清单同时
-//! 认识 live2d-cubism 与 inochi2d，等各自渲染器接入后不需要再迁移工坊包格式。
+//! 因此升级/重装资源包不会覆盖用户偏好。当前运行时支持 sprite-sheet 与
+//! live2d-cubism（Core 随 Deskling 安装包提供）；inochi2d 保留格式入口。
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -51,6 +51,12 @@ pub struct SpriteFrame {
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceLayout {
     pub ground_y: u32,
+    #[serde(default)]
+    pub model_scale: Option<f32>,
+    #[serde(default)]
+    pub offset_x: Option<f32>,
+    #[serde(default)]
+    pub offset_y: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,13 +75,30 @@ pub struct PackageAnimation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CubismMotionBinding {
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub index: Option<u32>,
+    #[serde(default)]
+    pub expression: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u32>,
+    #[serde(default, rename = "loop")]
+    pub looping: Option<bool>,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageAppearance {
     #[serde(rename = "type")]
     pub appearance_type: String,
-    /// sprite-sheet 的逐帧尺寸；Live2D 包不使用。
+    /// sprite-sheet 的逐帧尺寸；Live2D 中表示透明画布的逻辑尺寸与显示倍数。
     #[serde(default)]
     pub frame: Option<SpriteFrame>,
-    /// sprite-sheet 的落脚基线；Live2D 后续会扩展自己的锚点配置。
+    /// 统一落脚基线；Live2D 还可声明模型适配后的缩放与偏移。
     #[serde(default)]
     pub layout: Option<AppearanceLayout>,
     /// Live2D 的 .model3.json 入口；sprite-sheet 不使用。
@@ -84,6 +107,9 @@ pub struct PackageAppearance {
     /// 语义状态 → 一个或多个动画变体。最少需要 idle，其余状态由前端安全回退。
     #[serde(default)]
     pub animations: BTreeMap<String, Vec<PackageAnimation>>,
+    /// Deskling 语义状态 → Cubism Motion/Expression 变体。
+    #[serde(default)]
+    pub motions: BTreeMap<String, Vec<CubismMotionBinding>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,6 +285,194 @@ fn validate_animation(
     Ok(())
 }
 
+fn validate_frame_and_layout(frame: &SpriteFrame, layout: &AppearanceLayout) -> Result<(), String> {
+    if frame.width == 0 || frame.height == 0 || frame.width > 1024 || frame.height > 1024 {
+        return Err("frame.width/height 必须为 1-1024".into());
+    }
+    if frame.scale == 0 || frame.scale > 16 {
+        return Err("frame.scale 必须为 1-16".into());
+    }
+    if layout.ground_y > frame.height {
+        return Err("layout.groundY 不能超过 frame.height".into());
+    }
+    if let Some(scale) = layout.model_scale {
+        if !scale.is_finite() || !(0.1..=4.0).contains(&scale) {
+            return Err("layout.modelScale 必须为 0.1-4".into());
+        }
+    }
+    for (label, value) in [
+        ("layout.offsetX", layout.offset_x),
+        ("layout.offsetY", layout.offset_y),
+    ] {
+        if value.is_some_and(|value| !value.is_finite() || value.abs() > 4096.0) {
+            return Err(format!("{label} 必须为 -4096 到 4096 的有限数"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_cubism_motion_map(
+    motions: &BTreeMap<String, Vec<CubismMotionBinding>>,
+) -> Result<(), String> {
+    for (state, variants) in motions {
+        validate_text(state, "Live2D 动画状态名", 64)?;
+        if variants.is_empty() {
+            return Err(format!("Live2D 动画状态 {state} 没有任何变体"));
+        }
+        for (index, binding) in variants.iter().enumerate() {
+            if binding.group.is_none() && binding.expression.is_none() {
+                return Err(format!(
+                    "Live2D 动画 {state}[{index}] 至少需要 group 或 expression"
+                ));
+            }
+            if let Some(group) = &binding.group {
+                validate_text(group, "Live2D Motion group", 128)?;
+            } else if binding.index.is_some() {
+                return Err(format!(
+                    "Live2D 动画 {state}[{index}] 声明 index 时必须同时声明 group"
+                ));
+            }
+            if let Some(expression) = &binding.expression {
+                validate_text(expression, "Live2D expression", 128)?;
+            }
+            if let Some(duration) = binding.duration_ms {
+                if !(50..=120_000).contains(&duration) {
+                    return Err(format!(
+                        "Live2D 动画 {state}[{index}] 的 durationMs 必须为 50-120000"
+                    ));
+                }
+            }
+            if let Some(next) = &binding.next {
+                validate_text(next, "Live2D 动画 next 状态", 64)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_live2d_reference(
+    root: &Path,
+    entry: &str,
+    reference: &str,
+    label: &str,
+) -> Result<(), String> {
+    let relative = validate_relative_path(reference)?;
+    let entry_parent = Path::new(entry).parent().unwrap_or_else(|| Path::new(""));
+    let combined = entry_parent.join(relative);
+    let combined = combined
+        .to_str()
+        .ok_or_else(|| format!("{label} 路径不是有效 UTF-8: {reference}"))?
+        .replace('\\', "/");
+    validate_file(root, &combined, label)?;
+    Ok(())
+}
+
+fn validate_optional_live2d_file(
+    root: &Path,
+    entry: &str,
+    references: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<(), String> {
+    if let Some(value) = references.get(key) {
+        let path = value
+            .as_str()
+            .ok_or_else(|| format!("Live2D FileReferences.{key} 必须是字符串"))?;
+        validate_live2d_reference(root, entry, path, &format!("Live2D {key}"))?;
+    }
+    Ok(())
+}
+
+/// 在模型进入 WebView 前校验 model3 中所有标准文件引用，既能提前报缺件，也能拦住
+/// `../`、绝对路径和 URL。创意工坊包不能借模型清单读取其他包或用户文件。
+fn validate_live2d_model(root: &Path, entry: &str) -> Result<(), String> {
+    let path = validate_file(root, entry, "Live2D model3 入口")?;
+    let metadata =
+        std::fs::metadata(&path).map_err(|error| format!("无法读取 Live2D model3: {error}"))?;
+    if metadata.len() > MANIFEST_MAX_BYTES * 4 {
+        return Err("Live2D model3.json 超过 1MB".into());
+    }
+    let source = std::fs::read_to_string(&path)
+        .map_err(|error| format!("无法读取 Live2D model3: {error}"))?;
+    let model: serde_json::Value = serde_json::from_str(&source)
+        .map_err(|error| format!("Live2D model3.json 解析失败: {error}"))?;
+    let references = model
+        .get("FileReferences")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("Live2D model3.json 缺少 FileReferences")?;
+
+    let moc = references
+        .get("Moc")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Live2D model3.json 缺少 FileReferences.Moc")?;
+    validate_live2d_reference(root, entry, moc, "Live2D Moc")?;
+
+    let textures = references
+        .get("Textures")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Live2D model3.json 缺少 FileReferences.Textures")?;
+    if textures.is_empty() {
+        return Err("Live2D model3.json 至少需要一张纹理".into());
+    }
+    for (index, texture) in textures.iter().enumerate() {
+        let texture = texture
+            .as_str()
+            .ok_or_else(|| format!("Live2D Textures[{index}] 必须是字符串"))?;
+        validate_live2d_reference(root, entry, texture, &format!("Live2D 纹理[{index}]"))?;
+    }
+
+    for key in ["Physics", "Pose", "UserData", "DisplayInfo"] {
+        validate_optional_live2d_file(root, entry, references, key)?;
+    }
+
+    if let Some(expressions) = references.get("Expressions") {
+        let expressions = expressions
+            .as_array()
+            .ok_or("Live2D FileReferences.Expressions 必须是数组")?;
+        for (index, expression) in expressions.iter().enumerate() {
+            let file = expression
+                .get("File")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("Live2D Expressions[{index}] 缺少 File"))?;
+            validate_live2d_reference(root, entry, file, &format!("Live2D 表情[{index}]"))?;
+        }
+    }
+
+    if let Some(motions) = references.get("Motions") {
+        let motions = motions
+            .as_object()
+            .ok_or("Live2D FileReferences.Motions 必须是对象")?;
+        for (group, variants) in motions {
+            let variants = variants
+                .as_array()
+                .ok_or_else(|| format!("Live2D Motions.{group} 必须是数组"))?;
+            for (index, motion) in variants.iter().enumerate() {
+                let file = motion
+                    .get("File")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| format!("Live2D Motions.{group}[{index}] 缺少 File"))?;
+                validate_live2d_reference(
+                    root,
+                    entry,
+                    file,
+                    &format!("Live2D 动作 {group}[{index}]"),
+                )?;
+                if let Some(sound) = motion.get("Sound") {
+                    let sound = sound.as_str().ok_or_else(|| {
+                        format!("Live2D Motions.{group}[{index}].Sound 必须是字符串")
+                    })?;
+                    validate_live2d_reference(
+                        root,
+                        entry,
+                        sound,
+                        &format!("Live2D 动作音频 {group}[{index}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_manifest(root: &Path, manifest: &PetPackageManifest) -> Result<Option<String>, String> {
     if manifest.schema_version != 1 {
         return Err(format!(
@@ -289,19 +503,11 @@ fn validate_manifest(root: &Path, manifest: &PetPackageManifest) -> Result<Optio
                 .frame
                 .as_ref()
                 .ok_or("sprite-sheet 缺少 frame 配置")?;
-            if frame.width == 0 || frame.height == 0 || frame.width > 1024 || frame.height > 1024 {
-                return Err("frame.width/height 必须为 1-1024".into());
-            }
-            if frame.scale == 0 || frame.scale > 16 {
-                return Err("frame.scale 必须为 1-16".into());
-            }
             let layout = appearance
                 .layout
                 .as_ref()
                 .ok_or("sprite-sheet 缺少 layout 配置")?;
-            if layout.ground_y > frame.height {
-                return Err("layout.groundY 不能超过 frame.height".into());
-            }
+            validate_frame_and_layout(frame, layout)?;
             if !appearance.animations.contains_key("idle") {
                 return Err("sprite-sheet 至少需要 idle 动画".into());
             }
@@ -322,7 +528,13 @@ fn validate_manifest(root: &Path, manifest: &PetPackageManifest) -> Result<Optio
             if !entry.to_ascii_lowercase().ends_with(".model3.json") {
                 return Err("Live2D entry 必须指向 .model3.json".into());
             }
-            validate_file(root, entry, "Live2D model3 入口")?;
+            match (&appearance.frame, &appearance.layout) {
+                (Some(frame), Some(layout)) => validate_frame_and_layout(frame, layout)?,
+                (None, None) => {}
+                _ => return Err("Live2D 的 frame 与 layout 必须同时声明或同时省略".into()),
+            }
+            validate_cubism_motion_map(&appearance.motions)?;
+            validate_live2d_model(root, entry)?;
         }
         "inochi2d" => {
             let entry = appearance.entry.as_deref().ok_or("inochi2d 缺少 entry")?;
@@ -446,8 +658,10 @@ fn scan_root(
         match validate_manifest(&dir, &manifest) {
             Ok(persona_prompt) => {
                 seen_ids.insert(manifest.id.clone());
-                let runtime_supported =
-                    manifest.components.appearance.appearance_type == "sprite-sheet";
+                let runtime_supported = matches!(
+                    manifest.components.appearance.appearance_type.as_str(),
+                    "sprite-sheet" | "live2d-cubism"
+                );
                 output.push(PetPackageInfo {
                     id: manifest.id.clone(),
                     name: manifest.name.clone(),
@@ -545,7 +759,12 @@ mod tests {
                         height: 32,
                         scale: 6,
                     }),
-                    layout: Some(AppearanceLayout { ground_y: 29 }),
+                    layout: Some(AppearanceLayout {
+                        ground_y: 29,
+                        model_scale: None,
+                        offset_x: None,
+                        offset_y: None,
+                    }),
                     entry: None,
                     animations: BTreeMap::from([(
                         "idle".into(),
@@ -558,6 +777,7 @@ mod tests {
                             next: None,
                         }],
                     )]),
+                    motions: BTreeMap::new(),
                 },
                 persona: None,
                 voice: None,
@@ -599,10 +819,22 @@ mod tests {
     }
 
     #[test]
-    fn accepts_live2d_manifest_before_renderer_is_available() {
+    fn accepts_complete_live2d_manifest() {
         let root = test_dir("live2d");
-        std::fs::write(root.join("appearance/model.model3.json"), b"{}")
-            .expect("应能写 Live2D 测试入口");
+        std::fs::write(root.join("appearance/model.moc3"), b"moc").expect("应能写 Live2D 测试 moc");
+        std::fs::write(root.join("appearance/texture.png"), b"texture")
+            .expect("应能写 Live2D 测试纹理");
+        std::fs::write(
+            root.join("appearance/model.model3.json"),
+            br#"{
+                "Version": 3,
+                "FileReferences": {
+                    "Moc": "model.moc3",
+                    "Textures": ["texture.png"]
+                }
+            }"#,
+        )
+        .expect("应能写 Live2D 测试入口");
         let mut item = manifest();
         item.components.appearance.appearance_type = "live2d-cubism".into();
         item.components.appearance.frame = None;
@@ -611,6 +843,33 @@ mod tests {
         item.components.appearance.animations.clear();
         let result = validate_manifest(&root, &item);
         assert!(result.is_ok(), "Live2D 清单应可先进入包目录: {result:?}");
+        std::fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn rejects_live2d_resource_outside_package() {
+        let root = test_dir("live2d-parent");
+        std::fs::write(
+            root.join("appearance/model.model3.json"),
+            br#"{
+                "Version": 3,
+                "FileReferences": {
+                    "Moc": "../outside.moc3",
+                    "Textures": ["texture.png"]
+                }
+            }"#,
+        )
+        .expect("应能写 Live2D 测试入口");
+        std::fs::write(root.join("appearance/texture.png"), b"texture")
+            .expect("应能写 Live2D 测试纹理");
+        let mut item = manifest();
+        item.components.appearance.appearance_type = "live2d-cubism".into();
+        item.components.appearance.frame = None;
+        item.components.appearance.layout = None;
+        item.components.appearance.entry = Some("appearance/model.model3.json".into());
+        item.components.appearance.animations.clear();
+        let error = validate_manifest(&root, &item).expect_err("越出模型目录的引用必须被拒绝");
+        assert!(error.contains("安全相对路径"));
         std::fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 

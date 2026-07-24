@@ -7,6 +7,12 @@ use tauri::{
 static CLIPBOARD_IMAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Windows 下自定义桌宠拖动的采样间隔。8ms 可覆盖 120Hz 屏幕，同时不会像
+/// WebView 逐帧 IPC 那样把鼠标采样、按键查询和窗口移动串成一条高延迟链。
+#[cfg(windows)]
+const PET_DRAG_FRAME_INTERVAL_MS: u64 = 8;
+
+mod live2d_runtime;
 mod memory;
 mod pet_packages;
 mod provider;
@@ -261,6 +267,125 @@ fn mouse_pressed() -> bool {
     false
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetDragPosition {
+    x: i32,
+    y: i32,
+}
+
+/// Windows 透明桌宠窗不能使用系统标题栏拖动：系统会强制整扇透明窗留在屏幕内，
+/// 使顶部的气泡预留区先撞边，猫本体无法触发上下吸入。因此仍保留自定义拖动，
+/// 但把高频循环整个放到原生线程中，避免 Live2D 渲染较重时每帧等待多次 JS IPC。
+#[tauri::command]
+async fn drag_pet_window(window: tauri::WebviewWindow) -> Result<PetDragPosition, String> {
+    if window.label() != "pet" {
+        return Err("只允许拖动桌宠窗口".into());
+    }
+
+    #[cfg(windows)]
+    {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("无法取得桌宠窗口句柄: {error}"))?
+            .0 as isize;
+
+        return tauri::async_runtime::spawn_blocking(move || {
+            use std::{ptr, thread, time::Duration};
+            use windows_sys::Win32::{
+                Foundation::{HWND, POINT, RECT},
+                UI::WindowsAndMessaging::{
+                    GetCursorPos, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE,
+                    SWP_NOZORDER,
+                },
+            };
+
+            let hwnd = hwnd as HWND;
+            let mut cursor = POINT { x: 0, y: 0 };
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+
+            // SAFETY: hwnd 来自当前仍存活的 Tauri 桌宠窗；POINT/RECT 都是有效的
+            // 可写栈地址。窗口销毁或 Win32 调用失败时立即退出并交给前端收尾。
+            unsafe {
+                if GetCursorPos(&mut cursor) == 0 {
+                    return Err(format!(
+                        "读取鼠标位置失败: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                if GetWindowRect(hwnd, &mut rect) == 0 {
+                    return Err(format!(
+                        "读取桌宠窗口位置失败: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+            }
+
+            let grab_offset_x = cursor.x - rect.left;
+            let grab_offset_y = cursor.y - rect.top;
+            let mut last_x = rect.left;
+            let mut last_y = rect.top;
+
+            while mouse_pressed() {
+                unsafe {
+                    if GetCursorPos(&mut cursor) == 0 {
+                        return Err(format!(
+                            "读取鼠标位置失败: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                }
+
+                let x = cursor.x - grab_offset_x;
+                let y = cursor.y - grab_offset_y;
+                if x != last_x || y != last_y {
+                    // SAFETY: 只改变当前桌宠 HWND 的位置；SWP_NOSIZE 保留 Live2D
+                    // 动态画布尺寸，SWP_NOZORDER/NOACTIVATE 不改变置顶与焦点状态。
+                    let moved = unsafe {
+                        SetWindowPos(
+                            hwnd,
+                            ptr::null_mut(),
+                            x,
+                            y,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                        )
+                    };
+                    if moved == 0 {
+                        return Err(format!(
+                            "移动桌宠窗口失败: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                    last_x = x;
+                    last_y = y;
+                }
+
+                thread::sleep(Duration::from_millis(PET_DRAG_FRAME_INTERVAL_MS));
+            }
+
+            Ok(PetDragPosition {
+                x: last_x,
+                y: last_y,
+            })
+        })
+        .await
+        .map_err(|error| format!("桌宠拖动线程异常结束: {error}"))?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Err("当前平台不使用自定义桌宠拖动".into())
+    }
+}
+
 /// 设置代理偏好（设置页「代理」区改动 + 启动时推来）：mode = system/custom/off，
 /// custom 时 url = 代理地址。存进 tools 全局，run_command 派生命令时按它设代理环境。
 #[tauri::command]
@@ -318,6 +443,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // 语音输入全局状态：录音会话 + 常驻 SenseVoice 识别器
         .manage(stt::SttState::default())
         // 语音输出全局状态：语音包缓存 + 合成/播放运行时（首次 tts_speak 拉起）
@@ -350,11 +476,16 @@ pub fn run() {
             pet_visible,
             chat_visible,
             mouse_pressed,
+            drag_pet_window,
             image_preview,
             image_probe,
             image_import_clipboard,
             image_discard_clipboard,
             set_proxy,
+            live2d_runtime::live2d_core_status,
+            live2d_runtime::live2d_core_install,
+            live2d_runtime::live2d_core_remove,
+            live2d_runtime::live2d_core_source,
             pet_packages::pet_packages,
             provider::provider_test,
             provider::provider_chat,
@@ -366,6 +497,8 @@ pub fn run() {
             stt::stt_stop,
             stt::stt_cancel,
             tts::tts_packs,
+            tts::tts_pack_import,
+            tts::tts_pack_remove,
             tts::tts_output_devices,
             tts::tts_speak,
             tts::tts_beep_start,

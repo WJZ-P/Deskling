@@ -78,21 +78,47 @@ com.example.pet/
 
 ### `live2d-cubism`
 
-v1 清单已识别并校验 `.model3.json` 入口：
+v1 清单会校验 `.model3.json` 及其中标准引用的 Moc、纹理、Physics、Pose、表情、
+动作和动作音频。所有引用必须留在当前包内：
 
 ```json
 {
   "type": "live2d-cubism",
-  "entry": "appearance/model/model.model3.json"
+  "entry": "appearance/model/model.model3.json",
+  "frame": { "width": 240, "height": 300, "scale": 1 },
+  "layout": {
+    "groundY": 294,
+    "modelScale": 0.92,
+    "offsetX": 0,
+    "offsetY": 0
+  },
+  "motions": {
+    "idle": [{ "group": "Idle", "loop": true }],
+    "petted": [
+      { "group": "TapBody", "index": 0, "next": "idle" }
+    ],
+    "talking": [{ "group": "Talk", "loop": true }],
+    "success": [
+      {
+        "group": "TapBody",
+        "expression": "smile",
+        "durationMs": 1800,
+        "next": "idle"
+      }
+    ]
+  }
 }
 ```
 
-扫描结果会保留该包并标记 `runtimeSupported=false`；Live2D Web/Cubism 渲染器接入
-后即可复用同一清单，不需要重打工坊包。
+`frame`/`layout` 可同时省略，默认使用 `240×240` 透明画布、`groundY=236`。
+`modelScale` 是等比适配后的二次缩放，`offsetX/Y` 是逻辑像素偏移。`motions` 的
+key 与像素桌宠语义状态一致；同一状态可声明多个变体，进入时随机抽一个。`group`
+大小写会自动匹配 model3 中实际分组；未声明时会尝试 `Idle`、`TapBody`、`Walk`
+等常见名，仍建议工坊作者显式映射。
 
-Cubism Core 属于 Live2D 的专有组件；工坊这类可加载不特定数量模型的应用通常会
-落入其“Expandable Application”发布许可范围。Deskling 的公共包格式只保留适配
-入口，不会默认捆绑 Cubism Core。
+Cubism Core 属于 Live2D 的专有组件，由 Deskling 安装包统一提供并在需要时加载。
+公共包格式只保留模型适配入口，不允许模型包捆绑 Core；这样所有桌宠共享同一个
+经过校验的运行时，也避免工坊资源覆盖全局 `Live2DCubismCore`。
 
 ### `inochi2d`
 

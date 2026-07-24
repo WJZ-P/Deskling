@@ -12,6 +12,7 @@ import {
   currentMonitor,
   cursorPosition,
   getCurrentWindow,
+  LogicalSize,
   PhysicalPosition,
 } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -20,12 +21,22 @@ import { t } from "../styles/theme";
 import { PixelSurface } from "../components/pixel/PixelSurface";
 import { PX } from "../components/pixel/palettes";
 import { StreamingText } from "../chat/components/StreamingText";
-import { getActivePet, getSetting, setSetting } from "../settings";
+import {
+  getActivePet,
+  getSetting,
+  initSettings,
+  setSetting,
+} from "../settings";
 import { isPetState, type PetState } from "../pet/animations";
 import {
   createFallbackSpriteRuntime,
   getPetAppearanceRuntime,
+  initPetPackages,
 } from "../pet/packages";
+import {
+  getLoadedLive2DCore,
+  resetLive2DCoreLoader,
+} from "../pet/live2dCore";
 import {
   PetRenderer,
   type PetAnimationEnd,
@@ -100,6 +111,11 @@ const EAT_FEED_DELAY_MS = 1_900;
 const BUBBLE_OUT_MS = 180;
 /** 气泡最大宽度 px（窗口 240 宽，留出两侧余量不贴边） */
 const BUBBLE_MAX_W = 210;
+/** 像素桌宠沿用原来的 240×380 最小窗；更大的木偶按画布自动扩窗。 */
+const PET_WINDOW_MIN_WIDTH = 240;
+const PET_WINDOW_MIN_HEIGHT = 380;
+/** 除桌宠画布外为对话气泡保留的逻辑高度；大模型也不能把气泡顶没。 */
+const PET_WINDOW_BUBBLE_RESERVE = 140;
 /** 躲好后随机再过这么久探一次头：基础 + 随机幅度（ms），合计 1-3 分钟 */
 const PEEK_MIN_MS = 60_000;
 const PEEK_RAND_MS = 120_000;
@@ -307,7 +323,7 @@ function statePolicy(s: PetState): StatePolicy {
 }
 
 export function PetWindow() {
-  const [petVisual] = useState(() => {
+  const resolvePetVisual = () => {
     const activePet = getActivePet();
     const runtime =
       getPetAppearanceRuntime(activePet.packageId) ??
@@ -316,7 +332,9 @@ export function PetWindow() {
       name: activePet.name,
       runtime,
     };
-  });
+  };
+  const [petVisual, setPetVisual] = useState(resolvePetVisual);
+  const [rendererRevision, setRendererRevision] = useState(0);
   const spriteGeometry = petVisual.runtime.geometry;
   // 初始即 entering：启动时从画面底边探头张望再蹦出来，接 greeting 落地挥手
   // 完成整套登场（隐藏启动则悄悄播完落回 idle）
@@ -358,6 +376,38 @@ export function PetWindow() {
   const [renderedState, setRenderedState] = useState<PetState>(state);
   const [bodyRect, setBodyRect] = useState<PetBodyRect | null>(null);
   const rendererFrameRef = useRef<HTMLDivElement>(null);
+
+  // 主面板切换桌宠时重新读取跨窗口 store 与包目录，再原子替换渲染器；Core 在
+  // 当前运行期间刚导入时只需重挂载 Live2D 分支，不必重启整个应用。
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let alive = true;
+    const appearanceListener = win.listen("pet:appearance-changed", () => {
+      void (async () => {
+        await initSettings();
+        await initPetPackages();
+        if (!alive) return;
+        setPetVisual(resolvePetVisual());
+        setBodyRect(null);
+        setRendererRevision((value) => value + 1);
+        requestState("idle", { force: true, queueIfBlocked: false });
+      })();
+    });
+    const runtimeListener = win.listen("pet:live2d-runtime-changed", () => {
+      // 已执行进 WebView 的 Core 不能安全覆盖；刷新当前桌宠页才能释放旧全局。
+      if (getLoadedLive2DCore()) {
+        window.location.reload();
+        return;
+      }
+      resetLive2DCoreLoader();
+      setRendererRevision((value) => value + 1);
+    });
+    return () => {
+      alive = false;
+      void appearanceListener.then((stop) => stop());
+      void runtimeListener.then((stop) => stop());
+    };
+  }, [requestState]);
 
   const handleAnimationEnd = useCallback(
     ({ state: completedState, next: declared }: PetAnimationEnd) => {
@@ -519,6 +569,69 @@ export function PetWindow() {
   const lastYRef = useRef<number | null>(null);
   // 真 = 下一次 onMoved 来自落点校正的 setPosition：只记位置，不进走路状态
   const clampMoveRef = useRef(false);
+
+  // 原始像素宠只需要固定 240×380 窗口；Live2D 的逻辑画布会更大。切换渲染器时
+  // 以当前窗口底边中心为锚点扩缩，保证脚底留在同一个桌面位置，不会因扩窗向下
+  // 掉进任务栏或横向跳开。尺寸使用逻辑像素，位置仍按 Tauri 的物理像素回写。
+  useEffect(() => {
+    let cancelled = false;
+    const renderedWidth = spriteGeometry.frameWidth * spriteGeometry.scale;
+    const renderedHeight = spriteGeometry.frameHeight * spriteGeometry.scale;
+    const desiredLogical = new LogicalSize(
+      Math.max(PET_WINDOW_MIN_WIDTH, Math.ceil(renderedWidth)),
+      Math.max(
+        PET_WINDOW_MIN_HEIGHT,
+        Math.ceil(renderedHeight + PET_WINDOW_BUBBLE_RESERVE),
+      ),
+    );
+
+    void (async () => {
+      try {
+        const win = getCurrentWindow();
+        const [position, currentSize, scaleFactor] = await Promise.all([
+          win.outerPosition(),
+          win.outerSize(),
+          win.scaleFactor(),
+        ]);
+        if (cancelled) return;
+
+        const desiredPhysical = desiredLogical.toPhysical(scaleFactor);
+        if (
+          currentSize.width === desiredPhysical.width &&
+          currentSize.height === desiredPhysical.height
+        ) {
+          winPosRef.current ??= { x: position.x, y: position.y };
+          return;
+        }
+
+        const target = new PhysicalPosition(
+          Math.round(
+            position.x + (currentSize.width - desiredPhysical.width) / 2,
+          ),
+          Math.round(
+            position.y + currentSize.height - desiredPhysical.height,
+          ),
+        );
+        await win.setSize(desiredLogical);
+        if (cancelled) return;
+        clampMoveRef.current = true;
+        await win.setPosition(target);
+        winPosRef.current = { x: target.x, y: target.y };
+        lastXRef.current = target.x;
+        lastYRef.current = target.y;
+      } catch (error) {
+        console.warn("pet resize for renderer failed:", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    spriteGeometry.frameHeight,
+    spriteGeometry.frameWidth,
+    spriteGeometry.scale,
+  ]);
 
   // ---- 拖文件投喂：OS 拖着文件经过桌宠本体 → 警觉注意到；松手命中 → 吃掉 ----
   // Tauri drag-drop 事件带窗口内物理坐标，只有落在本体命中矩形（hitRef）上才算
@@ -1155,6 +1268,9 @@ export function PetWindow() {
         const direction = walkingStateForDelta(dx, dy);
         requestState(direction, { force: true, queueIfBlocked: false });
       }
+      // 原生自定义拖动会一直运行到系统确认鼠标已经松开；拖动中的每一个
+      // WM_MOVE 都重置停表既浪费 WebView 主线程，也会和 PointerUp 的唯一收尾竞争。
+      if (manualDragRef.current) return;
       bumpMoveStop();
     });
     return () => {
@@ -1167,43 +1283,20 @@ export function PetWindow() {
   }, [requestState]);
 
   /**
-   * 透明桌宠窗的自定义拖动：以按住时鼠标在窗口内的物理偏移为锚点，随后逐帧
-   * 读取全局鼠标并 setPosition。它不受原生标题栏的整窗可见性限制，因此顶部
-   * 气泡留白可以离开屏幕，真正决定吸回/躲藏的仍是 settleAfterMove 的本体矩形。
+   * 透明桌宠窗的自定义拖动：Windows 原生线程以按住时鼠标在窗口内的物理偏移
+   * 为锚点直接移动 HWND。前端只发起一次 IPC，不再把「读鼠标 → 查按键 →
+   * setPosition」串行等待在每一帧上；Live2D WebGL 窗较大时也不会逐帧积累延迟。
+   * 它仍不受标题栏的整窗可见性限制，吸回/躲藏继续由本体矩形决定。
    */
   const startManualDragging = async () => {
     const run = ++manualDragRunRef.current;
     manualDragRef.current = true;
-    const win = getCurrentWindow();
 
     try {
-      const [startPos, startCursor] = await Promise.all([
-        win.outerPosition(),
-        cursorPosition(),
-      ]);
-      if (manualDragRunRef.current !== run) return;
-
-      const grabOffset = {
-        x: startCursor.x - startPos.x,
-        y: startCursor.y - startPos.y,
-      };
-
-      while (manualDragRunRef.current === run) {
-        await new Promise<number>((resolve) => window.requestAnimationFrame(resolve));
-        const [cursor, held] = await Promise.all([
-          cursorPosition(),
-          invoke<boolean>("mouse_pressed").catch(() => false),
-        ]);
-        if (manualDragRunRef.current !== run || !held) break;
-
-        const x = Math.round(cursor.x - grabOffset.x);
-        const y = Math.round(cursor.y - grabOffset.y);
-        const current = winPosRef.current;
-        if (current?.x === x && current.y === y) continue;
-
-        await win.setPosition(new PhysicalPosition(x, y));
-        winPosRef.current = { x, y };
-      }
+      const finalPosition = await invoke<{ x: number; y: number }>(
+        "drag_pet_window",
+      );
+      winPosRef.current = finalPosition;
     } finally {
       // PointerUp 若先收到会递增 run 并自行武装停表；否则由系统键位查询在这里
       // 识别松手。两条路径只允许当前 run 收尾一次。
@@ -1477,6 +1570,7 @@ export function PetWindow() {
           和窗口空白一样，由光标巡逻做成真穿透 */}
       <SpriteBox ref={rendererFrameRef}>
         <PetRenderer
+          key={`${petVisual.runtime.packageId}:${rendererRevision}`}
           runtime={petVisual.runtime}
           state={state}
           ariaLabel={petVisual.name}

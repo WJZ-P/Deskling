@@ -74,7 +74,8 @@
       "resources/stt/",
       "resources/tts/",
       "resources/skills/",
-      "resources/pets/"
+      "resources/pets/",
+      "resources/live2d/"
     ],
     "icon": [
       "icons/32x32.png",

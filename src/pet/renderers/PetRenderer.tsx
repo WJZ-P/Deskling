@@ -1,4 +1,5 @@
 import { DeferredPuppetRenderer } from "./DeferredPuppetRenderer";
+import { Live2DCubismRenderer } from "./Live2DCubismRenderer";
 import { SpriteSheetRenderer } from "./SpriteSheetRenderer";
 import type { PetRendererProps } from "./types";
 
@@ -8,6 +9,11 @@ export function PetRenderer(props: PetRendererProps) {
     case "sprite-sheet":
       return <SpriteSheetRenderer {...props} runtime={props.runtime} />;
     case "live2d-cubism":
+      return props.runtime.rendererAvailable ? (
+        <Live2DCubismRenderer {...props} runtime={props.runtime} />
+      ) : (
+        <DeferredPuppetRenderer {...props} runtime={props.runtime} />
+      );
     case "inochi2d":
       return <DeferredPuppetRenderer {...props} runtime={props.runtime} />;
   }

@@ -27,6 +27,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 # 单实例守卫：防止两个进程互相覆写 memory.json / 设置存储
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
@@ -46,13 +47,19 @@ base64 = "0.22"
 # AI 计划任务：本地时间、单次运行时间与 Cron 表达式解析
 chrono = { version = "0.4", features = ["clock", "serde"] }
 cron = "0.17"
+# 用户音色包：只启用常见的 Stored/Deflate ZIP 读取，避免把加密与冷门压缩算法拖进安装包。
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # 命令输出编码回退：中文 Windows 控制台输出是 GBK(CP936)，UTF-8 解码失败时用它救乱码
 [target.'cfg(windows)'.dependencies]
 encoding_rs = "0.8"
 # 系统级鼠标键状态（GetAsyncKeyState）：OS 拖窗模态循环里网页收不到指针
 # 事件，桌宠窗靠它区分「拖到屏幕边顶住不动」和「已经松手」（版本对齐依赖树里已有的 0.59）
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

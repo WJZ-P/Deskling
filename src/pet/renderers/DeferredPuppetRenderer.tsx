@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import { ANIMS, type AnimDef } from "../animations";
-import type { DeferredPuppetRuntime } from "../packages";
+import type {
+  DeferredPuppetRuntime,
+  Live2DCubismRuntime,
+} from "../packages";
 import type { PetRendererProps } from "./types";
 
 type DeferredRendererProps = Omit<PetRendererProps, "runtime"> & {
-  runtime: DeferredPuppetRuntime;
+  runtime: DeferredPuppetRuntime | Live2DCubismRuntime;
 };
 
 /**
@@ -20,7 +23,9 @@ export function DeferredPuppetRenderer({
   onBodyRectChange,
 }: DeferredRendererProps) {
   useEffect(() => {
-    console.warn(`[pet-renderer] ${runtime.unavailableReason}`);
+    console.warn(
+      `[pet-renderer] ${runtime.unavailableReason ?? "当前渲染器不可用"}`,
+    );
   }, [runtime.unavailableReason]);
 
   useEffect(() => {

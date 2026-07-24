@@ -14,18 +14,19 @@
 //! 打断（tts_stop）：清任务队列 + 清样本队列 + 竖 cancel 旗（合成回调检查，
 //! 生成中途立刻弃稿）。新一轮对话 / 用户暂停 / 按住说话开麦都走它。
 
-use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use serde::{Deserialize, Serialize};
 use sherpa_onnx::{
-    GenerationConfig, LinearResampler, OfflineTts, OfflineTtsConfig,
-    OfflineTtsKokoroModelConfig, OfflineTtsMatchaModelConfig, OfflineTtsVitsModelConfig,
+    GenerationConfig, LinearResampler, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
+    OfflineTtsMatchaModelConfig, OfflineTtsVitsModelConfig,
 };
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -33,6 +34,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// 播放停顿判定：样本队列排空后再等这么久才算「说完了」（ms）——
 /// 句与句之间合成偶尔慢半拍，别让嘴型闪合又闪开
 const PLAYING_HANGOVER_MS: u64 = 300;
+const MANIFEST_MAX_BYTES: u64 = 256 * 1024;
+const IMPORT_MAX_FILES: usize = 20_000;
+const IMPORT_MAX_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const ARCHIVE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 // ==================== 语音包 manifest ====================
 
@@ -62,6 +67,10 @@ pub struct VoiceMeta {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackManifest {
+    #[serde(default)]
+    pub schema_version: Option<u32>,
+    #[serde(default)]
+    pub kind: Option<String>,
     pub id: String,
     pub name: String,
     /// 引擎家族：kokoro / vits（melo 同族）/ matcha —— 决定加载配置的形状
@@ -86,6 +95,10 @@ pub struct PackInfo {
     pub name: String,
     pub engine: String,
     pub voices: Vec<VoiceMeta>,
+    pub version: Option<String>,
+    pub author: Option<String>,
+    pub license: Option<String>,
+    pub size_bytes: u64,
     pub builtin: bool,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +120,85 @@ fn strip_extended_prefix(p: PathBuf) -> PathBuf {
     }
 }
 
+fn validate_pack_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > 128 {
+        return Err("音色包 id 长度必须为 1-128".into());
+    }
+    if !id
+        .bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'_'))
+    {
+        return Err("音色包 id 只能包含小写字母、数字、点、横线和下划线".into());
+    }
+    if !id.as_bytes()[0].is_ascii_alphanumeric() {
+        return Err("音色包 id 必须以小写字母或数字开头".into());
+    }
+    Ok(())
+}
+
+/// 模型清单只接受便携的包内相对路径。逗号分隔由调用方逐项处理。
+fn validate_relative_path(spec: &str) -> Result<&Path, String> {
+    if spec.is_empty() || spec.len() > 512 {
+        return Err("资源路径长度必须为 1-512".into());
+    }
+    if spec.contains('\\') || spec.contains(':') || spec.starts_with('/') {
+        return Err(format!("资源路径不是安全相对路径: {spec}"));
+    }
+    let path = Path::new(spec);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(format!("资源路径不是安全相对路径: {spec}"));
+    }
+    Ok(path)
+}
+
+fn required_roles(engine: &str) -> Result<&'static [&'static str], String> {
+    match engine {
+        "beep" => Ok(&[]),
+        "kokoro" => Ok(&["model", "voices", "tokens"]),
+        "vits" | "melo" => Ok(&["model", "tokens"]),
+        "matcha" => Ok(&["acousticModel", "vocoder", "tokens"]),
+        other => Err(format!("未知引擎家族: {other}")),
+    }
+}
+
+fn validate_manifest(m: &PackManifest) -> Result<(), String> {
+    if m.schema_version.is_some_and(|version| version != 1) {
+        return Err("目前只支持 schemaVersion 1 的音色包".into());
+    }
+    if m.kind.as_deref().is_some_and(|kind| kind != "voice") {
+        return Err("manifest.kind 必须为 voice".into());
+    }
+    validate_pack_id(&m.id)?;
+    if m.name.trim().is_empty() || m.name.chars().count() > 128 {
+        return Err("音色包名称长度必须为 1-128".into());
+    }
+    for role in required_roles(&m.engine)? {
+        if !m.files.contains_key(*role) {
+            return Err(format!("{} 引擎缺少 files.{role}", m.engine));
+        }
+    }
+    if m.files.len() > 32 {
+        return Err("files 条目过多（最多 32 项）".into());
+    }
+    if m.voices.len() > 4096 {
+        return Err("音色数量过多（最多 4096 个）".into());
+    }
+    let mut voice_ids = HashSet::new();
+    for voice in &m.voices {
+        if voice.id < 0 || !voice_ids.insert(voice.id) {
+            return Err(format!("音色 sid 非法或重复: {}", voice.id));
+        }
+        if voice.name.trim().is_empty() || voice.name.chars().count() > 128 {
+            return Err(format!("音色 {} 的名称长度必须为 1-128", voice.id));
+        }
+    }
+    Ok(())
+}
+
 /// 把 manifest 里逗号分隔的相对路径拼成引擎要的逗号分隔绝对路径
 fn resolve_multi(dir: &Path, spec: &str) -> String {
     spec.split(',')
@@ -117,11 +209,23 @@ fn resolve_multi(dir: &Path, spec: &str) -> String {
 
 /// 校验 manifest 声明的文件/目录都在包里（逗号分隔逐个查）
 fn validate_files(dir: &Path, m: &PackManifest) -> Result<(), String> {
+    validate_manifest(m)?;
+    let canonical_root = dir
+        .canonicalize()
+        .map_err(|error| format!("无法解析音色包目录: {error}"))?;
     for (role, spec) in &m.files {
         for part in spec.split(',') {
-            let p = dir.join(part.trim());
+            let part = part.trim();
+            let relative = validate_relative_path(part)?;
+            let p = dir.join(relative);
             if !p.exists() {
                 return Err(format!("缺文件 {role}: {part}"));
+            }
+            let canonical = p
+                .canonicalize()
+                .map_err(|error| format!("无法解析 {role} ({part}): {error}"))?;
+            if !canonical.starts_with(&canonical_root) {
+                return Err(format!("{role} 越出音色包目录: {part}"));
             }
         }
     }
@@ -135,9 +239,7 @@ fn validate_files(dir: &Path, m: &PackManifest) -> Result<(), String> {
 ///   matcha: acousticModel / vocoder / tokens / lexicon / dataDir / dictDir
 fn load_engine(dir: &Path, m: &PackManifest) -> Result<OfflineTts, String> {
     validate_files(dir, m)?;
-    let f = |k: &str| -> Option<String> {
-        m.files.get(k).map(|spec| resolve_multi(dir, spec))
-    };
+    let f = |k: &str| -> Option<String> { m.files.get(k).map(|spec| resolve_multi(dir, spec)) };
     let mut config = OfflineTtsConfig::default();
     match m.engine.as_str() {
         "kokoro" => {
@@ -198,25 +300,74 @@ fn user_root(app: &AppHandle) -> Option<PathBuf> {
     Some(strip_extended_prefix(dir))
 }
 
+fn user_root_result(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录: {error}"))?
+        .join("voicepacks");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("无法创建音色包目录: {error}"))?;
+    Ok(strip_extended_prefix(dir))
+}
+
+fn read_manifest(path: &Path) -> Result<PackManifest, String> {
+    let metadata =
+        std::fs::metadata(path).map_err(|error| format!("读取 manifest 失败: {error}"))?;
+    if metadata.len() > MANIFEST_MAX_BYTES {
+        return Err("manifest.json 过大（上限 256KB）".into());
+    }
+    let source =
+        std::fs::read_to_string(path).map_err(|error| format!("读取 manifest 失败: {error}"))?;
+    serde_json::from_str(&source).map_err(|error| format!("manifest 解析失败: {error}"))
+}
+
+fn directory_size(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                total = total.saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or(0));
+            }
+        }
+    }
+    total
+}
+
 /// 扫一个根目录：每个含 manifest.json 的子目录是一个包。
 /// 解析/校验失败的包也进列表（valid=false + 原因），前端灰显可排查
-fn scan_root(root: &Path, builtin: bool, out: &mut Vec<PackInfo>, cache: &mut HashMap<String, (PathBuf, PackManifest)>) {
+fn scan_root(
+    root: &Path,
+    builtin: bool,
+    out: &mut Vec<PackInfo>,
+    cache: &mut HashMap<String, (PathBuf, PackManifest)>,
+) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for e in entries.flatten() {
         let dir = e.path();
+        if e.file_type().is_ok_and(|kind| kind.is_symlink()) {
+            continue;
+        }
         let mf_path = dir.join("manifest.json");
         if !mf_path.is_file() {
             continue;
         }
         let dir_name = e.file_name().to_string_lossy().into_owned();
-        let parsed = std::fs::read_to_string(&mf_path)
-            .map_err(|e| format!("读 manifest 失败: {e}"))
-            .and_then(|s| {
-                serde_json::from_str::<PackManifest>(&s).map_err(|e| format!("manifest 解析失败: {e}"))
-            })
-            .and_then(|m| validate_files(&dir, &m).map(|_| m));
+        let size_bytes = directory_size(&dir);
+        let parsed = read_manifest(&mf_path).and_then(|m| validate_files(&dir, &m).map(|_| m));
         match parsed {
             Ok(m) => {
                 out.push(PackInfo {
@@ -224,6 +375,10 @@ fn scan_root(root: &Path, builtin: bool, out: &mut Vec<PackInfo>, cache: &mut Ha
                     name: m.name.clone(),
                     engine: m.engine.clone(),
                     voices: m.voices.clone(),
+                    version: m.version.clone(),
+                    author: m.author.clone(),
+                    license: m.license.clone(),
+                    size_bytes,
                     builtin,
                     valid: true,
                     error: None,
@@ -235,6 +390,10 @@ fn scan_root(root: &Path, builtin: bool, out: &mut Vec<PackInfo>, cache: &mut Ha
                 name: dir_name,
                 engine: String::new(),
                 voices: Vec::new(),
+                version: None,
+                author: None,
+                license: None,
+                size_bytes,
                 builtin,
                 valid: false,
                 error: Some(err),
@@ -244,7 +403,10 @@ fn scan_root(root: &Path, builtin: bool, out: &mut Vec<PackInfo>, cache: &mut Ha
 }
 
 /// 扫全部根目录，刷新 id → (目录, manifest) 缓存，返回包列表
-fn scan_all(app: &AppHandle, cache: &mut HashMap<String, (PathBuf, PackManifest)>) -> Vec<PackInfo> {
+fn scan_all(
+    app: &AppHandle,
+    cache: &mut HashMap<String, (PathBuf, PackManifest)>,
+) -> Vec<PackInfo> {
     let mut out = Vec::new();
     cache.clear();
     if let Some(root) = builtin_root(app) {
@@ -253,7 +415,604 @@ fn scan_all(app: &AppHandle, cache: &mut HashMap<String, (PathBuf, PackManifest)
     if let Some(root) = user_root(app) {
         scan_root(&root, false, &mut out, cache);
     }
+    out.sort_by(|a, b| {
+        b.builtin
+            .cmp(&a.builtin)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     out
+}
+
+// ==================== 用户导入 ====================
+
+#[derive(Default)]
+struct TreeInventory {
+    files: Vec<PathBuf>,
+    dirs: Vec<PathBuf>,
+    bytes: u64,
+}
+
+fn relative_spec(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| format!("资源不在模型目录内: {}", path.display()))?;
+    let mut parts = Vec::new();
+    for part in relative.components() {
+        let Component::Normal(value) = part else {
+            return Err(format!("资源路径不安全: {}", relative.display()));
+        };
+        let value = value
+            .to_str()
+            .ok_or_else(|| format!("资源路径不是有效 UTF-8: {}", relative.display()))?;
+        parts.push(value);
+    }
+    let spec = parts.join("/");
+    validate_relative_path(&spec)?;
+    Ok(spec)
+}
+
+fn inventory_tree(root: &Path) -> Result<TreeInventory, String> {
+    let mut inventory = TreeInventory::default();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .map_err(|error| format!("读取模型目录 {} 失败: {error}", dir.display()))?
+        {
+            let entry = entry.map_err(|error| format!("读取模型目录条目失败: {error}"))?;
+            let kind = entry
+                .file_type()
+                .map_err(|error| format!("读取资源类型失败: {error}"))?;
+            if kind.is_symlink() {
+                return Err(format!(
+                    "模型目录不能包含软链接或目录链接: {}",
+                    entry.path().display()
+                ));
+            }
+            if kind.is_dir() {
+                inventory.dirs.push(entry.path());
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                inventory.files.push(entry.path());
+                inventory.bytes = inventory
+                    .bytes
+                    .checked_add(
+                        entry
+                            .metadata()
+                            .map_err(|error| format!("读取资源大小失败: {error}"))?
+                            .len(),
+                    )
+                    .ok_or_else(|| "模型目录大小溢出".to_string())?;
+                if inventory.files.len() > IMPORT_MAX_FILES {
+                    return Err(format!("模型文件过多（上限 {IMPORT_MAX_FILES} 个）"));
+                }
+                if inventory.bytes > IMPORT_MAX_BYTES {
+                    return Err("模型目录过大（上限 6GB）".into());
+                }
+            } else {
+                return Err(format!("不支持的资源类型: {}", entry.path().display()));
+            }
+        }
+    }
+    Ok(inventory)
+}
+
+fn copy_model_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    let kind = std::fs::symlink_metadata(source)
+        .map_err(|error| format!("读取模型目录失败: {error}"))?
+        .file_type();
+    if !kind.is_dir() || kind.is_symlink() {
+        return Err("请选择真实的模型目录，不能选择目录链接".into());
+    }
+    let inventory = inventory_tree(source)?;
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|error| format!("无法解析模型目录: {error}"))?;
+    std::fs::create_dir_all(destination)
+        .map_err(|error| format!("创建导入暂存目录失败: {error}"))?;
+    for directory in &inventory.dirs {
+        let relative = directory
+            .strip_prefix(source)
+            .map_err(|_| "模型子目录越出来源目录".to_string())?;
+        std::fs::create_dir_all(destination.join(relative))
+            .map_err(|error| format!("创建模型子目录失败: {error}"))?;
+    }
+    let mut copied_bytes = 0u64;
+    for file in &inventory.files {
+        if std::fs::symlink_metadata(file)
+            .map_err(|error| format!("读取模型文件失败: {error}"))?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(format!("复制期间发现文件链接: {}", file.display()));
+        }
+        let canonical_file = file
+            .canonicalize()
+            .map_err(|error| format!("无法解析模型文件: {error}"))?;
+        if !canonical_file.starts_with(&canonical_source) {
+            return Err(format!("模型文件越出来源目录: {}", file.display()));
+        }
+        let relative = file
+            .strip_prefix(source)
+            .map_err(|_| "模型文件越出来源目录".to_string())?;
+        let target = destination.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("创建模型文件目录失败: {error}"))?;
+        }
+        let copied = std::fs::copy(file, &target)
+            .map_err(|error| format!("复制模型文件 {} 失败: {error}", relative.display()))?;
+        copied_bytes = copied_bytes
+            .checked_add(copied)
+            .ok_or_else(|| "复制模型大小溢出".to_string())?;
+        if copied_bytes > IMPORT_MAX_BYTES {
+            return Err("模型目录在复制期间超过 6GB 上限".into());
+        }
+    }
+    Ok(())
+}
+
+fn extract_zip(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(source).map_err(|error| format!("读取压缩包失败: {error}"))?;
+    if metadata.len() > ARCHIVE_MAX_BYTES {
+        return Err("压缩包过大（上限 4GB）".into());
+    }
+    let input = std::fs::File::open(source).map_err(|error| format!("打开压缩包失败: {error}"))?;
+    let mut archive =
+        zip::ZipArchive::new(input).map_err(|error| format!("ZIP 解析失败: {error}"))?;
+    if archive.len() > IMPORT_MAX_FILES {
+        return Err(format!("压缩包文件过多（上限 {IMPORT_MAX_FILES} 个）"));
+    }
+    if archive
+        .decompressed_size()
+        .is_some_and(|size| size > IMPORT_MAX_BYTES as u128)
+    {
+        return Err("压缩包展开后过大（上限 6GB）".into());
+    }
+    std::fs::create_dir_all(destination).map_err(|error| format!("创建解压目录失败: {error}"))?;
+
+    let mut expanded = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("读取 ZIP 第 {} 项失败: {error}", index + 1))?;
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(format!("ZIP 不能包含软链接: {}", entry.name()));
+        }
+        let relative = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("ZIP 含越界路径: {}", entry.name()))?
+            .to_path_buf();
+        let spec = relative
+            .components()
+            .map(|part| match part {
+                Component::Normal(value) => value
+                    .to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "ZIP 路径不是有效 UTF-8".to_string()),
+                _ => Err("ZIP 含不安全路径".to_string()),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/");
+        validate_relative_path(&spec)?;
+        let target = destination.join(&relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)
+                .map_err(|error| format!("创建解压目录失败: {error}"))?;
+            continue;
+        }
+        expanded = expanded
+            .checked_add(entry.size())
+            .ok_or_else(|| "压缩包展开大小溢出".to_string())?;
+        if expanded > IMPORT_MAX_BYTES {
+            return Err("压缩包展开后过大（上限 6GB）".into());
+        }
+        let parent = target
+            .parent()
+            .ok_or_else(|| "ZIP 文件缺少父目录".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| format!("创建解压目录失败: {error}"))?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|error| format!("创建解压文件 {} 失败: {error}", relative.display()))?;
+        let copied = std::io::copy(&mut entry, &mut output)
+            .map_err(|error| format!("解压 {} 失败: {error}", relative.display()))?;
+        if copied != entry.size() {
+            return Err(format!("ZIP 文件大小不一致: {}", relative.display()));
+        }
+    }
+    Ok(())
+}
+
+fn find_manifest_root(root: &Path) -> Result<Option<PathBuf>, String> {
+    if root.join("manifest.json").is_file() {
+        return Ok(Some(root.to_path_buf()));
+    }
+    let inventory = inventory_tree(root)?;
+    let mut matches = inventory
+        .files
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("manifest.json"))
+                && path
+                    .strip_prefix(root)
+                    .map(|relative| relative.components().count() <= 4)
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err("压缩包内有多个 manifest.json，无法判断要安装哪一个音色包".into());
+    }
+    Ok(matches
+        .pop()
+        .and_then(|path| path.parent().map(Path::to_path_buf)))
+}
+
+fn file_name_lower(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn choose_file<F>(files: &[PathBuf], mut predicate: F) -> Option<PathBuf>
+where
+    F: FnMut(&str) -> bool,
+{
+    let mut matches = files
+        .iter()
+        .filter_map(|path| {
+            let name = file_name_lower(path);
+            predicate(&name).then(|| path.clone())
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|path| path.components().count());
+    matches.into_iter().next()
+}
+
+fn choose_model(files: &[PathBuf], excluded_words: &[&str]) -> Option<PathBuf> {
+    let mut matches = files
+        .iter()
+        .filter(|path| {
+            let name = file_name_lower(path);
+            name.ends_with(".onnx") && !excluded_words.iter().any(|word| name.contains(word))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|path| {
+        let name = file_name_lower(path);
+        let preference = if name.contains("int8") {
+            0
+        } else if name == "model.onnx" {
+            1
+        } else {
+            2
+        };
+        (preference, path.components().count(), name)
+    });
+    matches.into_iter().next()
+}
+
+fn choose_directory(dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
+    let mut matches = dirs
+        .iter()
+        .filter(|path| {
+            let name = file_name_lower(path);
+            names.iter().any(|candidate| name == *candidate)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|path| path.components().count());
+    matches.into_iter().next()
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            separator = false;
+        } else if !separator && !slug.is_empty() {
+            slug.push('-');
+            separator = true;
+        }
+        if slug.len() >= 72 {
+            break;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "voice".into()
+    } else {
+        slug
+    }
+}
+
+fn available_local_id(name: &str, existing_ids: &HashSet<String>) -> String {
+    let base = format!("local.{}", slugify(name));
+    if !existing_ids.contains(&base) {
+        return base;
+    }
+    for suffix in 2..10_000 {
+        let candidate = format!("{base}.{suffix}");
+        if !existing_ids.contains(&candidate) {
+            return candidate;
+        }
+    }
+    format!(
+        "{base}.{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    )
+}
+
+fn detect_raw_manifest(
+    root: &Path,
+    display_name: &str,
+    existing_ids: &HashSet<String>,
+) -> Result<PackManifest, String> {
+    let inventory = inventory_tree(root)?;
+    let tokens = choose_file(&inventory.files, |name| name == "tokens.txt")
+        .ok_or("没有找到 tokens.txt；请选择完整的 sherpa-onnx TTS 模型目录")?;
+    let voices = choose_file(&inventory.files, |name| {
+        name == "voices.bin" || (name.contains("voice") && name.ends_with(".bin"))
+    });
+    let vocoder = choose_file(&inventory.files, |name| {
+        name.ends_with(".onnx")
+            && (name.contains("vocoder") || name.contains("hifigan") || name.contains("vocos"))
+    });
+    let acoustic = choose_file(&inventory.files, |name| {
+        name.ends_with(".onnx")
+            && (name.contains("matcha") || name.contains("acoustic"))
+            && !name.contains("vocoder")
+    });
+
+    let (engine, model, acoustic_model, vocoder_model) = if voices.is_some() {
+        (
+            "kokoro",
+            Some(
+                choose_model(
+                    &inventory.files,
+                    &["vocoder", "hifigan", "vocos", "acoustic", "matcha"],
+                )
+                .ok_or("Kokoro 目录里没有找到主 ONNX 模型")?,
+            ),
+            None,
+            None,
+        )
+    } else if let (Some(acoustic), Some(vocoder)) = (acoustic, vocoder) {
+        ("matcha", None, Some(acoustic), Some(vocoder))
+    } else {
+        (
+            "vits",
+            Some(
+                choose_model(
+                    &inventory.files,
+                    &["vocoder", "hifigan", "vocos", "acoustic", "matcha"],
+                )
+                .ok_or("没有找到可用的 ONNX TTS 模型")?,
+            ),
+            None,
+            None,
+        )
+    };
+
+    let mut files = HashMap::new();
+    files.insert("tokens".into(), relative_spec(root, &tokens)?);
+    if let Some(model) = model {
+        files.insert("model".into(), relative_spec(root, &model)?);
+    }
+    if let Some(voices) = voices {
+        files.insert("voices".into(), relative_spec(root, &voices)?);
+    }
+    if let Some(acoustic) = acoustic_model {
+        files.insert("acousticModel".into(), relative_spec(root, &acoustic)?);
+    }
+    if let Some(vocoder) = vocoder_model {
+        files.insert("vocoder".into(), relative_spec(root, &vocoder)?);
+    }
+    if let Some(data_dir) = choose_directory(&inventory.dirs, &["espeak-ng-data", "espeak_data"]) {
+        files.insert("dataDir".into(), relative_spec(root, &data_dir)?);
+    }
+    if let Some(dict_dir) = choose_directory(&inventory.dirs, &["dict", "jieba"]) {
+        files.insert("dictDir".into(), relative_spec(root, &dict_dir)?);
+    }
+    let mut lexicons = inventory
+        .files
+        .iter()
+        .filter(|path| {
+            let name = file_name_lower(path);
+            name.starts_with("lexicon") && name.ends_with(".txt")
+        })
+        .map(|path| relative_spec(root, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    lexicons.sort();
+    if !lexicons.is_empty() {
+        files.insert("lexicon".into(), lexicons.join(","));
+    }
+    let mut rule_fsts = inventory
+        .files
+        .iter()
+        .filter(|path| file_name_lower(path).ends_with(".fst"))
+        .map(|path| relative_spec(root, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    rule_fsts.sort();
+    if !rule_fsts.is_empty() {
+        files.insert("ruleFsts".into(), rule_fsts.join(","));
+    }
+
+    Ok(PackManifest {
+        schema_version: Some(1),
+        kind: Some("voice".into()),
+        id: available_local_id(display_name, existing_ids),
+        name: display_name.to_string(),
+        engine: engine.into(),
+        version: None,
+        author: None,
+        license: None,
+        files,
+        voices: Vec::new(),
+    })
+}
+
+fn write_manifest(root: &Path, manifest: &PackManifest) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| format!("生成 manifest 失败: {error}"))?;
+    if json.len() as u64 > MANIFEST_MAX_BYTES {
+        return Err("生成的 manifest.json 过大".into());
+    }
+    let path = root.join("manifest.json");
+    let mut output = std::fs::File::create(&path)
+        .map_err(|error| format!("写入 manifest.json 失败: {error}"))?;
+    output
+        .write_all(&json)
+        .map_err(|error| format!("写入 manifest.json 失败: {error}"))?;
+    output
+        .sync_all()
+        .map_err(|error| format!("同步 manifest.json 失败: {error}"))
+}
+
+struct ImportCleanup(PathBuf);
+
+impl Drop for ImportCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn import_voice_pack(
+    app: &AppHandle,
+    source_path: &str,
+    existing_ids: &HashSet<String>,
+) -> Result<String, String> {
+    let source = strip_extended_prefix(
+        PathBuf::from(source_path)
+            .canonicalize()
+            .map_err(|error| format!("无法读取所选路径: {error}"))?,
+    );
+    let metadata =
+        std::fs::symlink_metadata(&source).map_err(|error| format!("无法读取所选路径: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("不能从软链接或目录链接导入模型".into());
+    }
+
+    let user_root = user_root_result(app)?;
+    let canonical_user_root = user_root
+        .canonicalize()
+        .map_err(|error| format!("无法解析音色包目录: {error}"))?;
+    if metadata.is_dir() && canonical_user_root.starts_with(&source) {
+        return Err("不能选择包含 Deskling 音色包安装目录的上级目录".into());
+    }
+    let nonce = format!(
+        ".import-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let operation = user_root.join(nonce);
+    std::fs::create_dir(&operation).map_err(|error| format!("创建导入任务失败: {error}"))?;
+    let _cleanup = ImportCleanup(operation.clone());
+    let payload = operation.join("payload");
+
+    if metadata.is_dir() {
+        copy_model_tree(&source, &payload)?;
+    } else if metadata.is_file()
+        && source
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("zip") || value.eq_ignore_ascii_case("deskling-voice")
+            })
+    {
+        extract_zip(&source, &payload)?;
+    } else {
+        return Err("请选择模型目录、.zip 或 .deskling-voice 音色包".into());
+    }
+
+    let manifest_root = find_manifest_root(&payload)?;
+    let package_root = manifest_root.as_deref().unwrap_or(&payload);
+    let display_name = source
+        .file_stem()
+        .or_else(|| source.file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or("导入音色");
+    let manifest_path = package_root.join("manifest.json");
+    let had_manifest = manifest_path.is_file();
+    let mut manifest = if had_manifest {
+        read_manifest(&manifest_path)?
+    } else {
+        detect_raw_manifest(package_root, display_name, existing_ids)?
+    };
+    if manifest.engine == "beep" {
+        return Err("导入功能只安装真实 TTS 模型；电子拟声无需外部模型".into());
+    }
+    if existing_ids.contains(&manifest.id) {
+        return Err(format!(
+            "音色包 {} 已存在，请先卸载旧版本再导入",
+            manifest.id
+        ));
+    }
+    validate_files(package_root, &manifest)?;
+
+    // 真正创建一次引擎，避免把“文件看起来齐全但模型不兼容”的坏包安装进去。
+    let engine = load_engine(package_root, &manifest)?;
+    let speaker_count = engine.num_speakers().max(1);
+    if speaker_count > 4096 {
+        return Err(format!(
+            "模型声明了过多说话人（{speaker_count}，上限 4096）"
+        ));
+    }
+    if manifest.voices.is_empty() {
+        manifest.voices = (0..speaker_count)
+            .map(|id| VoiceMeta {
+                id,
+                name: if speaker_count == 1 {
+                    "默认音色".into()
+                } else {
+                    format!("音色 {}", id + 1)
+                },
+                ..Default::default()
+            })
+            .collect();
+    } else if manifest
+        .voices
+        .iter()
+        .any(|voice| voice.id >= speaker_count)
+    {
+        return Err(format!(
+            "manifest 声明了超出模型范围的 sid（模型共有 {speaker_count} 个音色）"
+        ));
+    }
+    drop(engine);
+    if !had_manifest || manifest.voices.is_empty() || !manifest_path.is_file() {
+        write_manifest(package_root, &manifest)?;
+    } else {
+        // 有清单但 voices 原本为空时，上方已自动补全，也需要持久化。
+        let original = read_manifest(&manifest_path)?;
+        if original.voices.is_empty() {
+            write_manifest(package_root, &manifest)?;
+        }
+    }
+
+    let destination = user_root.join(&manifest.id);
+    if destination.exists() {
+        return Err(format!("音色包安装目录已存在: {}", manifest.id));
+    }
+    std::fs::rename(package_root, &destination)
+        .map_err(|error| format!("完成音色包安装失败: {error}"))?;
+    Ok(manifest.id)
 }
 
 // ==================== 运行时（合成 + 播放双线程） ====================
@@ -429,7 +1188,11 @@ fn synth_beep(text: &str, v: &VoiceMeta, speed: f32, rate: u32) -> Vec<f32> {
     let wave = v.wave.as_deref().unwrap_or("square");
     let blip_ms = v.blip_ms.unwrap_or(62) as f32 / speed;
     // 语气：含叹号整句加能量；问号结尾则句尾上扬
-    let energy = if text.contains('！') || text.contains('!') { 1.18 } else { 1.0 };
+    let energy = if text.contains('！') || text.contains('!') {
+        1.18
+    } else {
+        1.0
+    };
     let rising = text.trim_end().ends_with(['？', '?']);
     let total = text
         .chars()
@@ -466,9 +1229,8 @@ fn synth_beep(text: &str, v: &VoiceMeta, speed: f32, rate: u32) -> Vec<f32> {
             Beep::PauseLong => {
                 out.extend(std::iter::repeat(0.0).take(ms_to_n(BEEP_PAUSE_LONG_S * 1000.0 / speed)))
             }
-            Beep::PauseShort => {
-                out.extend(std::iter::repeat(0.0).take(ms_to_n(BEEP_PAUSE_SHORT_S * 1000.0 / speed)))
-            }
+            Beep::PauseShort => out
+                .extend(std::iter::repeat(0.0).take(ms_to_n(BEEP_PAUSE_SHORT_S * 1000.0 / speed))),
             Beep::Gap => out.extend(std::iter::repeat(0.0).take(ms_to_n(24.0 / speed))),
         }
     }
@@ -482,7 +1244,15 @@ fn synth_beep(text: &str, v: &VoiceMeta, speed: f32, rate: u32) -> Vec<f32> {
 ///   不是拨弦的快起长衰）+ 字内 12% 下滑音（自然音节的音高走向）。
 ///   voc 音色（人声感主打）：锯齿嗓音源 → F1/F2 元音共鸣腔（按字挑元音）
 ///   → tanh 软限幅，出来是含糊的「呃呃啊哦」而非乐器音
-fn append_blip(out: &mut Vec<f32>, f0: f32, wave: &str, dur_ms: f32, energy: f32, rate: u32, seed: u32) {
+fn append_blip(
+    out: &mut Vec<f32>,
+    f0: f32,
+    wave: &str,
+    dur_ms: f32,
+    energy: f32,
+    rate: u32,
+    seed: u32,
+) {
     // 辅音：短噪声瞬态（LCG 伪随机，种子逐字随机 → 每声「辅音」都不重样）。
     // voc 收轻——猫叫的起音是软的「咪」不是硬的「咔」
     let noise_amp = if wave == "voc" { 0.1 } else { 0.22 };
@@ -538,7 +1308,13 @@ fn append_blip(out: &mut Vec<f32>, f0: f32, wave: &str, dur_ms: f32, energy: f32
         cycles += f * dt;
         let frac = cycles.fract();
         let raw = match wave {
-            "square" => if frac < 0.5 { 0.55 } else { -0.55 },
+            "square" => {
+                if frac < 0.5 {
+                    0.55
+                } else {
+                    -0.55
+                }
+            }
             "triangle" => 4.0 * (frac - 0.5).abs() - 1.0,
             _ => (std::f32::consts::TAU * cycles).sin(), // sine / chirp
         };
@@ -573,6 +1349,8 @@ struct TtsRuntime {
     shutdown: Arc<AtomicBool>,
     /// 本运行时打开的输出设备名（"" = 系统默认），换设备判定用
     device: String,
+    playback_thread: std::thread::JoinHandle<()>,
+    synth_thread: std::thread::JoinHandle<()>,
 }
 
 /// TTS 全局状态：懒启动的运行时 + 包缓存 + 打断旗 + 叨叨音色。
@@ -582,6 +1360,8 @@ struct TtsRuntime {
 pub struct TtsState {
     runtime: Mutex<Option<TtsRuntime>>,
     packs: Mutex<HashMap<String, (PathBuf, PackManifest)>>,
+    /// 安装/卸载与发声取包互斥，避免卸载 ONNX 时下一句又把同一模型加载回来。
+    pack_ops: Mutex<()>,
     cancel: Arc<AtomicBool>,
     chatter: Arc<Mutex<Option<VoiceMeta>>>,
 }
@@ -625,7 +1405,10 @@ where
 /// 设置软件音量（0.0~1.0，越界自动 clamp）：设置页音量控件调用，立即对在播/后续输出生效。
 #[tauri::command]
 pub fn tts_set_volume(volume: f32) {
-    TTS_VOLUME.store(volume.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+    TTS_VOLUME.store(
+        volume.clamp(0.0, 1.0).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// 播放线程：持有 cpal 输出流（非 Send 不进 State），经 ready 回报设备采样率；
@@ -666,10 +1449,18 @@ fn playback_thread(
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let stream = match format {
-        cpal::SampleFormat::F32 => build_output_stream::<f32>(&device, config, channels, samples.clone()),
-        cpal::SampleFormat::I16 => build_output_stream::<i16>(&device, config, channels, samples.clone()),
-        cpal::SampleFormat::U16 => build_output_stream::<u16>(&device, config, channels, samples.clone()),
-        cpal::SampleFormat::I32 => build_output_stream::<i32>(&device, config, channels, samples.clone()),
+        cpal::SampleFormat::F32 => {
+            build_output_stream::<f32>(&device, config, channels, samples.clone())
+        }
+        cpal::SampleFormat::I16 => {
+            build_output_stream::<i16>(&device, config, channels, samples.clone())
+        }
+        cpal::SampleFormat::U16 => {
+            build_output_stream::<u16>(&device, config, channels, samples.clone())
+        }
+        cpal::SampleFormat::I32 => {
+            build_output_stream::<i32>(&device, config, channels, samples.clone())
+        }
         other => Err(format!("不支持的输出样本格式: {other:?}")),
     };
     let stream = match stream {
@@ -752,13 +1543,22 @@ fn synth_worker(
         // beep 引擎的 tts_speak（人设面板试听走这条）：按文字程序化生成，不碰模型
         if job.manifest.engine == "beep" {
             let fallback = VoiceMeta::default();
-            let vm = job.manifest.voices.iter().find(|v| v.id == job.voice).unwrap_or(&fallback);
+            let vm = job
+                .manifest
+                .voices
+                .iter()
+                .find(|v| v.id == job.voice)
+                .unwrap_or(&fallback);
             let out = synth_beep(&job.text, vm, job.speed, device_rate);
             samples.lock().unwrap().extend(out);
             continue;
         }
         // 换包重载（同包复用，加载 1~2s 只发生在切宠/切包时）
-        if engine.as_ref().map(|(id, _, _)| id != &job.pack_id).unwrap_or(true) {
+        if engine
+            .as_ref()
+            .map(|(id, _, _)| id != &job.pack_id)
+            .unwrap_or(true)
+        {
             match load_engine(&job.dir, &job.manifest) {
                 Ok(tts) => {
                     let rate = tts.sample_rate();
@@ -810,38 +1610,53 @@ fn ensure_runtime(app: &AppHandle, state: &TtsState, device: &str) -> Result<Job
             return Ok(rt.jobs.clone());
         }
         // 换设备：旧线程退役（清空队列免得残句跟进新设备）
+        let rt = guard.take().unwrap();
         rt.shutdown.store(true, Ordering::Relaxed);
         rt.jobs.lock().unwrap().clear();
         rt.samples.lock().unwrap().clear();
-        *guard = None;
+        // 换设备不必等旧线程 join；句柄 drop 后线程看到 shutdown 会自行收尾。
     }
     let samples: SampleQueue = Arc::new(Mutex::new(VecDeque::new()));
     let jobs: JobQueue = Arc::new(Mutex::new(VecDeque::new()));
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = mpsc::channel();
-    {
+    let playback_thread = {
         let app = app.clone();
         let samples = samples.clone();
         let shutdown = shutdown.clone();
         let device = device.to_string();
-        std::thread::spawn(move || playback_thread(app, device, samples, shutdown, ready_tx));
-    }
-    let device_rate = ready_rx
-        .recv()
-        .map_err(|_| "播放线程意外退出".to_string())??;
-    {
+        std::thread::spawn(move || playback_thread(app, device, samples, shutdown, ready_tx))
+    };
+    let device_rate = match ready_rx.recv() {
+        Ok(Ok(rate)) => rate,
+        Ok(Err(error)) => {
+            shutdown.store(true, Ordering::Relaxed);
+            let _ = playback_thread.join();
+            return Err(error);
+        }
+        Err(_) => {
+            shutdown.store(true, Ordering::Relaxed);
+            let _ = playback_thread.join();
+            return Err("播放线程意外退出".into());
+        }
+    };
+    let synth_thread = {
         let jobs = jobs.clone();
         let samples = samples.clone();
         let cancel = state.cancel.clone();
         let shutdown = shutdown.clone();
         let chatter = state.chatter.clone();
-        std::thread::spawn(move || synth_worker(jobs, samples, cancel, shutdown, chatter, device_rate));
-    }
+        std::thread::spawn(move || {
+            synth_worker(jobs, samples, cancel, shutdown, chatter, device_rate)
+        })
+    };
     *guard = Some(TtsRuntime {
         jobs: jobs.clone(),
         samples,
         shutdown,
         device: device.to_string(),
+        playback_thread,
+        synth_thread,
     });
     Ok(jobs)
 }
@@ -851,7 +1666,132 @@ fn ensure_runtime(app: &AppHandle, state: &TtsState, device: &str) -> Result<Job
 /// 扫描全部语音包（设置页/人设面板的包与音色列表；坏包标灰带原因）
 #[tauri::command]
 pub fn tts_packs(app: AppHandle, state: State<TtsState>) -> Vec<PackInfo> {
+    let _operation = state.pack_ops.lock().unwrap();
     scan_all(&app, &mut state.packs.lock().unwrap())
+}
+
+/// 导入已经解压的 sherpa-onnx 模型目录，或 ZIP/deskling-voice 包。
+/// 大模型的复制、解压与试加载放进阻塞线程，避免冻结 Tauri IPC/窗口事件循环。
+#[tauri::command]
+pub async fn tts_pack_import(
+    app: AppHandle,
+    webview: tauri::WebviewWindow,
+    state: State<'_, TtsState>,
+    source_path: String,
+) -> Result<PackInfo, String> {
+    if webview.label() != "main" {
+        return Err("只有主面板可以安装音色包".into());
+    }
+    let existing_ids = {
+        let _operation = state.pack_ops.lock().unwrap();
+        let mut cache = state.packs.lock().unwrap();
+        scan_all(&app, &mut cache)
+            .into_iter()
+            .map(|pack| pack.id)
+            .collect::<HashSet<_>>()
+    };
+    let worker_app = app.clone();
+    let pack_id = tauri::async_runtime::spawn_blocking(move || {
+        import_voice_pack(&worker_app, &source_path, &existing_ids)
+    })
+    .await
+    .map_err(|error| format!("音色导入任务异常退出: {error}"))??;
+
+    let _operation = state.pack_ops.lock().unwrap();
+    let mut cache = state.packs.lock().unwrap();
+    scan_all(&app, &mut cache)
+        .into_iter()
+        .find(|pack| pack.id == pack_id)
+        .ok_or_else(|| "音色包已经安装，但重新扫描时没有找到它".to_string())
+}
+
+fn join_thread_briefly(handle: std::thread::JoinHandle<()>) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !handle.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if handle.is_finished() {
+        let _ = handle.join();
+    }
+    // 超时则 drop 句柄让线程后台收尾；后续文件删除重试仍会等待模型释放。
+}
+
+fn retire_runtime(state: &TtsState) {
+    state.cancel.store(true, Ordering::Relaxed);
+    *state.chatter.lock().unwrap() = None;
+    let runtime = state.runtime.lock().unwrap().take();
+    if let Some(rt) = runtime {
+        rt.shutdown.store(true, Ordering::Relaxed);
+        rt.jobs.lock().unwrap().clear();
+        rt.samples.lock().unwrap().clear();
+        // 正常情况下 join 后 OfflineTts 已析构，Windows 不再占用模型文件。
+        // 设上限，避免异常模型的生成调用让卸载命令无限卡住。
+        join_thread_briefly(rt.synth_thread);
+        join_thread_briefly(rt.playback_thread);
+    }
+}
+
+/// 卸载用户音色包。内置包不可删；先退役推理线程，再重试删除以等待 Windows
+/// 释放 ONNX 文件句柄。
+#[tauri::command]
+pub fn tts_pack_remove(
+    app: AppHandle,
+    webview: tauri::WebviewWindow,
+    state: State<TtsState>,
+    pack_id: String,
+) -> Result<Vec<PackInfo>, String> {
+    if webview.label() != "main" {
+        return Err("只有主面板可以卸载音色包".into());
+    }
+    let _operation = state.pack_ops.lock().unwrap();
+    validate_pack_id(&pack_id)?;
+    let mut cache = state.packs.lock().unwrap();
+    let packs = scan_all(&app, &mut cache);
+    let info = packs
+        .iter()
+        .find(|pack| pack.id == pack_id)
+        .ok_or_else(|| format!("音色包不存在: {pack_id}"))?;
+    if info.builtin {
+        return Err("内置音色包不能卸载".into());
+    }
+    drop(cache);
+
+    let root = user_root_result(&app)?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("无法解析音色包目录: {error}"))?;
+    let target = root.join(&pack_id);
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|error| format!("无法解析待卸载音色包: {error}"))?;
+    if !canonical_target.starts_with(&canonical_root)
+        || canonical_target.parent() != Some(canonical_root.as_path())
+    {
+        return Err("拒绝卸载音色包目录之外的路径".into());
+    }
+
+    retire_runtime(&state);
+    let mut last_error = None;
+    for _ in 0..30 {
+        match std::fs::remove_dir_all(&canonical_target) {
+            Ok(()) => {
+                last_error = None;
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                last_error = None;
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    if let Some(error) = last_error {
+        return Err(format!("卸载音色包失败: {error}"));
+    }
+    Ok(scan_all(&app, &mut state.packs.lock().unwrap()))
 }
 
 /// 枚举可用扬声器设备名（设置页「声音 · 扬声器」下拉用）。
@@ -883,6 +1823,7 @@ pub fn tts_speak(
     if text.is_empty() {
         return Ok(());
     }
+    let _operation = state.pack_ops.lock().unwrap();
     // 查包：缓存 miss 时重扫一次（工坊刚装的包即装即用）
     let (dir, manifest) = {
         let mut cache = state.packs.lock().unwrap();
@@ -919,6 +1860,7 @@ pub fn tts_beep_start(
     voice_id: i32,
     device: Option<String>,
 ) -> Result<(), String> {
+    let _operation = state.pack_ops.lock().unwrap();
     let manifest = {
         let mut cache = state.packs.lock().unwrap();
         if !cache.contains_key(&pack_id) {
@@ -961,6 +1903,131 @@ pub fn tts_stop(state: State<TtsState>) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "deskling-tts-{label}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn touch(&self, relative: &str) {
+            let path = self.0.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, []).unwrap();
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn relative_paths_reject_escape_and_platform_paths() {
+        for unsafe_path in [
+            "",
+            "../model.onnx",
+            "models/../../model.onnx",
+            "/model.onnx",
+            r"C:\model.onnx",
+            r"models\model.onnx",
+            "https://example.com/model.onnx",
+        ] {
+            assert!(
+                validate_relative_path(unsafe_path).is_err(),
+                "本应拒绝: {unsafe_path}"
+            );
+        }
+        assert!(validate_relative_path("models/model.int8.onnx").is_ok());
+    }
+
+    #[test]
+    fn detects_existing_kokoro_directory_without_custom_manifest() {
+        let dir = TestDir::new("kokoro");
+        for file in [
+            "model.int8.onnx",
+            "model.onnx",
+            "voices.bin",
+            "tokens.txt",
+            "lexicon-zh.txt",
+            "phone.fst",
+        ] {
+            dir.touch(file);
+        }
+        std::fs::create_dir_all(dir.0.join("espeak-ng-data")).unwrap();
+        std::fs::create_dir_all(dir.0.join("dict")).unwrap();
+
+        let manifest =
+            detect_raw_manifest(&dir.0, "Hiyori 中文", &HashSet::new()).expect("应识别 Kokoro");
+        assert_eq!(manifest.engine, "kokoro");
+        assert_eq!(manifest.id, "local.hiyori");
+        assert_eq!(
+            manifest.files.get("model").map(String::as_str),
+            Some("model.int8.onnx")
+        );
+        assert_eq!(
+            manifest.files.get("voices").map(String::as_str),
+            Some("voices.bin")
+        );
+        assert_eq!(
+            manifest.files.get("dataDir").map(String::as_str),
+            Some("espeak-ng-data")
+        );
+    }
+
+    #[test]
+    fn detects_matcha_acoustic_and_vocoder_pair() {
+        let dir = TestDir::new("matcha");
+        for file in [
+            "matcha-acoustic.onnx",
+            "vocos-22khz-univ.onnx",
+            "tokens.txt",
+        ] {
+            dir.touch(file);
+        }
+        let manifest =
+            detect_raw_manifest(&dir.0, "Matcha Voice", &HashSet::new()).expect("应识别 Matcha");
+        assert_eq!(manifest.engine, "matcha");
+        assert_eq!(
+            manifest.files.get("acousticModel").map(String::as_str),
+            Some("matcha-acoustic.onnx")
+        );
+        assert_eq!(
+            manifest.files.get("vocoder").map(String::as_str),
+            Some("vocos-22khz-univ.onnx")
+        );
+    }
+
+    #[test]
+    fn zip_import_rejects_parent_directory_entry() {
+        let dir = TestDir::new("zip-escape");
+        let archive_path = dir.0.join("evil.zip");
+        let output = std::fs::File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(output);
+        archive
+            .start_file("../escaped.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"escape").unwrap();
+        archive.finish().unwrap();
+
+        let destination = dir.0.join("output");
+        let error = extract_zip(&archive_path, &destination).unwrap_err();
+        assert!(error.contains("越界") || error.contains("不安全"));
+        assert!(!dir.0.join("escaped.txt").exists());
+    }
+
     /// beep 电子拟声试听：TTS_TEST_BEEP_DIR 指定输出目录（未设置则跳过），
     /// 五种音色各写一个 wav。跑法：
     ///   $env:TTS_TEST_BEEP_DIR="..."; cargo test synth_beep -- --nocapture
@@ -979,9 +2046,11 @@ mod tests {
         for v in &manifest.voices {
             let samples = synth_beep(text, v, 1.0, rate);
             let out = format!("{out_dir}\\beep-{}-{}.wav", v.id, v.name);
-            assert!(sherpa_onnx::write(&out, &samples, rate as i32), "写 wav 失败");
+            assert!(
+                sherpa_onnx::write(&out, &samples, rate as i32),
+                "写 wav 失败"
+            );
             println!("已写出: {out}（{} 样本）", samples.len());
         }
     }
-
 }
